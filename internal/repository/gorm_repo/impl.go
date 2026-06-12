@@ -55,7 +55,16 @@ func (r *OrderRepo) GetByOutTradeNo(ctx context.Context, outTradeNo string) (*do
 	var order domain.Order
 	err := r.DB.WithContext(ctx).Where("out_trade_no = ?", outTradeNo).First(&order).Error
 	if err != nil {
-		return nil, err
+		return nil, mapGormNotFound(err)
+	}
+	return &order, nil
+}
+
+func (r *OrderRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.Order, error) {
+	var order domain.Order
+	err := r.DB.WithContext(ctx).Where("idempotency_key = ?", key).First(&order).Error
+	if err != nil {
+		return nil, mapGormNotFound(err)
 	}
 	return &order, nil
 }

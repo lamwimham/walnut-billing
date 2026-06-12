@@ -347,6 +347,35 @@ GET  /api/v1/admin/fulfillments?order_id=&user_id=
 - checkout 打开失败时不影响基础编辑部能力。
 - 支付成功后通过 snapshot refresh 解锁，不由前端自行判断支付状态。
 
+
+## 当前推进状态
+
+### M6-B 第一切片已完成：Provider-agnostic Checkout Facade
+
+本轮先实现不依赖 Creem 的 checkout 基础设施，确保后续 Creem 只是 provider adapter，而不是反向污染订单、权益或客户端门禁。
+
+已完成：
+
+- 扩展 `Order` 模型，新增 `user_id`、`sku_code`、`provider_checkout_id`、`provider_customer_id`、`checkout_url`、`idempotency_key`、`fulfilled_at` 与 `checkout` order type。
+- 新增 `payment.CheckoutRequest`、`payment.CheckoutSession`、`payment.CheckoutProvider`，保留旧 `PaymentProvider` 兼容路径。
+- `PaymentService.CreateCheckoutSession()` 优先调用 hosted checkout provider；旧 WeChat/Alipay payment URL provider 可被适配成 checkout session。
+- 新增 `CheckoutService` facade，负责校验 user/SKU、创建 Walnut 内部 checkout order、调用 payment gateway、回写 provider checkout 字段。
+- 新增 dev-only `mock` checkout adapter，用于本地跑通 checkout flow，不引入 Creem。
+- 新增 `POST /api/v1/commerce/checkout-sessions`，handler 只做 transport mapping，业务编排留在 service。
+- checkout 使用 `idempotency_key` 保证重试返回同一订单，并拒绝同一 key 被不同 user/SKU/provider 复用。
+
+验证：
+
+```bash
+go test ./...
+```
+
+M6-B 后续仍需补齐：
+
+- SKU/FulfillmentRule 独立 catalog，不再复用 legacy `Product` 表承载所有商品语义。
+- Checkout order list/query/admin 视图。
+- PC Core 代理 checkout facade，前端仍只通过 AccessDecision CTA 触发。
+
 ## 测试策略
 
 - Unit tests：catalog rule 解析、provider adapter、event mapper、fulfillment rule executor。

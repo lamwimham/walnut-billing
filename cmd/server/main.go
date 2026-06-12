@@ -56,7 +56,18 @@ func main() {
 	l.Info("Database connected", "driver", cfg.Database.Driver)
 
 	// 2. Auto Migrate
-	if err := db.AutoMigrate(&domain.License{}, &domain.Order{}, &domain.Product{}, &domain.AuditEntry{}, &domain.User{}, &domain.RegistrationRequest{}, &domain.EntitlementGrant{}, &domain.CreditAccount{}, &domain.CreditReservation{}, &domain.CreditTransaction{}); err != nil {
+	if err := db.AutoMigrate(
+		&domain.License{},
+		&domain.Order{},
+		&domain.Product{},
+		&domain.AuditEntry{},
+		&domain.User{},
+		&domain.RegistrationRequest{},
+		&domain.EntitlementGrant{},
+		&domain.CreditAccount{},
+		&domain.CreditReservation{},
+		&domain.CreditTransaction{},
+	); err != nil {
 		l.Error("Failed to migrate database", "error", err)
 		os.Exit(1)
 	}
@@ -120,6 +131,14 @@ func main() {
 		l.Info("WeChat Pay mock adapter (no credentials)")
 	}
 
+	if cfg.Server.Env != "prod" {
+		registry.Register("mock", payment.NewCheckoutMockAdapter(notifyURL+"/mock"), payment.ProviderStatus{
+			IsMock:    true,
+			NotifyURL: notifyURL + "/mock",
+		})
+		l.Info("Generic checkout mock adapter initialized")
+	}
+
 	// Alipay
 	if err := cfg.Payment.AlipayConfig().Validate(); err == nil {
 		alipayAdapter, err := payment.NewAlipayV2Adapter(cfg.Payment.AlipayConfig())
@@ -148,6 +167,7 @@ func main() {
 	}
 
 	paymentSvc := payment.NewPaymentService(orderRepo, licRepo, registry)
+	checkoutSvc := service.NewCheckoutService(orderRepo, productRepo, userRepo, paymentSvc)
 
 	// 8. Init Handlers
 	authHandler := handler.NewAuthHandler(licSvc, auditSvc)
@@ -160,6 +180,7 @@ func main() {
 	dashH := handler.NewDashboardHandler(licSvc, paymentSvc)
 	entitlementHandler := handler.NewEntitlementHandler(entitlementSvc, auditSvc)
 	creditHandler := handler.NewCreditHandler(creditSvc, auditSvc)
+	checkoutHandler := handler.NewCheckoutHandler(checkoutSvc)
 
 	// 9. Setup Router
 	if cfg.Server.Env == "prod" {
@@ -196,6 +217,12 @@ func main() {
 		api.POST("/credits/reservations", creditHandler.Reserve)
 		api.POST("/credits/reservations/:id/commit", creditHandler.Commit)
 		api.POST("/credits/reservations/:id/release", creditHandler.Release)
+	}
+
+	// Commerce checkout facade. Provider-specific checkout details stay inside
+	// walnut-billing and project into Walnut orders before fulfillment.
+	{
+		api.POST("/commerce/checkout-sessions", checkoutHandler.CreateCheckoutSession)
 	}
 
 	// Order & Payment

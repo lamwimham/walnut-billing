@@ -22,6 +22,7 @@ type LicenseRepository interface {
 type OrderRepository interface {
 	Create(ctx context.Context, order *domain.Order) error
 	GetByOutTradeNo(ctx context.Context, outTradeNo string) (*domain.Order, error)
+	GetByIdempotencyKey(ctx context.Context, key string) (*domain.Order, error)
 	Update(ctx context.Context, order *domain.Order) error
 }
 

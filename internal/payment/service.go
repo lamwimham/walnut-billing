@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/repository"
-	"time"
 )
 
 // PaymentService orchestrates payment creation and callback processing.
@@ -46,6 +46,30 @@ func (s *PaymentService) ListProviders() []string {
 // GetProviderStatus returns the status of all registered providers.
 func (s *PaymentService) GetProviderStatus() map[string]ProviderStatus {
 	return s.registry.Status()
+}
+
+// CreateCheckoutSession creates a provider-agnostic checkout session for an order.
+// Providers that implement CheckoutProvider get the full request. Legacy
+// PaymentProvider implementations are adapted to a checkout session by using
+// their existing payment URL capability.
+func (s *PaymentService) CreateCheckoutSession(ctx context.Context, providerName string, req CheckoutRequest) (*CheckoutSession, error) {
+	provider, err := s.GetProvider(providerName)
+	if err != nil {
+		return nil, err
+	}
+	if checkoutProvider, ok := provider.(CheckoutProvider); ok {
+		return checkoutProvider.CreateCheckoutSession(ctx, req)
+	}
+
+	url, err := provider.CreatePaymentURL(ctx, req.OutTradeNo, req.Amount, req.Description)
+	if err != nil {
+		return nil, err
+	}
+	return &CheckoutSession{
+		CheckoutURL:        url,
+		ProviderCheckoutID: req.OutTradeNo,
+		Status:             "checkout_created",
+	}, nil
 }
 
 // CreatePayment generates a payment URL for an existing order.

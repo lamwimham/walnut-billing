@@ -3,11 +3,11 @@ package service
 import (
 	"context"
 	"errors"
+	"testing"
+	"time"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/generator"
 	"walnut-billing/internal/repository"
-	"testing"
-	"time"
 )
 
 // --- Mocks ---
@@ -64,6 +64,15 @@ func (m *mockTxOrderRepo) GetByOutTradeNo(ctx context.Context, outTradeNo string
 		return nil, errors.New("not found")
 	}
 	return o, nil
+}
+
+func (m *mockTxOrderRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.Order, error) {
+	for _, order := range m.orders {
+		if order.IdempotencyKey != nil && *order.IdempotencyKey == key {
+			return order, nil
+		}
+	}
+	return nil, repository.ErrNotFound
 }
 
 func (m *mockTxOrderRepo) Update(ctx context.Context, order *domain.Order) error {

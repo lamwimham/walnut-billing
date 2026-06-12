@@ -3,18 +3,18 @@ package payment
 import (
 	"context"
 	"fmt"
-	"walnut-billing/internal/domain"
-	"walnut-billing/internal/repository"
 	"testing"
 	"time"
+	"walnut-billing/internal/domain"
+	"walnut-billing/internal/repository"
 )
 
 // MockPaymentProvider implements PaymentProvider for testing.
 type MockPaymentProvider struct {
-	NameStr       string
-	PaymentURL    string
-	CreateError   error
-	VerifyError   error
+	NameStr     string
+	PaymentURL  string
+	CreateError error
+	VerifyError error
 }
 
 func (m *MockPaymentProvider) Name() string {
@@ -103,6 +103,15 @@ func (m *mockOrderRepo) GetByOutTradeNo(ctx context.Context, outTradeNo string) 
 		return nil, fmt.Errorf("record not found")
 	}
 	return order, nil
+}
+
+func (m *mockOrderRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.Order, error) {
+	for _, order := range m.orders {
+		if order.IdempotencyKey != nil && *order.IdempotencyKey == key {
+			return order, nil
+		}
+	}
+	return nil, repository.ErrNotFound
 }
 
 func (m *mockOrderRepo) Update(ctx context.Context, order *domain.Order) error {
@@ -301,5 +310,55 @@ func TestPaymentService_HandleCallback_Renewal(t *testing.T) {
 	diff := lic.ExpiresAt.Sub(expectedMonth)
 	if diff < -time.Minute || diff > time.Minute {
 		t.Errorf("expected expiry around %s, got %s", expectedMonth, lic.ExpiresAt)
+	}
+}
+
+func TestPaymentService_CreateCheckoutSession_UsesCheckoutProvider(t *testing.T) {
+	orderRepo := newMockOrderRepo()
+	licRepo := newMockLicenseRepo()
+	provider := NewCheckoutMockAdapter("http://localhost/callbacks/mock")
+	registry := NewProviderRegistry()
+	registry.Register("mock", provider, ProviderStatus{IsMock: true})
+	svc := NewPaymentService(orderRepo, licRepo, registry)
+
+	session, err := svc.CreateCheckoutSession(context.Background(), "mock", CheckoutRequest{
+		OutTradeNo:     "CHK-TEST-001",
+		Amount:         1900,
+		Currency:       "CNY",
+		Description:    "Walnut Editorial Studio",
+		UserID:         "usr_1",
+		SKUCode:        "editorial_studio_monthly",
+		IdempotencyKey: "checkout:1",
+	})
+	if err != nil {
+		t.Fatalf("expected checkout session, got %v", err)
+	}
+	if session.CheckoutURL == "" || session.ProviderCheckoutID == "" {
+		t.Fatalf("expected hosted checkout session, got %#v", session)
+	}
+}
+
+func TestPaymentService_CreateCheckoutSession_AdaptsLegacyPaymentProvider(t *testing.T) {
+	orderRepo := newMockOrderRepo()
+	licRepo := newMockLicenseRepo()
+	provider := &MockPaymentProvider{NameStr: "legacy", PaymentURL: "legacy://pay"}
+	registry := NewProviderRegistry()
+	registry.Register("legacy", provider, ProviderStatus{IsMock: true})
+	svc := NewPaymentService(orderRepo, licRepo, registry)
+
+	session, err := svc.CreateCheckoutSession(context.Background(), "legacy", CheckoutRequest{
+		OutTradeNo:  "CHK-LEGACY-001",
+		Amount:      990,
+		Currency:    "CNY",
+		Description: "Walnut Credits",
+	})
+	if err != nil {
+		t.Fatalf("expected adapted checkout session, got %v", err)
+	}
+	if session.CheckoutURL != "legacy://pay-CHK-LEGACY-001" {
+		t.Fatalf("expected legacy payment URL, got %s", session.CheckoutURL)
+	}
+	if session.Status != "checkout_created" {
+		t.Fatalf("expected checkout_created, got %s", session.Status)
 	}
 }

@@ -24,19 +24,28 @@ type License struct {
 	MaxSeats    int `gorm:"default:1"`
 }
 
-// Order records a payment transaction.
+// Order records a Walnut-owned payment transaction.
+// Legacy license orders use LicenseKey; commerce checkout orders use UserID and
+// SKUCode and are fulfilled later into entitlement grants and credit ledger rows.
 type Order struct {
-	ID         uint   `gorm:"primaryKey"`
-	OutTradeNo string `gorm:"uniqueIndex;size:64"`
-	LicenseKey string `gorm:"size:50;index"`
-	Amount     int64  // Amount in cents
-	Currency   string `gorm:"size:8;default:'CNY'"`
-	Status     string `gorm:"size:16;default:'pending';index"`
-	Provider   string `gorm:"size:16"` // wechat, alipay
-	TradeNo    string `gorm:"size:64"` // Third-party trade number
-	PaidAt     *time.Time
-	Metadata   string `gorm:"type:text"`
-	OrderType  string `gorm:"size:16;default:'new'"` // new, renewal
+	ID                 uint    `gorm:"primaryKey"`
+	OutTradeNo         string  `gorm:"uniqueIndex;size:64"`
+	LicenseKey         string  `gorm:"size:50;index"`
+	UserID             string  `gorm:"size:40;index"`
+	SKUCode            string  `gorm:"size:64;index"`
+	Amount             int64   // Amount in cents
+	Currency           string  `gorm:"size:8;default:'CNY'"`
+	Status             string  `gorm:"size:24;default:'pending';index"`
+	Provider           string  `gorm:"size:32;index"` // wechat, alipay, mock, future hosted checkout providers
+	TradeNo            string  `gorm:"size:64"`       // Third-party trade number
+	ProviderCheckoutID string  `gorm:"size:128;index"`
+	ProviderCustomerID string  `gorm:"size:128;index"`
+	CheckoutURL        string  `gorm:"type:text"`
+	IdempotencyKey     *string `gorm:"uniqueIndex;size:128"`
+	PaidAt             *time.Time
+	FulfilledAt        *time.Time
+	Metadata           string `gorm:"type:text"`
+	OrderType          string `gorm:"size:16;default:'new'"` // new, renewal, checkout
 }
 
 // TableName overrides the table name for Order.
@@ -45,9 +54,20 @@ func (Order) TableName() string {
 }
 
 const (
-	OrderTypeNew     = "new"
-	OrderTypeRenewal = "renewal"
-	GracePeriodDays  = 3 // Grace period after expiry
+	OrderTypeNew      = "new"
+	OrderTypeRenewal  = "renewal"
+	OrderTypeCheckout = "checkout"
+	GracePeriodDays   = 3 // Grace period after expiry
+)
+
+const (
+	OrderStatusPending         = "pending"
+	OrderStatusCheckoutCreated = "checkout_created"
+	OrderStatusPaid            = "paid"
+	OrderStatusFulfilled       = "fulfilled"
+	OrderStatusCancelled       = "cancelled"
+	OrderStatusRefunded        = "refunded"
+	OrderStatusFailed          = "failed"
 )
 
 const (

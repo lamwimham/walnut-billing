@@ -68,6 +68,15 @@ curl http://localhost:8082/health
 | POST | `/api/v1/orders/pay` | `{out_trade_no, provider}` | `{payment_url}` |
 | GET | `/api/v1/orders/:out_trade_no` | — | Order status + payment info |
 
+### Commerce Checkout
+
+The commerce checkout facade is the provider-agnostic entry point for future SKU-based purchases. It creates a Walnut-owned order first, then asks the selected payment adapter for a checkout session. Provider-specific product IDs and checkout details stay inside `walnut-billing`.
+
+| Method | Path | Request | Response |
+|--------|------|---------|----------|
+| POST | `/api/v1/commerce/checkout-sessions` | `{user_id, sku_code, provider, success_url, cancel_url, idempotency_key}` | `{order, checkout_url, provider}` |
+
+Development builds register a `mock` checkout provider. Production payment providers can implement the optional hosted checkout adapter without changing app clients.
 
 ### Entitlements & Registration
 
@@ -145,11 +154,13 @@ All settings via environment variables (see `.env.example`):
 | Pattern | Application |
 |---------|-------------|
 | Factory | License key generation (product-specific formats) |
-| Adapter | Payment gateways (WeChat V3 / Alipay unified interface) |
+| Adapter | Payment gateways (WeChat V3 / Alipay unified interface) and hosted checkout adapters |
+| Facade | Commerce checkout entry point hides provider details from PC/mobile clients |
 | Repository | Data access abstraction (interface → GORM implementation) |
 | UnitOfWork | Database transactions (atomic Order + License creation) |
 | Middleware Chain | Recovery → RequestID → Logger → Prometheus → Auth |
 | EntitlementService | Registration, manual grant, and snapshot projection facade |
+| CheckoutService | Provider-agnostic order + checkout-session orchestration |
 | Catalog | Validates stable entitlement IDs independently from products and VIP copy |
 
 ## License

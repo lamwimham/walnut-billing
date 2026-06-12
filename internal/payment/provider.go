@@ -23,3 +23,34 @@ type PaymentProvider interface {
 	// BuildFailureResponse returns the provider-specific failure response body.
 	BuildFailureResponse() (contentType string, body string)
 }
+
+// CheckoutRequest is the provider-agnostic contract for hosted checkout.
+// Modern hosted-checkout providers can implement CheckoutProvider directly, while
+// legacy QR/payment-url providers can still be adapted by PaymentService.
+type CheckoutRequest struct {
+	OutTradeNo     string
+	Amount         int64
+	Currency       string
+	Description    string
+	SuccessURL     string
+	CancelURL      string
+	UserID         string
+	SKUCode        string
+	IdempotencyKey string
+	Metadata       map[string]string
+}
+
+// CheckoutSession is the normalized result returned by any checkout provider.
+type CheckoutSession struct {
+	CheckoutURL        string
+	ProviderCheckoutID string
+	ProviderCustomerID string
+	Status             string
+}
+
+// CheckoutProvider is an optional extension for providers that support hosted
+// checkout sessions instead of only provider-specific payment URLs.
+type CheckoutProvider interface {
+	Name() string
+	CreateCheckoutSession(ctx context.Context, req CheckoutRequest) (*CheckoutSession, error)
+}
