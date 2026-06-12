@@ -115,6 +115,14 @@ func (r *CreditTransactionRepo) Create(ctx context.Context, transaction *domain.
 	return r.DB.WithContext(ctx).Create(transaction).Error
 }
 
+func (r *CreditTransactionRepo) GetByID(ctx context.Context, id string) (*domain.CreditTransaction, error) {
+	var transaction domain.CreditTransaction
+	if err := r.DB.WithContext(ctx).Where("id = ?", id).First(&transaction).Error; err != nil {
+		return nil, mapGormNotFound(err)
+	}
+	return &transaction, nil
+}
+
 func (r *CreditTransactionRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.CreditTransaction, error) {
 	var transaction domain.CreditTransaction
 	if err := r.DB.WithContext(ctx).Where("idempotency_key = ?", key).First(&transaction).Error; err != nil {

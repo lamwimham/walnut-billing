@@ -153,6 +153,7 @@ type CreditReservationRepository interface {
 // CreditTransactionRepository defines data access for immutable credit ledger entries.
 type CreditTransactionRepository interface {
 	Create(ctx context.Context, transaction *domain.CreditTransaction) error
+	GetByID(ctx context.Context, id string) (*domain.CreditTransaction, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (*domain.CreditTransaction, error)
 	ListByUser(ctx context.Context, userID string, limit int, offset int) ([]domain.CreditTransaction, error)
 	ListByReservationIDs(ctx context.Context, reservationIDs []string) ([]domain.CreditTransaction, error)

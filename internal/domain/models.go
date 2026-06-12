@@ -230,10 +230,11 @@ const (
 	CreditReservationStatusCommitted = "committed"
 	CreditReservationStatusReleased  = "released"
 
-	CreditTransactionTypeGrant   = "grant"
-	CreditTransactionTypeReserve = "reserve"
-	CreditTransactionTypeCommit  = "commit"
-	CreditTransactionTypeRelease = "release"
+	CreditTransactionTypeGrant    = "grant"
+	CreditTransactionTypeReserve  = "reserve"
+	CreditTransactionTypeCommit   = "commit"
+	CreditTransactionTypeRelease  = "release"
+	CreditTransactionTypeClawback = "clawback"
 
 	CreditMetricBalance  = "credits.balance"
 	CreditMetricReserved = "credits.reserved"

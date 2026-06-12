@@ -13,6 +13,7 @@ type PaymentFulfillmentEventProcessor struct {
 	orders      repository.OrderRepository
 	orderEvents PaymentEventProcessor
 	fulfillment FulfillmentService
+	adjustment  PaymentAdjustmentService
 }
 
 func NewPaymentFulfillmentEventProcessor(
@@ -20,7 +21,16 @@ func NewPaymentFulfillmentEventProcessor(
 	orderEvents PaymentEventProcessor,
 	fulfillment FulfillmentService,
 ) *PaymentFulfillmentEventProcessor {
-	return &PaymentFulfillmentEventProcessor{orders: orders, orderEvents: orderEvents, fulfillment: fulfillment}
+	return NewPaymentFulfillmentEventProcessorWithAdjustments(orders, orderEvents, fulfillment, nil)
+}
+
+func NewPaymentFulfillmentEventProcessorWithAdjustments(
+	orders repository.OrderRepository,
+	orderEvents PaymentEventProcessor,
+	fulfillment FulfillmentService,
+	adjustment PaymentAdjustmentService,
+) *PaymentFulfillmentEventProcessor {
+	return &PaymentFulfillmentEventProcessor{orders: orders, orderEvents: orderEvents, fulfillment: fulfillment, adjustment: adjustment}
 }
 
 func (p *PaymentFulfillmentEventProcessor) ProcessPaymentEvent(ctx context.Context, event *domain.PaymentEventInbox) error {
@@ -30,7 +40,17 @@ func (p *PaymentFulfillmentEventProcessor) ProcessPaymentEvent(ctx context.Conte
 	if err := p.orderEvents.ProcessPaymentEvent(ctx, event); err != nil {
 		return err
 	}
-	if event == nil || event.EventType != domain.PaymentEventTypePaid {
+	if event == nil {
+		return nil
+	}
+	if event.EventType == domain.PaymentEventTypeRefunded || event.EventType == domain.PaymentEventTypeCancelled {
+		if p.adjustment == nil {
+			return nil
+		}
+		_, err := p.adjustment.Apply(ctx, event)
+		return err
+	}
+	if event.EventType != domain.PaymentEventTypePaid {
 		return nil
 	}
 	if p.orders == nil || p.fulfillment == nil {

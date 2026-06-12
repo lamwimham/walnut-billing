@@ -281,3 +281,48 @@ func TestPaymentFulfillmentEventProcessor_FulfillsPaidCheckoutOrder(t *testing.T
 		t.Fatalf("expected credit transaction from fulfillment")
 	}
 }
+
+func TestPaymentFulfillmentEventProcessor_AppliesRefundAdjustment(t *testing.T) {
+	fulfillmentSvc, orders, users, grants, accounts, transactions, executions := newFulfillmentTestService(editorialStudioFulfillmentRules()...)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	order := paidCheckoutOrder()
+	orders.orders["CHK-1"] = order
+	if _, err := fulfillmentSvc.FulfillOrder(context.Background(), order); err != nil {
+		t.Fatalf("fulfillment failed: %v", err)
+	}
+	adjustments := NewPaymentAdjustmentService(PaymentAdjustmentDependencies{
+		Repositories: PaymentAdjustmentRepositories{
+			Orders:                orders,
+			EntitlementGrants:     grants,
+			CreditAccounts:        accounts,
+			CreditTransactions:    transactions,
+			FulfillmentExecutions: executions,
+		},
+	})
+	processor := NewPaymentFulfillmentEventProcessorWithAdjustments(orders, NewPaymentOrderEventProcessor(orders), fulfillmentSvc, adjustments)
+
+	err := processor.ProcessPaymentEvent(context.Background(), &domain.PaymentEventInbox{
+		Provider:   "mock",
+		EventType:  domain.PaymentEventTypeRefunded,
+		OutTradeNo: "CHK-1",
+		Amount:     1900,
+	})
+	if err != nil {
+		t.Fatalf("expected refund adjustment, got %v", err)
+	}
+	if orders.orders["CHK-1"].Status != domain.OrderStatusRefunded {
+		t.Fatalf("expected refunded order, got %s", orders.orders["CHK-1"].Status)
+	}
+	for _, grant := range grants.grants {
+		if grant.Status != domain.GrantStatusRevoked {
+			t.Fatalf("expected refunded order grant to be revoked, got %#v", grant)
+		}
+	}
+	account, err := accounts.GetByUserID(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	if account.Balance != 0 {
+		t.Fatalf("expected credits clawed back, balance=%d", account.Balance)
+	}
+}

@@ -128,6 +128,14 @@ func (m *mockCreditTransactionRepo) Create(ctx context.Context, transaction *dom
 	return nil
 }
 
+func (m *mockCreditTransactionRepo) GetByID(ctx context.Context, id string) (*domain.CreditTransaction, error) {
+	transaction, ok := m.transactions[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return transaction, nil
+}
+
 func (m *mockCreditTransactionRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.CreditTransaction, error) {
 	for _, transaction := range m.transactions {
 		if transaction.IdempotencyKey == key {

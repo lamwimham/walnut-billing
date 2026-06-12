@@ -204,8 +204,18 @@ func main() {
 		EntitlementCatalog: service.DefaultEntitlementCatalog(),
 		UnitOfWorkFactory:  uowFactory,
 	})
+	paymentAdjustmentSvc := service.NewPaymentAdjustmentService(service.PaymentAdjustmentDependencies{
+		Repositories: service.PaymentAdjustmentRepositories{
+			Orders:                orderRepo,
+			EntitlementGrants:     grantRepo,
+			CreditAccounts:        creditAccountRepo,
+			CreditTransactions:    creditTransactionRepo,
+			FulfillmentExecutions: fulfillmentExecutionRepo,
+		},
+		UnitOfWorkFactory: uowFactory,
+	})
 	paymentOrderProcessor := service.NewPaymentOrderEventProcessor(orderRepo)
-	paymentEventProcessor := service.NewPaymentFulfillmentEventProcessor(orderRepo, paymentOrderProcessor, fulfillmentSvc)
+	paymentEventProcessor := service.NewPaymentFulfillmentEventProcessorWithAdjustments(orderRepo, paymentOrderProcessor, fulfillmentSvc, paymentAdjustmentSvc)
 	paymentEventSvc := service.NewPaymentEventService(paymentEventRepo, paymentSvc, paymentEventProcessor)
 
 	// 8. Init Handlers

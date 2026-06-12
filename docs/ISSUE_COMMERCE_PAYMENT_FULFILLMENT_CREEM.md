@@ -350,6 +350,33 @@ GET  /api/v1/admin/fulfillments?order_id=&user_id=
 - 支付成功后通过 snapshot refresh 解锁，不由前端自行判断支付状态。
 
 
+### M6-G: Refund / Cancel / Subscription Policy
+
+业务决策：
+
+- 退款窗口采用 7 天。
+- 用户主动取消订阅后，已付费当前周期继续有效；取消不等于退款。
+- 退款扣回 credits 时只扣当前可扣余额，不制造负余额。
+- 订阅赠点按周期额度建模，长期不承诺永久累积；第一阶段先用 ledger source/idempotency 区分，后续升级为 credit bucket / expiry。
+- 续费失败进入 3 天 grace period；grace period 内保留高级权益，但不发新周期点数。
+- chargeback / dispute 作为高风险退款处理：立即撤销订单相关权益、扣回可扣 credits，并标记用户支付风险（风险标记后续单独落表）。
+
+实现原则：
+
+- `payment.refunded` / `payment.cancelled` 先进入 `PaymentEventInbox`，再由 policy service 处理。
+- Creem 或未来海外渠道只提供支付事实，不直接撤销门禁。
+- 撤销只基于 Walnut 自有记录：`Order`、`FulfillmentExecution.ResultRef`、`EntitlementGrant`、`CreditTransaction`、`CreditAccount`。
+- 退款履约补偿必须幂等，重复 webhook 不重复扣点或反复修改 grant。
+
+第一切片验收标准：
+
+- `payment.cancelled` 对已 fulfilled 订阅订单不立即撤销 `editorial.studio`，只把订单标记为 cancelled/保持周期策略记录，门禁等 grant 自然到期。
+- `payment.refunded` 立即撤销本订单 fulfillment 产生的 active grant。
+- `payment.refunded` 扣回本订单 fulfillment 发放的 credits：最多扣当前 `CreditAccount.Balance`，不扣成负数。
+- 重复退款 webhook 通过 idempotency key 保证不会重复扣回。
+- handler / Creem adapter 不出现退款业务分支，全部由 policy service 决策。
+
+
 ## 当前推进状态
 
 ### M6-B 第一切片已完成：Provider-agnostic Checkout Facade
@@ -477,6 +504,35 @@ M6-D 后续仍需补齐：
 ```bash
 go test ./...
 ```
+
+### M6-G 第一切片已完成：Refund / Cancel policy service
+
+本轮先把已拍板的业务策略落成独立 policy service，避免在 Creem adapter、webhook handler 或订单 processor 中堆退款分支。
+
+已完成：
+
+- 新增 `PaymentAdjustmentService`，专门处理 `payment.refunded` / `payment.cancelled` 的 Walnut 内部补偿策略。
+- `payment.cancelled` 遵守“当前已付费周期继续有效”：不撤销当前 `editorial.studio` grant，不扣回 credits。
+- `payment.refunded` 通过 `FulfillmentExecution.ResultRef` 回溯本订单发放的 grant / credit transaction：
+  - active entitlement grant 立即标记为 `revoked`，并把 `expires_at` 收敛到当前时间。
+  - credits 只从当前可用 `CreditAccount.Balance` 中扣回，不制造负余额。
+  - 即使余额为 0，也写入 0 金额 `clawback` ledger marker，避免重复退款 webhook 在用户未来充值后误扣新余额。
+- 新增 `CreditTransactionTypeClawback`，保持账本不可变，不直接删除历史 grant。
+- `PaymentFulfillmentEventProcessor` 通过 composition 接入 adjustment service；provider adapter 和 webhook handler 仍只负责事实归一化。
+
+验证：
+
+```bash
+go test ./...
+git diff --check
+```
+
+M6-G 后续仍需补齐：
+
+- 7 天退款窗口、低使用条件、人工审核策略还未落 DB policy。
+- 订阅赠点 bucket / expiry 尚未实现，当前通过 ledger source/idempotency 区分。
+- chargeback / dispute 风险标记需要新增用户支付风险模型。
+- 续费失败 3 天 grace period 需要结合 provider subscription renewal event 单独处理。
 
 ## 测试策略
 
