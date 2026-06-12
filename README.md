@@ -11,7 +11,7 @@ walnut-billing/
 │   ├── config/                     # Viper-based configuration
 │   ├── domain/models.go            # Entities (Product, License, Order, User, Grant)
 │   ├── generator/                  # Factory pattern: license key generation
-│   ├── payment/                    # Adapter pattern: WeChat Pay + Alipay
+│   ├── payment/                    # Adapter pattern: Creem + legacy WeChat/Alipay
 │   ├── repository/                 # Repository pattern: interfaces + GORM impl
 │   ├── service/                    # Business logic with UnitOfWork transactions
 │   └── api/
@@ -62,6 +62,8 @@ curl http://localhost:8082/health
 
 ### Order & Payment
 
+Current commercialization work focuses on overseas hosted checkout providers. Creem is the first production target; WeChat/Alipay remain legacy-compatible for existing license flows and are not the focus of new development.
+
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
 | POST | `/api/v1/orders` | `{product_code}` | `{order: {out_trade_no, license_key, amount}}` |
@@ -76,7 +78,7 @@ The commerce checkout facade is the provider-agnostic entry point for future SKU
 |--------|------|---------|----------|
 | POST | `/api/v1/commerce/checkout-sessions` | `{user_id, sku_code, provider, success_url, cancel_url, idempotency_key}` | `{order, checkout_url, provider}` |
 
-Development builds register a `mock` checkout provider. Production payment providers can implement the optional hosted checkout adapter without changing app clients.
+Development builds register a `mock` checkout provider. Creem can be enabled as a hosted checkout adapter through `PAYMENT_CREEM_*`; PC/mobile clients still call the same Walnut checkout facade and never depend on Creem IDs.
 
 ### Commerce Fulfillment
 
@@ -108,7 +110,7 @@ These endpoints provide the first entitlement projection for Walnut clients. Gra
 | POST | `/api/v1/registrations` | `{email, display_name, requested_entitlement, device_id, source, note}` | `{user, registration}` with pending status |
 | GET | `/api/v1/users/:user_id/entitlements/snapshot` | — | PC Core compatible entitlement snapshot |
 
-### Webhooks (called by payment providers)
+### Legacy Webhooks (called by domestic payment providers)
 
 | Method | Path | Notes |
 |--------|------|-------|
@@ -128,6 +130,7 @@ These endpoints provide the first entitlement projection for Walnut clients. Gra
 | GET | `/api/v1/admin/grants?user_id=` | List entitlement grants |
 | POST | `/api/v1/admin/grants` | Manually grant an entitlement such as `editorial.studio` |
 | GET | `/api/v1/admin/fulfillments?out_trade_no=&user_id=&sku_code=&status=` | List commerce fulfillment executions |
+| PUT | `/api/v1/admin/payment/creem` | Hot-reload Creem API key, webhook secret, URLs, and SKU→product mapping |
 
 ### Infrastructure
 
@@ -148,8 +151,15 @@ All settings via environment variables (see `.env.example`):
 | `DATABASE_DSN` | ./walnut_billing.db | SQLite database path |
 | `ADMIN_API_KEYS` | (empty) | Comma-separated API keys for admin endpoints |
 | `RATELIMIT_ENABLED` | false | Enable IP rate limiting on auth endpoints |
-| `PAYMENT_WECHAT_*` | (empty) | WeChat Pay V3 credentials |
-| `PAYMENT_ALIPAY_*` | (empty) | Alipay credentials |
+| `PAYMENT_WECHAT_*` | (empty) | Legacy WeChat Pay V3 credentials; not the current commercialization target |
+| `PAYMENT_ALIPAY_*` | (empty) | Legacy Alipay credentials; not the current commercialization target |
+| `PAYMENT_CREEM_API_KEY` | (empty) | Creem API key; server-side only |
+| `PAYMENT_CREEM_WEBHOOK_SECRET` | (empty) | Creem webhook HMAC secret |
+| `PAYMENT_CREEM_SANDBOX` | true | Use `https://test-api.creem.io` unless explicitly false |
+| `PAYMENT_CREEM_API_BASE_URL` | (empty) | Optional override for Creem API base URL; normally leave empty |
+| `PAYMENT_CREEM_SUCCESS_URL` | (empty) | Default hosted checkout success URL; request value can override it |
+| `PAYMENT_CREEM_CANCEL_URL` | (empty) | Default hosted checkout cancel URL stored in Walnut metadata |
+| `PAYMENT_CREEM_PRODUCT_MAP_JSON` | (empty) | SKU to Creem product ID map, e.g. `{"editorial_studio_monthly":"prod_xxx"}` |
 | `FULFILLMENT_RULES_JSON` | (empty) | Optional JSON fulfillment rules; empty uses dev defaults |
 
 **Note**: If payment credentials are not configured, the service uses mock adapters (suitable for development).
@@ -167,19 +177,19 @@ All settings via environment variables (see `.env.example`):
 
 | Code | Name | Price | Validity |
 |------|------|-------|----------|
-| pro | walnut Pro (Buyout) | ¥128 | Lifetime |
-| std | walnut Standard (Buyout) | ¥68 | Lifetime |
-| sub_monthly | AI Subscription (Monthly) | ¥15/month | Monthly |
-| sub_yearly | AI Subscription (Yearly) | ¥150/year | Yearly |
-| editorial_studio_monthly | Editorial Studio Monthly | ¥19/month | Monthly |
-| credits_600 | Walnut Credits 600 | ¥9.9 | Lifetime |
+| pro | walnut Pro (Buyout, legacy) | ¥128 | Lifetime |
+| std | walnut Standard (Buyout, legacy) | ¥68 | Lifetime |
+| sub_monthly | AI Subscription (Monthly, legacy) | ¥15/month | Monthly |
+| sub_yearly | AI Subscription (Yearly, legacy) | ¥150/year | Yearly |
+| editorial_studio_monthly | Editorial Studio Monthly | $19/month | Monthly |
+| credits_600 | Walnut Credits 600 | $9.9 | Lifetime |
 
 ## Design Patterns
 
 | Pattern | Application |
 |---------|-------------|
 | Factory | License key generation (product-specific formats) |
-| Adapter | Payment gateways (WeChat V3 / Alipay unified interface) and hosted checkout adapters |
+| Adapter | Creem hosted checkout and webhook verifier; legacy WeChat/Alipay remain behind the same interface |
 | Facade | Commerce checkout entry point hides provider details from PC/mobile clients |
 | Repository | Data access abstraction (interface → GORM implementation) |
 | UnitOfWork | Database transactions for license creation and commerce fulfillment |

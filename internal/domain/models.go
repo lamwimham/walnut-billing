@@ -7,6 +7,7 @@ type Product struct {
 	Code      string `gorm:"primaryKey;size:32"`
 	Name      string `gorm:"size:64"`
 	Price     int64  // Amount in cents
+	Currency  string `gorm:"size:8;default:'CNY'"`
 	Validity  string `gorm:"size:16"` // lifetime, monthly, yearly
 	IsVisible bool   `gorm:"default:true"`
 }

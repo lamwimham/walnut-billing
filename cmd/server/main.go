@@ -111,6 +111,7 @@ func main() {
 
 	// 7. Init Payment Gateway (Registry + Adapter Pattern)
 	notifyURL := "http://localhost:" + cfg.Server.Port + "/api/v1/callbacks"
+	webhookURL := "http://localhost:" + cfg.Server.Port + "/api/v1/webhooks"
 	registry := payment.NewProviderRegistry()
 
 	// WeChat Pay
@@ -146,6 +147,19 @@ func main() {
 			NotifyURL: notifyURL + "/mock",
 		})
 		l.Info("Generic checkout mock adapter initialized")
+	}
+
+	// Creem hosted checkout. Creem stays behind the provider adapter boundary:
+	// checkout/webhook mapping live here, while fulfillment owns Walnut grants.
+	if creemAdapter, err := payment.NewCreemAdapter(cfg.Payment.CreemConfig()); err == nil {
+		registry.Register("creem", creemAdapter, payment.ProviderStatus{
+			IsMock:      false,
+			SandboxMode: cfg.Payment.CreemSandbox,
+			NotifyURL:   webhookURL + "/creem",
+		})
+		l.Info("Creem checkout adapter initialized", "sandbox", cfg.Payment.CreemSandbox)
+	} else if cfg.Payment.CreemAPIKey != "" || cfg.Payment.CreemWebhookSecret != "" || cfg.Payment.CreemProductMapJSON != "" {
+		l.Warn("Creem checkout adapter not initialized", "error", err)
 	}
 
 	// Alipay

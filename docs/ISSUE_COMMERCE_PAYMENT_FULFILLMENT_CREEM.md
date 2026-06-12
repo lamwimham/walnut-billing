@@ -22,6 +22,7 @@ App / PC Core
 - **编辑部工作室 / 召唤编辑部 / 多 Agent 协作**：高级功能，最终由 `editorial.studio` entitlement 和 credits 共同控制。
 - **VIP**：仅是展示文案，不作为授权判断字段。
 - **Creem**：只负责 checkout、支付状态、订阅事件、税务/MoR 合规能力；不作为 Walnut 的门禁 source of truth。
+- **海外渠道优先**：当前商业化支付只推进海外 hosted checkout 渠道；WeChat/Alipay 等国内支付仅保留历史兼容，不再作为 M6 新开发目标。
 
 ## 当前架构评估
 
@@ -31,7 +32,7 @@ App / PC Core
 |---|---|---|
 | `Product` | 旧 license 商品 | 演进为商品目录的兼容层，后续拆出 `SKU` / `FulfillmentRule` |
 | `Order` | 支付订单，当前强绑定 `LicenseKey` | 保留旧路径，新增用户维度和 SKU/checkout 维度 |
-| `PaymentProvider` | WeChat / Alipay 适配器接口 | 升级为 provider-agnostic checkout + webhook adapter |
+| `PaymentProvider` | legacy WeChat / Alipay 适配器接口 | 升级为海外 hosted checkout + webhook adapter，当前优先 Creem |
 | `ProviderRegistry` | 支付渠道注册表 | 继续作为 Strategy / Registry 扩展点 |
 | `PaymentService` | 创建支付 URL、处理回调、激活 license | 拆分为 `CheckoutService`、`WebhookInboxService`、`FulfillmentService` |
 | `EntitlementService` | 登记、人工 grant、snapshot | 作为履约落地目标，不关心支付渠道 |
@@ -54,7 +55,7 @@ PC / Mobile / Frontend
       -> CommerceCatalog
         -> Product / SKU / FulfillmentRule
       -> Order
-      -> PaymentProviderAdapter(creem | wechat | alipay | mock)
+      -> PaymentProviderAdapter(creem | overseas_next | mock)
         -> checkout_url
 
 Creem Webhook
@@ -186,7 +187,7 @@ created_at
 |---|---|---|
 | `CommerceCatalog` | Catalog / Policy | 解析 Product、SKU、FulfillmentRule，校验稳定 entitlement id |
 | `CheckoutFacade` | Facade | 给 PC Core / 移动端提供统一 checkout 入口 |
-| `PaymentProviderAdapter` | Strategy / Adapter | 屏蔽 Creem、WeChat、Alipay 差异 |
+| `PaymentProviderAdapter` | Strategy / Adapter | 屏蔽 Creem 与未来海外渠道差异；国内支付不再扩展 |
 | `PaymentProviderRegistry` | Registry | 按 provider name 获取 adapter |
 | `PaymentEventInboxService` | Inbox / Idempotency | 保存、去重、重试 webhook 事件 |
 | `PaymentEventProcessor` | Application Service | 把 provider event 转换为 Walnut order 状态变化 |
@@ -327,6 +328,7 @@ GET  /api/v1/admin/fulfillments?order_id=&user_id=
 - 新增 Creem checkout adapter。
 - 新增 Creem webhook verifier 和 event mapper。
 - Creem product/price/customer/subscription id 只保存在 billing 内部。
+- 新增 `PAYMENT_CREEM_*` 配置与 admin hot-reload 入口，SKU 到 Creem product ID 的映射保持配置化。
 
 验收标准：
 
@@ -352,13 +354,13 @@ GET  /api/v1/admin/fulfillments?order_id=&user_id=
 
 ### M6-B 第一切片已完成：Provider-agnostic Checkout Facade
 
-本轮先实现不依赖 Creem 的 checkout 基础设施，确保后续 Creem 只是 provider adapter，而不是反向污染订单、权益或客户端门禁。
+本轮先实现不依赖 Creem 的 checkout 基础设施，确保后续海外支付渠道只是 provider adapter，而不是反向污染订单、权益或客户端门禁。国内支付仅保留 legacy 兼容，不进入新商业化闭环。
 
 已完成：
 
 - 扩展 `Order` 模型，新增 `user_id`、`sku_code`、`provider_checkout_id`、`provider_customer_id`、`checkout_url`、`idempotency_key`、`fulfilled_at` 与 `checkout` order type。
 - 新增 `payment.CheckoutRequest`、`payment.CheckoutSession`、`payment.CheckoutProvider`，保留旧 `PaymentProvider` 兼容路径。
-- `PaymentService.CreateCheckoutSession()` 优先调用 hosted checkout provider；旧 WeChat/Alipay payment URL provider 可被适配成 checkout session。
+- `PaymentService.CreateCheckoutSession()` 优先调用 hosted checkout provider；旧 WeChat/Alipay payment URL provider 仅保留兼容适配，不继续投入新能力。
 - 新增 `CheckoutService` facade，负责校验 user/SKU、创建 Walnut 内部 checkout order、调用 payment gateway、回写 provider checkout 字段。
 - 新增 dev-only `mock` checkout adapter，用于本地跑通 checkout flow，不引入 Creem。
 - 新增 `POST /api/v1/commerce/checkout-sessions`，handler 只做 transport mapping，业务编排留在 service。
@@ -448,6 +450,33 @@ M6-D 后续仍需补齐：
 - 将 `FULFILLMENT_RULES_JSON` 迁移为 versioned DB catalog / admin API。
 - refund/cancel policy：是否 revoke entitlement、扣回未使用 credits、是否允许负余额。
 - 后台 retry worker / 指数退避 / 告警指标；当前已支持 admin reprocess。
+
+### M6-E 第一切片已完成：Creem Adapter skeleton + checkout/webhook mapper
+
+本轮接入官方 Creem 文档中已确认的稳定边界：`POST /v1/checkouts`、`x-api-key`、`request_id`、`checkout.completed` webhook，以及 `creem-signature` HMAC-SHA256 签名。实现仍然保持 provider adapter 可替换，不让 Creem 进入 PC/mobile/core 门禁。
+
+已完成：
+
+- 新增 `payment.CreemAdapter`，实现 `PaymentProvider`、`CheckoutProvider`、`WebhookVerifier`。
+- checkout 创建使用 `product_id`、`request_id`、`success_url`、`customer`、`metadata`，并把 Walnut `out_trade_no/user_id/sku_code/idempotency_key` 写入 metadata 用于回查。
+- webhook verifier 校验 `creem-signature`，再把 `checkout.completed` 归一化为 Walnut `payment.paid`。
+- webhook mapper 支持从 `object.request_id`、`object.checkout.request_id`、`metadata.walnut_out_trade_no` 提取 Walnut `out_trade_no`。
+- 新增 `PAYMENT_CREEM_API_KEY`、`PAYMENT_CREEM_WEBHOOK_SECRET`、`PAYMENT_CREEM_SANDBOX`、`PAYMENT_CREEM_PRODUCT_MAP_JSON` 等配置。
+- 新增 admin hot-reload：`PUT /api/v1/admin/payment/creem`。
+- `CheckoutRequest` 增加 customer email/name，让 hosted checkout 可预填客户信息。
+- `Product` 增加 `currency`，海外商业化 SKU 默认 `USD`；payment paid 事件需要 amount 与 currency 同时匹配 Walnut order 才能履约。
+
+当前边界：
+
+- Creem product id 只存在于 `walnut-billing` 的 provider adapter/config 中；客户端仍提交 Walnut `sku_code`。
+- Creem event 只进入 `PaymentEventInbox`；真正发放权益仍由 M6-D `FulfillmentService` 写入 `EntitlementGrant` 和 `CreditTransaction`。
+- 退款/订阅取消当前只做事件归一化准备，最终 revoke/扣回策略仍需单独定义。
+
+验证：
+
+```bash
+go test ./...
+```
 
 ## 测试策略
 

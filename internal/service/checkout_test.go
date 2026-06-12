@@ -46,6 +46,7 @@ func TestCheckoutService_CreateCheckoutSessionCreatesCommerceOrder(t *testing.T)
 		Code:      "editorial_studio_monthly",
 		Name:      "Editorial Studio Monthly",
 		Price:     1900,
+		Currency:  "USD",
 		Validity:  "monthly",
 		IsVisible: true,
 	}
@@ -70,13 +71,16 @@ func TestCheckoutService_CreateCheckoutSessionCreatesCommerceOrder(t *testing.T)
 	if result.Order.Status != domain.OrderStatusCheckoutCreated {
 		t.Fatalf("expected checkout_created, got %s", result.Order.Status)
 	}
+	if result.Order.Currency != "USD" {
+		t.Fatalf("expected checkout order currency USD, got %s", result.Order.Currency)
+	}
 	if result.CheckoutURL == "" || result.Order.ProviderCheckoutID == "" {
 		t.Fatalf("expected provider checkout fields, got %#v", result.Order)
 	}
 	if len(orders.orders) != 1 || len(gateway.requests) != 1 {
 		t.Fatalf("expected one order and one provider call")
 	}
-	if gateway.requests[0].Amount != 1900 || gateway.requests[0].Currency != "CNY" {
+	if gateway.requests[0].Amount != 1900 || gateway.requests[0].Currency != "USD" {
 		t.Fatalf("expected normalized amount/currency, got %#v", gateway.requests[0])
 	}
 }

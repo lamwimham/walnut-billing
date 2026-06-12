@@ -31,7 +31,7 @@ type mockProvider struct {
 	name string
 }
 
-func (m *mockProvider) Name() string                             { return m.name }
+func (m *mockProvider) Name() string { return m.name }
 func (m *mockProvider) CreatePaymentURL(ctx context.Context, outTradeNo string, amount int64, description string) (string, error) {
 	return "http://mock.pay/" + outTradeNo, nil
 }
@@ -53,6 +53,7 @@ func setupConfigTestRouter(svc *payment.PaymentService) *gin.Engine {
 	r.GET("/admin/payment/providers", h.GetProviderStatus)
 	r.PUT("/admin/payment/wechat", h.UpdateWechatConfig)
 	r.PUT("/admin/payment/alipay", h.UpdateAlipayConfig)
+	r.PUT("/admin/payment/creem", h.UpdateCreemConfig)
 	r.POST("/admin/payment/:provider/mock", h.SwitchToMock)
 	r.POST("/admin/payment/import", h.ImportProviders)
 	return r
@@ -94,6 +95,37 @@ func TestConfigHandler_SwitchToMock(t *testing.T) {
 		if !s.IsMock {
 			t.Error("expected wechat to be a mock provider")
 		}
+	}
+}
+
+func TestConfigHandler_UpdateCreemConfig(t *testing.T) {
+	registry := payment.NewProviderRegistry()
+	svc := payment.NewPaymentService(nil, nil, registry)
+	router := setupConfigTestRouter(svc)
+
+	body := map[string]interface{}{
+		"api_key":        "creem_test_key",
+		"webhook_secret": "whsec_test",
+		"sandbox":        true,
+		"product_ids": map[string]string{
+			"editorial_studio_monthly": "prod_studio",
+		},
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req, _ := http.NewRequest("PUT", "/admin/payment/creem", bytes.NewBuffer(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	statuses := svc.GetProviderStatus()
+	if s, ok := statuses["creem"]; !ok {
+		t.Fatal("expected creem provider to be registered")
+	} else if s.IsMock || !s.SandboxMode {
+		t.Fatalf("expected real sandbox creem provider, got %#v", s)
 	}
 }
 

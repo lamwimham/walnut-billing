@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/repository"
@@ -27,8 +28,11 @@ func (p *PaymentOrderEventProcessor) ProcessPaymentEvent(ctx context.Context, ev
 	if err != nil {
 		return fmt.Errorf("order %q not found: %w", event.OutTradeNo, err)
 	}
-	if event.Amount > 0 && order.Amount > 0 && event.Amount != order.Amount {
+	if event.EventType == domain.PaymentEventTypePaid && event.Amount > 0 && order.Amount > 0 && event.Amount != order.Amount {
 		return fmt.Errorf("payment amount mismatch: order=%d event=%d", order.Amount, event.Amount)
+	}
+	if event.EventType == domain.PaymentEventTypePaid && !paymentCurrencyMatches(order.Currency, event.Currency) {
+		return fmt.Errorf("payment currency mismatch: order=%s event=%s", order.Currency, event.Currency)
 	}
 
 	now := time.Now().UTC()
@@ -54,4 +58,16 @@ func (p *PaymentOrderEventProcessor) ProcessPaymentEvent(ctx context.Context, ev
 		return ErrPaymentEventNotProcessable
 	}
 	return p.orders.Update(ctx, order)
+}
+
+func paymentCurrencyMatches(orderCurrency string, eventCurrency string) bool {
+	eventCurrency = strings.TrimSpace(eventCurrency)
+	if eventCurrency == "" {
+		return true
+	}
+	orderCurrency = strings.TrimSpace(orderCurrency)
+	if orderCurrency == "" {
+		return true
+	}
+	return strings.EqualFold(orderCurrency, eventCurrency)
 }

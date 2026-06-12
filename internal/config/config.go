@@ -29,16 +29,23 @@ type DatabaseConfig struct {
 }
 
 type PaymentConfig struct {
-	WechatMchID      string
-	WechatSerialNo   string
-	WechatPrivateKey string // PEM encoded
-	WechatAPIv3Key   string
-	WechatAppID      string
-	WechatSandbox    bool
-	AlipayAppID      string
-	AlipayPrivateKey string // PEM encoded
-	AlipayPublicKey  string // Alipay public key (for callback verification)
-	AlipaySandbox    bool
+	WechatMchID         string
+	WechatSerialNo      string
+	WechatPrivateKey    string // PEM encoded
+	WechatAPIv3Key      string
+	WechatAppID         string
+	WechatSandbox       bool
+	AlipayAppID         string
+	AlipayPrivateKey    string // PEM encoded
+	AlipayPublicKey     string // Alipay public key (for callback verification)
+	AlipaySandbox       bool
+	CreemAPIKey         string
+	CreemWebhookSecret  string
+	CreemAPIBaseURL     string
+	CreemSuccessURL     string
+	CreemCancelURL      string
+	CreemProductMapJSON string
+	CreemSandbox        bool
 }
 
 // WechatConfig returns a payment.WechatPayV3Config from the current config.
@@ -62,6 +69,19 @@ func (p PaymentConfig) AlipayConfig() payment.AlipayV2Config {
 		PublicKey:   p.AlipayPublicKey,
 		NotifyURL:   "", // Set by caller
 		SandboxMode: p.AlipaySandbox,
+	}
+}
+
+// CreemConfig returns a payment.CreemConfig from the current config.
+func (p PaymentConfig) CreemConfig() payment.CreemConfig {
+	return payment.CreemConfig{
+		APIKey:         p.CreemAPIKey,
+		WebhookSecret:  p.CreemWebhookSecret,
+		APIBaseURL:     p.CreemAPIBaseURL,
+		SuccessURL:     p.CreemSuccessURL,
+		CancelURL:      p.CreemCancelURL,
+		ProductMapJSON: p.CreemProductMapJSON,
+		SandboxMode:    p.CreemSandbox,
 	}
 }
 
@@ -102,6 +122,13 @@ func Load() (*Config, error) {
 	v.SetDefault("payment.alipay_private_key", "")
 	v.SetDefault("payment.alipay_public_key", "")
 	v.SetDefault("payment.alipay_sandbox", false)
+	v.SetDefault("payment.creem_api_key", "")
+	v.SetDefault("payment.creem_webhook_secret", "")
+	v.SetDefault("payment.creem_api_base_url", "")
+	v.SetDefault("payment.creem_success_url", "")
+	v.SetDefault("payment.creem_cancel_url", "")
+	v.SetDefault("payment.creem_product_map_json", "")
+	v.SetDefault("payment.creem_sandbox", true)
 	v.SetDefault("fulfillment.rules_json", "")
 
 	// 读取环境变量或配置文件
@@ -139,6 +166,29 @@ func Load() (*Config, error) {
 	}
 	if val := os.Getenv("FULFILLMENT_RULES_JSON"); val != "" {
 		cfg.Fulfillment.RulesJSON = val
+	}
+	if val := os.Getenv("PAYMENT_CREEM_API_KEY"); val != "" {
+		cfg.Payment.CreemAPIKey = val
+	}
+	if val := os.Getenv("PAYMENT_CREEM_WEBHOOK_SECRET"); val != "" {
+		cfg.Payment.CreemWebhookSecret = val
+	}
+	if val := os.Getenv("PAYMENT_CREEM_API_BASE_URL"); val != "" {
+		cfg.Payment.CreemAPIBaseURL = val
+	}
+	if val := os.Getenv("PAYMENT_CREEM_SUCCESS_URL"); val != "" {
+		cfg.Payment.CreemSuccessURL = val
+	}
+	if val := os.Getenv("PAYMENT_CREEM_CANCEL_URL"); val != "" {
+		cfg.Payment.CreemCancelURL = val
+	}
+	if val := os.Getenv("PAYMENT_CREEM_PRODUCT_MAP_JSON"); val != "" {
+		cfg.Payment.CreemProductMapJSON = val
+	}
+	if val := os.Getenv("PAYMENT_CREEM_SANDBOX"); val == "true" {
+		cfg.Payment.CreemSandbox = true
+	} else if val == "false" {
+		cfg.Payment.CreemSandbox = false
 	}
 
 	return cfg, nil

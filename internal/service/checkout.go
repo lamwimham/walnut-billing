@@ -136,6 +136,8 @@ func (s *checkoutServiceImpl) CreateCheckoutSession(ctx context.Context, input C
 		SuccessURL:     input.SuccessURL,
 		CancelURL:      input.CancelURL,
 		UserID:         input.UserID,
+		CustomerEmail:  user.Email,
+		CustomerName:   user.DisplayName,
 		SKUCode:        input.SKUCode,
 		IdempotencyKey: input.IdempotencyKey,
 		Metadata:       input.Metadata,
@@ -194,8 +196,9 @@ func normalizeCheckoutInput(input CheckoutInput) CheckoutInput {
 }
 
 func defaultCheckoutCurrency(product *domain.Product) string {
-	// Product currently has no currency column; keep the legacy CNY default until
-	// the M6 catalog separates SKU pricing from legacy license products.
+	if product != nil && strings.TrimSpace(product.Currency) != "" {
+		return strings.ToUpper(strings.TrimSpace(product.Currency))
+	}
 	return "CNY"
 }
 

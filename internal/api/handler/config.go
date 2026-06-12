@@ -148,6 +148,39 @@ func (h *PaymentConfigHandler) UpdateAlipayConfig(c *gin.Context) {
 	})
 }
 
+// UpdateCreemConfig PUT /api/v1/admin/payment/creem
+// Hot-reload Creem checkout configuration without server restart.
+func (h *PaymentConfigHandler) UpdateCreemConfig(c *gin.Context) {
+	var req creemConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	cfg := req.toPaymentConfig()
+	adapter, err := payment.NewCreemAdapter(cfg)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid config: " + err.Error()})
+		return
+	}
+
+	notifyURL := ""
+	if h.PaymentSvc.Registry().HasProvider("creem") {
+		status := h.PaymentSvc.Registry().Status()["creem"]
+		notifyURL = status.NotifyURL
+	}
+	h.PaymentSvc.Registry().Register("creem", adapter, payment.ProviderStatus{
+		IsMock:      false,
+		SandboxMode: cfg.SandboxMode,
+		NotifyURL:   notifyURL,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Creem configuration updated",
+		"sandbox": cfg.SandboxMode,
+	})
+}
+
 // SwitchToMock POST /api/v1/admin/payment/:provider/mock
 // Switch a provider to mock mode (for testing).
 func (h *PaymentConfigHandler) SwitchToMock(c *gin.Context) {
@@ -163,6 +196,8 @@ func (h *PaymentConfigHandler) SwitchToMock(c *gin.Context) {
 		mockAdapter = payment.NewWechatPayMockAdapter("", req.NotifyURL)
 	case "alipay":
 		mockAdapter = payment.NewAlipayMockAdapter("", req.NotifyURL)
+	case "creem":
+		mockAdapter = payment.NewCheckoutMockAdapter(req.NotifyURL)
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown provider"})
 		return
@@ -183,6 +218,7 @@ func (h *PaymentConfigHandler) ImportProviders(c *gin.Context) {
 	var req struct {
 		Wechat payment.WechatPayV3Config `json:"wechat"`
 		Alipay payment.AlipayV2Config    `json:"alipay"`
+		Creem  creemConfigRequest        `json:"creem"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -227,10 +263,59 @@ func (h *PaymentConfigHandler) ImportProviders(c *gin.Context) {
 		}
 	}
 
+	if req.Creem.hasConfig() {
+		cfg := req.Creem.toPaymentConfig()
+		adapter, err := payment.NewCreemAdapter(cfg)
+		if err == nil {
+			h.PaymentSvc.Registry().Register("creem", adapter, payment.ProviderStatus{
+				IsMock:      false,
+				SandboxMode: cfg.SandboxMode,
+			})
+			results["creem"] = "ok"
+		} else {
+			results["creem"] = "invalid: " + err.Error()
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Provider import completed",
 		"results": results,
 	})
+}
+
+type creemConfigRequest struct {
+	APIKey         string            `json:"api_key"`
+	WebhookSecret  string            `json:"webhook_secret"`
+	APIBaseURL     string            `json:"api_base_url"`
+	SuccessURL     string            `json:"success_url"`
+	CancelURL      string            `json:"cancel_url"`
+	Sandbox        *bool             `json:"sandbox"`
+	ProductIDs     map[string]string `json:"product_ids"`
+	ProductMapJSON string            `json:"product_map_json"`
+}
+
+func (r creemConfigRequest) toPaymentConfig() payment.CreemConfig {
+	return payment.CreemConfig{
+		APIKey:         r.APIKey,
+		WebhookSecret:  r.WebhookSecret,
+		APIBaseURL:     r.APIBaseURL,
+		SuccessURL:     r.SuccessURL,
+		CancelURL:      r.CancelURL,
+		SandboxMode:    r.sandboxMode(),
+		ProductIDs:     r.ProductIDs,
+		ProductMapJSON: r.ProductMapJSON,
+	}
+}
+
+func (r creemConfigRequest) sandboxMode() bool {
+	if r.Sandbox == nil {
+		return true
+	}
+	return *r.Sandbox
+}
+
+func (r creemConfigRequest) hasConfig() bool {
+	return r.APIKey != "" || r.WebhookSecret != "" || r.ProductMapJSON != "" || len(r.ProductIDs) > 0
 }
 
 // SafeJSON is a helper that marshals safely (used in tests).

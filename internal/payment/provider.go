@@ -35,6 +35,8 @@ type CheckoutRequest struct {
 	SuccessURL     string
 	CancelURL      string
 	UserID         string
+	CustomerEmail  string
+	CustomerName   string
 	SKUCode        string
 	IdempotencyKey string
 	Metadata       map[string]string

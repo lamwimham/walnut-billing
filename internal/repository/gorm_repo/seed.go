@@ -15,6 +15,7 @@ func SeedProducts(db *gorm.DB) {
 			Code:      "pro",
 			Name:      "walnut 专业版（买断）",
 			Price:     12800, // ¥128 in cents
+			Currency:  "CNY",
 			Validity:  "lifetime",
 			IsVisible: true,
 		},
@@ -22,6 +23,7 @@ func SeedProducts(db *gorm.DB) {
 			Code:      "std",
 			Name:      "walnut 标准版（买断）",
 			Price:     6800, // ¥68 in cents
+			Currency:  "CNY",
 			Validity:  "lifetime",
 			IsVisible: true,
 		},
@@ -29,6 +31,7 @@ func SeedProducts(db *gorm.DB) {
 			Code:      "sub_monthly",
 			Name:      "walnut AI 订阅（月付）",
 			Price:     1500, // ¥15/month in cents
+			Currency:  "CNY",
 			Validity:  "monthly",
 			IsVisible: true,
 		},
@@ -36,20 +39,23 @@ func SeedProducts(db *gorm.DB) {
 			Code:      "sub_yearly",
 			Name:      "walnut AI 订阅（年付）",
 			Price:     15000, // ¥150/year in cents
+			Currency:  "CNY",
 			Validity:  "yearly",
 			IsVisible: true,
 		},
 		{
 			Code:      "editorial_studio_monthly",
 			Name:      "Walnut 编辑部工作室（月度）",
-			Price:     1900, // ¥19/month in cents
+			Price:     1900, // $19/month in cents
+			Currency:  "USD",
 			Validity:  "monthly",
 			IsVisible: true,
 		},
 		{
 			Code:      "credits_600",
 			Name:      "Walnut Credits 600",
-			Price:     990, // ¥9.9 in cents
+			Price:     990, // $9.9 in cents
+			Currency:  "USD",
 			Validity:  "lifetime",
 			IsVisible: true,
 		},
@@ -65,7 +71,7 @@ func SeedProducts(db *gorm.DB) {
 			if err := repo.Create(ctx, &p); err != nil {
 				log.Printf("[seed] failed to create product %s: %v", p.Code, err)
 			} else {
-				log.Printf("[seed] created product: %s (%s) - ¥%.2f", p.Code, p.Validity, float64(p.Price)/100)
+				log.Printf("[seed] created product: %s (%s) - %s %.2f", p.Code, p.Validity, p.Currency, float64(p.Price)/100)
 			}
 		}
 	}
