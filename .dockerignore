@@ -1,0 +1,9 @@
+.git
+*.db
+*.db-*
+.env
+walnut-billing
+*.exe
+*.dll
+*.so
+*.dylib

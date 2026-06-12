@@ -1,0 +1,135 @@
+package config
+
+import (
+	"os"
+	"strings"
+
+	"walnut-billing/internal/payment"
+
+	"github.com/spf13/viper"
+)
+
+type Config struct {
+	Server   ServerConfig
+	Database DatabaseConfig
+	Payment  PaymentConfig
+	Admin    AdminConfig
+	RateLimit RateLimitConfig
+}
+
+type ServerConfig struct {
+	Port string
+	Env  string // dev, prod
+}
+
+type DatabaseConfig struct {
+	Driver string
+	DSN    string
+}
+
+type PaymentConfig struct {
+	WechatMchID      string
+	WechatSerialNo   string
+	WechatPrivateKey string // PEM encoded
+	WechatAPIv3Key   string
+	WechatAppID      string
+	WechatSandbox    bool
+	AlipayAppID      string
+	AlipayPrivateKey string // PEM encoded
+	AlipayPublicKey  string // Alipay public key (for callback verification)
+	AlipaySandbox    bool
+}
+
+// WechatConfig returns a payment.WechatPayV3Config from the current config.
+func (p PaymentConfig) WechatConfig() payment.WechatPayV3Config {
+	return payment.WechatPayV3Config{
+		AppID:       p.WechatAppID,
+		MchID:       p.WechatMchID,
+		SerialNo:    p.WechatSerialNo,
+		PrivateKey:  p.WechatPrivateKey,
+		APIv3Key:    p.WechatAPIv3Key,
+		NotifyURL:   "", // Set by caller
+		SandboxMode: p.WechatSandbox,
+	}
+}
+
+// AlipayConfig returns a payment.AlipayV2Config from the current config.
+func (p PaymentConfig) AlipayConfig() payment.AlipayV2Config {
+	return payment.AlipayV2Config{
+		AppID:       p.AlipayAppID,
+		PrivateKey:  p.AlipayPrivateKey,
+		PublicKey:   p.AlipayPublicKey,
+		NotifyURL:   "", // Set by caller
+		SandboxMode: p.AlipaySandbox,
+	}
+}
+
+type AdminConfig struct {
+	APIKeys []string // List of allowed admin API keys
+}
+
+type RateLimitConfig struct {
+	Enabled    bool
+	MaxTokens  float64 // Burst size
+	RefillRate float64 // Tokens per second
+}
+
+func Load() (*Config, error) {
+	v := viper.New()
+
+	// 默认配置
+	v.SetDefault("server.port", "8082")
+	v.SetDefault("server.env", "dev")
+	v.SetDefault("database.driver", "sqlite")
+	v.SetDefault("database.dsn", "./walnut_billing.db")
+	v.SetDefault("admin.api_keys", []string{})
+	v.SetDefault("ratelimit.enabled", false)
+	v.SetDefault("ratelimit.max_tokens", 100.0)
+	v.SetDefault("ratelimit.refill_rate", 10.0)
+	v.SetDefault("payment.wechat_mch_id", "")
+	v.SetDefault("payment.wechat_serial_no", "")
+	v.SetDefault("payment.wechat_private_key", "")
+	v.SetDefault("payment.wechat_api_v3_key", "")
+	v.SetDefault("payment.wechat_app_id", "")
+	v.SetDefault("payment.wechat_sandbox", false)
+	v.SetDefault("payment.alipay_app_id", "")
+	v.SetDefault("payment.alipay_private_key", "")
+	v.SetDefault("payment.alipay_public_key", "")
+	v.SetDefault("payment.alipay_sandbox", false)
+
+	// 读取环境变量或配置文件
+	v.AutomaticEnv()
+	if err := v.ReadInConfig(); err != nil {
+		// 如果没有配置文件则忽略，使用默认值和环境变量
+	}
+
+	cfg := &Config{}
+	if err := v.Unmarshal(cfg); err != nil {
+		return nil, err
+	}
+
+	// Post-process: parse comma-separated env vars that Viper can't handle
+	if val := os.Getenv("ADMIN_API_KEYS"); val != "" {
+		parts := strings.Split(val, ",")
+		var keys []string
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				keys = append(keys, p)
+			}
+		}
+		cfg.Admin.APIKeys = keys
+	}
+
+	// Boolean env var overrides (Viper can't parse bools from env reliably)
+	if val := os.Getenv("RATELIMIT_ENABLED"); val == "true" {
+		cfg.RateLimit.Enabled = true
+	} else if val == "false" {
+		cfg.RateLimit.Enabled = false
+	}
+	if val := os.Getenv("SERVER_ENV"); val != "" {
+		cfg.Server.Env = val
+	}
+
+	return cfg, nil
+}

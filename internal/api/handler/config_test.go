@@ -1,0 +1,149 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"walnut-billing/internal/domain"
+	"walnut-billing/internal/payment"
+	"walnut-billing/internal/repository"
+	"walnut-billing/internal/service"
+
+	"github.com/gin-gonic/gin"
+)
+
+// mockAuditService is a no-op audit service for handler tests
+type mockAuditService struct{}
+
+func (m *mockAuditService) Record(ctx context.Context, entry *domain.AuditEntry) {}
+func (m *mockAuditService) Query(ctx context.Context, query repository.AuditQuery) ([]domain.AuditEntry, int64, error) {
+	return nil, 0, nil
+}
+
+var _ service.AuditService = (*mockAuditService)(nil)
+
+// mockProvider for handler tests
+type mockProvider struct {
+	name string
+}
+
+func (m *mockProvider) Name() string                             { return m.name }
+func (m *mockProvider) CreatePaymentURL(ctx context.Context, outTradeNo string, amount int64, description string) (string, error) {
+	return "http://mock.pay/" + outTradeNo, nil
+}
+func (m *mockProvider) VerifyCallback(ctx context.Context, params map[string]string) (outTradeNo, providerTradeNo string, paidAmount int64, err error) {
+	return params["out_trade_no"], "txn-123", 0, nil
+}
+func (m *mockProvider) BuildSuccessResponse() (contentType, body string) {
+	return "application/json", `{"status":"ok"}`
+}
+func (m *mockProvider) BuildFailureResponse() (contentType, body string) {
+	return "application/json", `{"status":"fail"}`
+}
+
+// setupConfigTestRouter creates a gin router with the config handler routes for testing
+func setupConfigTestRouter(svc *payment.PaymentService) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h := NewPaymentConfigHandler(svc, &mockAuditService{})
+	r.GET("/admin/payment/providers", h.GetProviderStatus)
+	r.PUT("/admin/payment/wechat", h.UpdateWechatConfig)
+	r.PUT("/admin/payment/alipay", h.UpdateAlipayConfig)
+	r.POST("/admin/payment/:provider/mock", h.SwitchToMock)
+	r.POST("/admin/payment/import", h.ImportProviders)
+	return r
+}
+
+func TestConfigHandler_GetProviderStatus(t *testing.T) {
+	registry := payment.NewProviderRegistry()
+	registry.Register("wechat", &mockProvider{name: "wechat"}, payment.ProviderStatus{SandboxMode: false})
+	svc := payment.NewPaymentService(nil, nil, registry)
+	router := setupConfigTestRouter(svc)
+
+	req, _ := http.NewRequest("GET", "/admin/payment/providers", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+}
+
+func TestConfigHandler_SwitchToMock(t *testing.T) {
+	registry := payment.NewProviderRegistry()
+	svc := payment.NewPaymentService(nil, nil, registry)
+	router := setupConfigTestRouter(svc)
+
+	// Switch wechat to mock
+	req, _ := http.NewRequest("POST", "/admin/payment/wechat/mock", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+
+	statuses := svc.GetProviderStatus()
+	if s, ok := statuses["wechat"]; !ok {
+		t.Error("expected wechat provider to be registered")
+	} else {
+		if !s.IsMock {
+			t.Error("expected wechat to be a mock provider")
+		}
+	}
+}
+
+// TestUpdateWithInvalidKey ensures validation rejects bad keys
+func TestConfigHandler_UpdateWechatConfig_InvalidKey(t *testing.T) {
+	registry := payment.NewProviderRegistry()
+	svc := payment.NewPaymentService(nil, nil, registry)
+	router := setupConfigTestRouter(svc)
+
+	body := map[string]interface{}{
+		"mch_id":      "123456",
+		"app_id":      "wx123",
+		"serial_no":   "SN123",
+		"api_v3_key":  "key123",
+		"private_key": "not-a-valid-key",
+		"sandbox":     true,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req, _ := http.NewRequest("PUT", "/admin/payment/wechat", bytes.NewBuffer(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for invalid key, got %d", w.Code)
+	}
+}
+
+func TestConfigHandler_ImportProviders(t *testing.T) {
+	registry := payment.NewProviderRegistry()
+	svc := payment.NewPaymentService(nil, nil, registry)
+	router := setupConfigTestRouter(svc)
+
+	// Import a mock provider via the proper structure
+	// Since we don't have valid keys, we expect partial success/failure
+	importPayload := map[string]interface{}{
+		"wechat": map[string]interface{}{
+			"mch_id": "123",
+			// missing required fields -> will fail validation
+		},
+	}
+	jsonBody, _ := json.Marshal(importPayload)
+
+	req, _ := http.NewRequest("POST", "/admin/payment/import", bytes.NewBuffer(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+}

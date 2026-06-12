@@ -1,0 +1,28 @@
+# Build artifacts
+walnut-billing
+billing-server
+*.exe
+*.out
+*.test
+
+# Local databases and SQLite sidecar files
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+walnut.db-*
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and runtime output
+*.log
+logs/
+tmp/
+
+# OS / editor files
+.DS_Store
+.idea/
+.vscode/

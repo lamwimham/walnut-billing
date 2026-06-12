@@ -1,0 +1,211 @@
+package domain
+
+import "time"
+
+// Product defines the billing product.
+type Product struct {
+	Code      string `gorm:"primaryKey;size:32"`
+	Name      string `gorm:"size:64"`
+	Price     int64  // Amount in cents
+	Validity  string `gorm:"size:16"` // lifetime, monthly, yearly
+	IsVisible bool   `gorm:"default:true"`
+}
+
+// License represents a generated license key.
+type License struct {
+	ID          uint   `gorm:"primaryKey"`
+	Key         string `gorm:"uniqueIndex;size:50"` // e.g. SM-PRO-7738-9921
+	PlanCode    string `gorm:"size:32;index"`       // Associated Product code
+	Status      string `gorm:"size:16;default:'inactive';index"`
+	Validity    string `gorm:"size:16;default:'lifetime'"`
+	DeviceID    string `gorm:"size:64;index"` // Bound machine ID
+	ActivatedAt *time.Time
+	ExpiresAt   *time.Time
+	MaxSeats    int `gorm:"default:1"`
+}
+
+// Order records a payment transaction.
+type Order struct {
+	ID         uint   `gorm:"primaryKey"`
+	OutTradeNo string `gorm:"uniqueIndex;size:64"`
+	LicenseKey string `gorm:"size:50;index"`
+	Amount     int64  // Amount in cents
+	Currency   string `gorm:"size:8;default:'CNY'"`
+	Status     string `gorm:"size:16;default:'pending';index"`
+	Provider   string `gorm:"size:16"` // wechat, alipay
+	TradeNo    string `gorm:"size:64"` // Third-party trade number
+	PaidAt     *time.Time
+	Metadata   string `gorm:"type:text"`
+	OrderType  string `gorm:"size:16;default:'new'"` // new, renewal
+}
+
+// TableName overrides the table name for Order.
+func (Order) TableName() string {
+	return "orders"
+}
+
+const (
+	OrderTypeNew     = "new"
+	OrderTypeRenewal = "renewal"
+	GracePeriodDays  = 3 // Grace period after expiry
+)
+
+const (
+	UserStatusActive   = "active"
+	UserStatusDisabled = "disabled"
+
+	RegistrationStatusPending  = "pending"
+	RegistrationStatusApproved = "approved"
+	RegistrationStatusRejected = "rejected"
+
+	GrantStatusActive  = "active"
+	GrantStatusRevoked = "revoked"
+	GrantStatusExpired = "expired"
+
+	GrantSourceManual = "manual"
+
+	EntitlementEditorialStudio = "editorial.studio"
+)
+
+// User is the stable identity used by entitlement snapshots.
+// Authentication can be introduced later without changing grant ownership.
+type User struct {
+	ID          string    `json:"id" gorm:"primaryKey;size:40"`
+	Email       string    `json:"email" gorm:"uniqueIndex;size:255"`
+	DisplayName string    `json:"display_name" gorm:"size:128"`
+	Status      string    `json:"status" gorm:"size:16;default:'active';index"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// RegistrationRequest records a user's request to unlock a capability.
+// It is intentionally separate from grants so approval workflow and access
+// control can evolve independently.
+type RegistrationRequest struct {
+	ID                   string     `json:"id" gorm:"primaryKey;size:40"`
+	UserID               string     `json:"user_id" gorm:"size:40;index"`
+	Email                string     `json:"email" gorm:"size:255;index"`
+	DisplayName          string     `json:"display_name" gorm:"size:128"`
+	RequestedEntitlement string     `json:"requested_entitlement" gorm:"size:64;index"`
+	Status               string     `json:"status" gorm:"size:16;default:'pending';index"`
+	Source               string     `json:"source" gorm:"size:32;index"`
+	DeviceID             string     `json:"device_id" gorm:"size:128;index"`
+	Note                 string     `json:"note" gorm:"type:text"`
+	ReviewNote           string     `json:"review_note" gorm:"type:text"`
+	ReviewedBy           string     `json:"reviewed_by" gorm:"size:64"`
+	ReviewedAt           *time.Time `json:"reviewed_at"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
+// EntitlementGrant is the source of truth for feature access.
+// Product names, VIP copy, subscriptions, and credits should project into this
+// stable entitlement ID model instead of being checked directly by clients.
+type EntitlementGrant struct {
+	ID            string     `json:"id" gorm:"primaryKey;size:40"`
+	UserID        string     `json:"user_id" gorm:"size:40;index"`
+	EntitlementID string     `json:"entitlement_id" gorm:"size:64;index"`
+	Status        string     `json:"status" gorm:"size:16;default:'active';index"`
+	Source        string     `json:"source" gorm:"size:32;index"`
+	StartsAt      time.Time  `json:"starts_at" gorm:"index"`
+	ExpiresAt     *time.Time `json:"expires_at" gorm:"index"`
+	CreatedBy     string     `json:"created_by" gorm:"size:64"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	RevokedAt     *time.Time `json:"revoked_at"`
+}
+
+// EntitlementSnapshotUser is the account projection consumed by app clients.
+type EntitlementSnapshotUser struct {
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	Status      string `json:"status"`
+}
+
+// EntitlementSnapshot matches the PC Core access-control projection contract.
+type EntitlementSnapshot struct {
+	User         EntitlementSnapshotUser `json:"user"`
+	Entitlements map[string]bool         `json:"entitlements"`
+	Features     map[string]any          `json:"features"`
+	Credits      map[string]int64        `json:"credits"`
+	UpdatedAt    string                  `json:"updated_at"`
+	Source       string                  `json:"source"`
+}
+
+const (
+	CreditReservationStatusPending   = "pending"
+	CreditReservationStatusCommitted = "committed"
+	CreditReservationStatusReleased  = "released"
+
+	CreditTransactionTypeGrant   = "grant"
+	CreditTransactionTypeReserve = "reserve"
+	CreditTransactionTypeCommit  = "commit"
+	CreditTransactionTypeRelease = "release"
+
+	CreditMetricBalance  = "credits.balance"
+	CreditMetricReserved = "credits.reserved"
+)
+
+// CreditAccount stores the user's available and reserved Walnut Credits.
+type CreditAccount struct {
+	ID        string    `json:"id" gorm:"primaryKey;size:40"`
+	UserID    string    `json:"user_id" gorm:"uniqueIndex;size:40"`
+	Balance   int64     `json:"balance" gorm:"default:0"`
+	Reserved  int64     `json:"reserved" gorm:"default:0"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CreditReservation represents an idempotent pre-deduction for one operation.
+type CreditReservation struct {
+	ID             string     `json:"id" gorm:"primaryKey;size:40"`
+	AccountID      string     `json:"account_id" gorm:"size:40;index"`
+	UserID         string     `json:"user_id" gorm:"size:40;index"`
+	Operation      string     `json:"operation" gorm:"size:64;index"`
+	Amount         int64      `json:"amount"`
+	Status         string     `json:"status" gorm:"size:16;index"`
+	IdempotencyKey string     `json:"idempotency_key" gorm:"uniqueIndex;size:128"`
+	FeatureID      string     `json:"feature_id" gorm:"size:64;index"`
+	ExecutionID    string     `json:"execution_id" gorm:"size:128;index"`
+	Metadata       string     `json:"metadata" gorm:"type:text"`
+	ExpiresAt      *time.Time `json:"expires_at" gorm:"index"`
+	CommittedAt    *time.Time `json:"committed_at"`
+	ReleasedAt     *time.Time `json:"released_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+// CreditTransaction is the immutable ledger for all credit mutations.
+type CreditTransaction struct {
+	ID             string    `json:"id" gorm:"primaryKey;size:40"`
+	AccountID      string    `json:"account_id" gorm:"size:40;index"`
+	UserID         string    `json:"user_id" gorm:"size:40;index"`
+	ReservationID  string    `json:"reservation_id" gorm:"size:40;index"`
+	Type           string    `json:"type" gorm:"size:16;index"`
+	Amount         int64     `json:"amount"`
+	BalanceAfter   int64     `json:"balance_after"`
+	ReservedAfter  int64     `json:"reserved_after"`
+	IdempotencyKey string    `json:"idempotency_key" gorm:"uniqueIndex;size:128"`
+	Source         string    `json:"source" gorm:"size:32;index"`
+	Description    string    `json:"description" gorm:"type:text"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// UsageRecord is a read model that projects wallet internals into product usage.
+// It keeps support/debug views independent from reservation and ledger details.
+type UsageRecord struct {
+	ReservationID string              `json:"reservation_id"`
+	UserID        string              `json:"user_id"`
+	FeatureID     string              `json:"feature_id"`
+	Operation     string              `json:"operation"`
+	ExecutionID   string              `json:"execution_id"`
+	Amount        int64               `json:"amount"`
+	Status        string              `json:"status"`
+	Metadata      map[string]any      `json:"metadata"`
+	Transactions  []CreditTransaction `json:"transactions,omitempty"`
+	CreatedAt     time.Time           `json:"created_at"`
+	UpdatedAt     time.Time           `json:"updated_at"`
+	CommittedAt   *time.Time          `json:"committed_at,omitempty"`
+	ReleasedAt    *time.Time          `json:"released_at,omitempty"`
+}
