@@ -128,46 +128,54 @@ func (s *creditServiceImpl) Grant(ctx context.Context, input CreditGrantInput) (
 
 	var result *CreditMutationResult
 	err := s.withCreditTransaction(ctx, func(repos creditRepos) error {
-		existing, err := repos.transactions.GetByIdempotencyKey(ctx, key)
-		if err == nil {
-			account, err := repos.accounts.GetByID(ctx, existing.AccountID)
-			if err != nil {
-				return err
-			}
-			result = &CreditMutationResult{Account: account, Transaction: existing}
-			return nil
-		}
-		if !errors.Is(err, repository.ErrNotFound) {
-			return err
-		}
-
-		account, err := s.ensureAccount(ctx, repos.accounts, userID)
+		mutation, err := grantCreditsWithRepos(ctx, repos, input)
 		if err != nil {
 			return err
 		}
-		now := time.Now().UTC()
-		account.Balance += input.Amount
-		account.UpdatedAt = now
-		if err := repos.accounts.Update(ctx, account); err != nil {
-			return err
-		}
-
-		transaction, err := s.newTransaction(ctx, repos.transactions, creditTransactionInput{
-			Account:         account,
-			TransactionType: domain.CreditTransactionTypeGrant,
-			Amount:          input.Amount,
-			IdempotencyKey:  key,
-			Source:          defaultString(strings.TrimSpace(input.Source), "admin"),
-			Description:     strings.TrimSpace(input.Description),
-			CreatedAt:       now,
-		})
-		if err != nil {
-			return err
-		}
-		result = &CreditMutationResult{Account: account, Transaction: transaction}
+		result = mutation
 		return nil
 	})
 	return result, err
+}
+
+func grantCreditsWithRepos(ctx context.Context, repos creditRepos, input CreditGrantInput) (*CreditMutationResult, error) {
+	key := strings.TrimSpace(input.IdempotencyKey)
+	existing, err := repos.transactions.GetByIdempotencyKey(ctx, key)
+	if err == nil {
+		account, err := repos.accounts.GetByID(ctx, existing.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		return &CreditMutationResult{Account: account, Transaction: existing}, nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+
+	account, err := ensureCreditAccount(ctx, repos.accounts, strings.TrimSpace(input.UserID))
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	account.Balance += input.Amount
+	account.UpdatedAt = now
+	if err := repos.accounts.Update(ctx, account); err != nil {
+		return nil, err
+	}
+
+	transaction, err := newCreditTransaction(ctx, repos.transactions, creditTransactionInput{
+		Account:         account,
+		TransactionType: domain.CreditTransactionTypeGrant,
+		Amount:          input.Amount,
+		IdempotencyKey:  key,
+		Source:          defaultString(strings.TrimSpace(input.Source), "admin"),
+		Description:     strings.TrimSpace(input.Description),
+		CreatedAt:       now,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &CreditMutationResult{Account: account, Transaction: transaction}, nil
 }
 
 func (s *creditServiceImpl) Reserve(ctx context.Context, input CreditReservationInput) (*CreditMutationResult, error) {
@@ -558,6 +566,10 @@ func (s *creditServiceImpl) ensureUser(ctx context.Context, userID string) error
 }
 
 func (s *creditServiceImpl) ensureAccount(ctx context.Context, accounts repository.CreditAccountRepository, userID string) (*domain.CreditAccount, error) {
+	return ensureCreditAccount(ctx, accounts, userID)
+}
+
+func ensureCreditAccount(ctx context.Context, accounts repository.CreditAccountRepository, userID string) (*domain.CreditAccount, error) {
 	account, err := accounts.GetByUserID(ctx, userID)
 	if err == nil {
 		return account, nil
@@ -597,6 +609,10 @@ type creditTransactionInput struct {
 }
 
 func (s *creditServiceImpl) newTransaction(ctx context.Context, transactions repository.CreditTransactionRepository, input creditTransactionInput) (*domain.CreditTransaction, error) {
+	return newCreditTransaction(ctx, transactions, input)
+}
+
+func newCreditTransaction(ctx context.Context, transactions repository.CreditTransactionRepository, input creditTransactionInput) (*domain.CreditTransaction, error) {
 	transactionID, err := generateEntityID("ctx_")
 	if err != nil {
 		return nil, err

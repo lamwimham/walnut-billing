@@ -39,6 +39,20 @@ func SeedProducts(db *gorm.DB) {
 			Validity:  "yearly",
 			IsVisible: true,
 		},
+		{
+			Code:      "editorial_studio_monthly",
+			Name:      "Walnut 编辑部工作室（月度）",
+			Price:     1900, // ¥19/month in cents
+			Validity:  "monthly",
+			IsVisible: true,
+		},
+		{
+			Code:      "credits_600",
+			Name:      "Walnut Credits 600",
+			Price:     990, // ¥9.9 in cents
+			Validity:  "lifetime",
+			IsVisible: true,
+		},
 	}
 
 	ctx := context.Background()

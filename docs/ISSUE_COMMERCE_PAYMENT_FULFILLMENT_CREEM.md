@@ -409,6 +409,46 @@ M6-C 后续仍需补齐：
 - 失败重试后台 worker / 指数退避 / 告警指标。
 - 与 M6-D `FulfillmentService` 合并成 paid -> fulfilled 的完整事务闭环。
 
+
+### M6-D 第一切片已完成：FulfillmentService 与 paid -> fulfilled 闭环
+
+本轮继续保持 provider-agnostic，不接入真实支付渠道。目标是把支付成功后的 Walnut 内部履约路径收敛为稳定、可重试、可审计的生产级闭环。
+
+已完成：
+
+- 新增 `FulfillmentExecution` 模型，记录每个订单/规则的履约执行结果，通过 `idempotency_key` 防止重复发放。
+- 新增 `FulfillmentExecutionRepository` / GORM 实现，支持 admin 查询、按订单/user/SKU/status 过滤。
+- 新增 `FulfillmentService` facade，读取 Walnut paid checkout order，根据 `FulfillmentRule` 执行 entitlement 和 credits 履约。
+- 新增 `FulfillmentRuleExecutor` 策略接口，当前内置：
+  - `grant_entitlement`：发放稳定 entitlement，例如 `editorial.studio`。
+  - `grant_credits`：发放 Walnut Credits ledger grant。
+- 新增 `FULFILLMENT_RULES_JSON` 配置入口；dev defaults 包含 `editorial_studio_monthly` 与 `credits_600`，后续可迁移到 DB catalog。
+- 扩展 UnitOfWork，把 order、user、entitlement grant、credit account/transaction、fulfillment execution 放入同一事务边界。
+- 新增 `PaymentFulfillmentEventProcessor`，以 decorator/composition 方式在 `payment.paid` 更新订单后触发履约；webhook handler 仍只做 transport mapping。
+- 新增 admin audit endpoint：`GET /api/v1/admin/fulfillments`。
+- entitlement 月度履约以现有 active grant 的最大 `expires_at` 为续期锚点，避免重复购买时有效期重叠浪费。
+
+生产级控制点：
+
+- 支付 provider 状态不直接门禁；门禁仍只读 `EntitlementGrant` / `CreditTransaction` 生成的 snapshot。
+- 同一 payment event 重放先由 inbox 去重；同一 fulfillment retry 再由 execution/target idempotency 双层去重。
+- 事务失败时回滚 grant/credits/order fulfilled，避免半发放；失败 execution 会在外层持久化用于诊断和 reprocess。
+- 旧 license order 仍走 legacy `/orders` 路径；新 commerce checkout 只处理 `OrderTypeCheckout`。
+
+验证：
+
+```bash
+go test ./...
+git diff --check
+# 非 docs 区域无 creem/Creem 引用
+```
+
+M6-D 后续仍需补齐：
+
+- 将 `FULFILLMENT_RULES_JSON` 迁移为 versioned DB catalog / admin API。
+- refund/cancel policy：是否 revoke entitlement、扣回未使用 credits、是否允许负余额。
+- 后台 retry worker / 指数退避 / 告警指标；当前已支持 admin reprocess。
+
 ## 测试策略
 
 - Unit tests：catalog rule 解析、provider adapter、event mapper、fulfillment rule executor。

@@ -78,6 +78,16 @@ The commerce checkout facade is the provider-agnostic entry point for future SKU
 
 Development builds register a `mock` checkout provider. Production payment providers can implement the optional hosted checkout adapter without changing app clients.
 
+### Commerce Fulfillment
+
+Paid commerce orders are fulfilled through Walnut-owned rules, not through provider state. `FulfillmentService` reads the paid order SKU, executes configured rules, writes `FulfillmentExecution` rows for idempotency/audit, and grants only stable Walnut targets such as `EntitlementGrant` and `CreditTransaction`.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/v1/admin/fulfillments?out_trade_no=&user_id=&sku_code=&status=` | List fulfillment executions for audit/reprocess diagnostics |
+
+Fulfillment rules can be supplied through `FULFILLMENT_RULES_JSON`; the dev defaults include `editorial_studio_monthly` and `credits_600`. The production path uses UnitOfWork so order status, entitlement grants, credit ledger rows, and fulfillment executions converge safely under retries.
+
 ### Payment Webhook Inbox
 
 New commerce providers should send payment events to the provider-agnostic webhook inbox. The inbox verifies provider payloads through the payment adapter, deduplicates by `provider + provider_event_id`, records processing attempts, and supports admin reprocessing.
@@ -117,6 +127,7 @@ These endpoints provide the first entitlement projection for Walnut clients. Gra
 | POST | `/api/v1/admin/registrations/:id/review` | Approve or reject a registration request |
 | GET | `/api/v1/admin/grants?user_id=` | List entitlement grants |
 | POST | `/api/v1/admin/grants` | Manually grant an entitlement such as `editorial.studio` |
+| GET | `/api/v1/admin/fulfillments?out_trade_no=&user_id=&sku_code=&status=` | List commerce fulfillment executions |
 
 ### Infrastructure
 
@@ -139,6 +150,7 @@ All settings via environment variables (see `.env.example`):
 | `RATELIMIT_ENABLED` | false | Enable IP rate limiting on auth endpoints |
 | `PAYMENT_WECHAT_*` | (empty) | WeChat Pay V3 credentials |
 | `PAYMENT_ALIPAY_*` | (empty) | Alipay credentials |
+| `FULFILLMENT_RULES_JSON` | (empty) | Optional JSON fulfillment rules; empty uses dev defaults |
 
 **Note**: If payment credentials are not configured, the service uses mock adapters (suitable for development).
 
@@ -159,6 +171,8 @@ All settings via environment variables (see `.env.example`):
 | std | walnut Standard (Buyout) | ¥68 | Lifetime |
 | sub_monthly | AI Subscription (Monthly) | ¥15/month | Monthly |
 | sub_yearly | AI Subscription (Yearly) | ¥150/year | Yearly |
+| editorial_studio_monthly | Editorial Studio Monthly | ¥19/month | Monthly |
+| credits_600 | Walnut Credits 600 | ¥9.9 | Lifetime |
 
 ## Design Patterns
 
@@ -168,12 +182,14 @@ All settings via environment variables (see `.env.example`):
 | Adapter | Payment gateways (WeChat V3 / Alipay unified interface) and hosted checkout adapters |
 | Facade | Commerce checkout entry point hides provider details from PC/mobile clients |
 | Repository | Data access abstraction (interface → GORM implementation) |
-| UnitOfWork | Database transactions (atomic Order + License creation) |
+| UnitOfWork | Database transactions for license creation and commerce fulfillment |
 | Middleware Chain | Recovery → RequestID → Logger → Prometheus → Auth |
 | EntitlementService | Registration, manual grant, and snapshot projection facade |
 | CheckoutService | Provider-agnostic order + checkout-session orchestration |
 | PaymentEventService | Webhook inbox, provider event idempotency, retries, and reprocessing |
-| Catalog | Validates stable entitlement IDs independently from products and VIP copy |
+| FulfillmentService | Rule-engine facade for paid order delivery into grants and credit ledger rows |
+| Strategy | Fulfillment rule executors for entitlement and credits targets |
+| Catalog | Validates stable entitlement IDs and configurable fulfillment rules independently from provider copy |
 
 ## License
 

@@ -10,11 +10,12 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Payment  PaymentConfig
-	Admin    AdminConfig
-	RateLimit RateLimitConfig
+	Server      ServerConfig
+	Database    DatabaseConfig
+	Payment     PaymentConfig
+	Fulfillment FulfillmentConfig
+	Admin       AdminConfig
+	RateLimit   RateLimitConfig
 }
 
 type ServerConfig struct {
@@ -64,6 +65,10 @@ func (p PaymentConfig) AlipayConfig() payment.AlipayV2Config {
 	}
 }
 
+type FulfillmentConfig struct {
+	RulesJSON string
+}
+
 type AdminConfig struct {
 	APIKeys []string // List of allowed admin API keys
 }
@@ -76,6 +81,7 @@ type RateLimitConfig struct {
 
 func Load() (*Config, error) {
 	v := viper.New()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	// 默认配置
 	v.SetDefault("server.port", "8082")
@@ -96,6 +102,7 @@ func Load() (*Config, error) {
 	v.SetDefault("payment.alipay_private_key", "")
 	v.SetDefault("payment.alipay_public_key", "")
 	v.SetDefault("payment.alipay_sandbox", false)
+	v.SetDefault("fulfillment.rules_json", "")
 
 	// 读取环境变量或配置文件
 	v.AutomaticEnv()
@@ -129,6 +136,9 @@ func Load() (*Config, error) {
 	}
 	if val := os.Getenv("SERVER_ENV"); val != "" {
 		cfg.Server.Env = val
+	}
+	if val := os.Getenv("FULFILLMENT_RULES_JSON"); val != "" {
+		cfg.Fulfillment.RulesJSON = val
 	}
 
 	return cfg, nil

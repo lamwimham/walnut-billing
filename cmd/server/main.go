@@ -68,6 +68,7 @@ func main() {
 		&domain.CreditReservation{},
 		&domain.CreditTransaction{},
 		&domain.PaymentEventInbox{},
+		&domain.FulfillmentExecution{},
 	); err != nil {
 		l.Error("Failed to migrate database", "error", err)
 		os.Exit(1)
@@ -88,6 +89,7 @@ func main() {
 	creditReservationRepo := &gorm_repo.CreditReservationRepo{DB: db}
 	creditTransactionRepo := &gorm_repo.CreditTransactionRepo{DB: db}
 	paymentEventRepo := &gorm_repo.PaymentEventRepo{DB: db}
+	fulfillmentExecutionRepo := &gorm_repo.FulfillmentExecutionRepo{DB: db}
 
 	// 5. Init Key Generator Factory
 	keyFactory := generator.DefaultFactory()
@@ -101,6 +103,11 @@ func main() {
 	orderSvc := service.NewOrderService(orderRepo, productRepo, licRepo, keyFactory, uowFactory)
 	creditSvc := service.NewCreditService(userRepo, creditAccountRepo, creditReservationRepo, creditTransactionRepo, uowFactory)
 	entitlementSvc := service.NewEntitlementServiceWithCredits(userRepo, registrationRepo, grantRepo, creditAccountRepo, service.DefaultEntitlementCatalog())
+	fulfillmentCatalog, err := service.NewFulfillmentCatalogFromJSON(cfg.Fulfillment.RulesJSON, service.DefaultFulfillmentRules())
+	if err != nil {
+		l.Error("Failed to load fulfillment catalog", "error", err)
+		os.Exit(1)
+	}
 
 	// 7. Init Payment Gateway (Registry + Adapter Pattern)
 	notifyURL := "http://localhost:" + cfg.Server.Port + "/api/v1/callbacks"
@@ -170,7 +177,21 @@ func main() {
 
 	paymentSvc := payment.NewPaymentService(orderRepo, licRepo, registry)
 	checkoutSvc := service.NewCheckoutService(orderRepo, productRepo, userRepo, paymentSvc)
-	paymentEventProcessor := service.NewPaymentOrderEventProcessor(orderRepo)
+	fulfillmentSvc := service.NewFulfillmentService(service.FulfillmentDependencies{
+		Repositories: service.FulfillmentRepositories{
+			Orders:                orderRepo,
+			Users:                 userRepo,
+			EntitlementGrants:     grantRepo,
+			CreditAccounts:        creditAccountRepo,
+			CreditTransactions:    creditTransactionRepo,
+			FulfillmentExecutions: fulfillmentExecutionRepo,
+		},
+		Catalog:            fulfillmentCatalog,
+		EntitlementCatalog: service.DefaultEntitlementCatalog(),
+		UnitOfWorkFactory:  uowFactory,
+	})
+	paymentOrderProcessor := service.NewPaymentOrderEventProcessor(orderRepo)
+	paymentEventProcessor := service.NewPaymentFulfillmentEventProcessor(orderRepo, paymentOrderProcessor, fulfillmentSvc)
 	paymentEventSvc := service.NewPaymentEventService(paymentEventRepo, paymentSvc, paymentEventProcessor)
 
 	// 8. Init Handlers
@@ -186,6 +207,7 @@ func main() {
 	creditHandler := handler.NewCreditHandler(creditSvc, auditSvc)
 	checkoutHandler := handler.NewCheckoutHandler(checkoutSvc)
 	paymentEventHandler := handler.NewPaymentEventHandler(paymentEventSvc)
+	fulfillmentHandler := handler.NewFulfillmentHandler(fulfillmentSvc)
 
 	// 9. Setup Router
 	if cfg.Server.Env == "prod" {
@@ -281,6 +303,7 @@ func main() {
 		admin.GET("/payment-events", paymentEventHandler.ListEvents)
 		admin.GET("/payment-events/:id", paymentEventHandler.GetEvent)
 		admin.POST("/payment-events/:id/reprocess", paymentEventHandler.ReprocessEvent)
+		admin.GET("/fulfillments", fulfillmentHandler.ListExecutions)
 
 		// Entitlement registration, manual grants, and credits ledger
 		admin.GET("/registrations", entitlementHandler.ListRegistrations)

@@ -84,6 +84,17 @@ const (
 	PaymentEventTypeRefunded  = "payment.refunded"
 )
 
+const (
+	FulfillmentExecutionStatusApplied = "applied"
+	FulfillmentExecutionStatusFailed  = "failed"
+	FulfillmentExecutionStatusSkipped = "skipped"
+)
+
+const (
+	FulfillmentTargetEntitlement = "entitlement"
+	FulfillmentTargetCredits     = "credits"
+)
+
 // PaymentEventInbox stores verified provider webhook events before processing.
 // The composite provider + provider_event_id key makes webhook replay safe and
 // keeps provider-specific payloads away from entitlement and credits decisions.
@@ -108,6 +119,26 @@ type PaymentEventInbox struct {
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
+// FulfillmentExecution records each Walnut-owned delivery side effect for a paid
+// commerce order. Idempotency is keyed by order and fulfillment rule so webhook
+// replay or manual reprocessing cannot grant the same target twice.
+type FulfillmentExecution struct {
+	ID             string    `json:"id" gorm:"primaryKey;size:40"`
+	OrderID        uint      `json:"order_id" gorm:"index"`
+	OutTradeNo     string    `json:"out_trade_no" gorm:"size:64;index"`
+	UserID         string    `json:"user_id" gorm:"size:40;index"`
+	SKUCode        string    `json:"sku_code" gorm:"size:64;index"`
+	RuleID         string    `json:"rule_id" gorm:"size:128;index"`
+	TargetType     string    `json:"target_type" gorm:"size:32;index"`
+	TargetID       string    `json:"target_id" gorm:"size:128;index"`
+	IdempotencyKey string    `json:"idempotency_key" gorm:"uniqueIndex;size:160"`
+	Status         string    `json:"status" gorm:"size:16;index"`
+	ResultRef      string    `json:"result_ref" gorm:"size:128"`
+	LastError      string    `json:"last_error" gorm:"type:text"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 const (
 	UserStatusActive   = "active"
 	UserStatusDisabled = "disabled"
@@ -120,7 +151,8 @@ const (
 	GrantStatusRevoked = "revoked"
 	GrantStatusExpired = "expired"
 
-	GrantSourceManual = "manual"
+	GrantSourceManual      = "manual"
+	GrantSourceFulfillment = "fulfillment"
 
 	EntitlementEditorialStudio = "editorial.studio"
 )
@@ -160,17 +192,18 @@ type RegistrationRequest struct {
 // Product names, VIP copy, subscriptions, and credits should project into this
 // stable entitlement ID model instead of being checked directly by clients.
 type EntitlementGrant struct {
-	ID            string     `json:"id" gorm:"primaryKey;size:40"`
-	UserID        string     `json:"user_id" gorm:"size:40;index"`
-	EntitlementID string     `json:"entitlement_id" gorm:"size:64;index"`
-	Status        string     `json:"status" gorm:"size:16;default:'active';index"`
-	Source        string     `json:"source" gorm:"size:32;index"`
-	StartsAt      time.Time  `json:"starts_at" gorm:"index"`
-	ExpiresAt     *time.Time `json:"expires_at" gorm:"index"`
-	CreatedBy     string     `json:"created_by" gorm:"size:64"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	RevokedAt     *time.Time `json:"revoked_at"`
+	ID             string     `json:"id" gorm:"primaryKey;size:40"`
+	UserID         string     `json:"user_id" gorm:"size:40;index"`
+	EntitlementID  string     `json:"entitlement_id" gorm:"size:64;index"`
+	Status         string     `json:"status" gorm:"size:16;default:'active';index"`
+	Source         string     `json:"source" gorm:"size:32;index"`
+	StartsAt       time.Time  `json:"starts_at" gorm:"index"`
+	ExpiresAt      *time.Time `json:"expires_at" gorm:"index"`
+	CreatedBy      string     `json:"created_by" gorm:"size:64"`
+	IdempotencyKey *string    `json:"idempotency_key,omitempty" gorm:"uniqueIndex;size:160"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	RevokedAt      *time.Time `json:"revoked_at"`
 }
 
 // EntitlementSnapshotUser is the account projection consumed by app clients.

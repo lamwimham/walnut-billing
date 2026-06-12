@@ -42,6 +42,10 @@ func (r *UserRepo) Update(ctx context.Context, user *domain.User) error {
 	return r.DB.WithContext(ctx).Save(user).Error
 }
 
+func (r *UserRepo) WithTx(tx *gorm.DB) *UserRepo {
+	return &UserRepo{DB: tx}
+}
+
 type RegistrationRepo struct {
 	DB *gorm.DB
 }
@@ -102,6 +106,14 @@ func (r *EntitlementGrantRepo) GetByID(ctx context.Context, id string) (*domain.
 	return &grant, nil
 }
 
+func (r *EntitlementGrantRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.EntitlementGrant, error) {
+	var grant domain.EntitlementGrant
+	if err := r.DB.WithContext(ctx).Where("idempotency_key = ?", key).First(&grant).Error; err != nil {
+		return nil, mapGormNotFound(err)
+	}
+	return &grant, nil
+}
+
 func (r *EntitlementGrantRepo) List(ctx context.Context, query repository.EntitlementGrantQuery) ([]domain.EntitlementGrant, error) {
 	var grants []domain.EntitlementGrant
 	q := r.DB.WithContext(ctx).Model(&domain.EntitlementGrant{})
@@ -139,6 +151,10 @@ func (r *EntitlementGrantRepo) ListByUser(ctx context.Context, userID string) ([
 
 func (r *EntitlementGrantRepo) Update(ctx context.Context, grant *domain.EntitlementGrant) error {
 	return r.DB.WithContext(ctx).Save(grant).Error
+}
+
+func (r *EntitlementGrantRepo) WithTx(tx *gorm.DB) *EntitlementGrantRepo {
+	return &EntitlementGrantRepo{DB: tx}
 }
 
 func mapGormNotFound(err error) error {

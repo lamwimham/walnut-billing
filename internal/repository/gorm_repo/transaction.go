@@ -39,19 +39,25 @@ func (u *GormUnitOfWork) Begin(ctx context.Context) error {
 func (u *GormUnitOfWork) Repos() repository.TransactionalRepositories {
 	if u.tx == nil {
 		return repository.TransactionalRepositories{
-			OrderRepo:             &OrderRepo{DB: u.db},
-			LicenseRepo:           &LicenseRepo{DB: u.db},
-			CreditAccountRepo:     &CreditAccountRepo{DB: u.db},
-			CreditReservationRepo: &CreditReservationRepo{DB: u.db},
-			CreditTransactionRepo: &CreditTransactionRepo{DB: u.db},
+			OrderRepo:                &OrderRepo{DB: u.db},
+			LicenseRepo:              &LicenseRepo{DB: u.db},
+			UserRepo:                 &UserRepo{DB: u.db},
+			EntitlementGrantRepo:     &EntitlementGrantRepo{DB: u.db},
+			CreditAccountRepo:        &CreditAccountRepo{DB: u.db},
+			CreditReservationRepo:    &CreditReservationRepo{DB: u.db},
+			CreditTransactionRepo:    &CreditTransactionRepo{DB: u.db},
+			FulfillmentExecutionRepo: &FulfillmentExecutionRepo{DB: u.db},
 		}
 	}
 	return repository.TransactionalRepositories{
-		OrderRepo:             (&OrderRepo{DB: u.db}).WithTx(u.tx),
-		LicenseRepo:           (&LicenseRepo{DB: u.db}).WithTx(u.tx),
-		CreditAccountRepo:     (&CreditAccountRepo{DB: u.db}).WithTx(u.tx),
-		CreditReservationRepo: (&CreditReservationRepo{DB: u.db}).WithTx(u.tx),
-		CreditTransactionRepo: (&CreditTransactionRepo{DB: u.db}).WithTx(u.tx),
+		OrderRepo:                (&OrderRepo{DB: u.db}).WithTx(u.tx),
+		LicenseRepo:              (&LicenseRepo{DB: u.db}).WithTx(u.tx),
+		UserRepo:                 (&UserRepo{DB: u.db}).WithTx(u.tx),
+		EntitlementGrantRepo:     (&EntitlementGrantRepo{DB: u.db}).WithTx(u.tx),
+		CreditAccountRepo:        (&CreditAccountRepo{DB: u.db}).WithTx(u.tx),
+		CreditReservationRepo:    (&CreditReservationRepo{DB: u.db}).WithTx(u.tx),
+		CreditTransactionRepo:    (&CreditTransactionRepo{DB: u.db}).WithTx(u.tx),
+		FulfillmentExecutionRepo: (&FulfillmentExecutionRepo{DB: u.db}).WithTx(u.tx),
 	}
 }
 

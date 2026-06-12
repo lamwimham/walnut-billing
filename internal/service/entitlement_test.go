@@ -108,6 +108,15 @@ func (m *mockGrantRepo) GetByID(ctx context.Context, id string) (*domain.Entitle
 	return grant, nil
 }
 
+func (m *mockGrantRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.EntitlementGrant, error) {
+	for _, grant := range m.grants {
+		if grant.IdempotencyKey != nil && *grant.IdempotencyKey == key {
+			return grant, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
 func (m *mockGrantRepo) List(ctx context.Context, query repository.EntitlementGrantQuery) ([]domain.EntitlementGrant, error) {
 	var result []domain.EntitlementGrant
 	for _, grant := range m.grants {
@@ -194,6 +203,33 @@ func TestEntitlementService_CreateGrantIsIdempotentForActiveEntitlement(t *testi
 	}
 	if len(grants.grants) != 1 {
 		t.Fatalf("expected one grant, got %d", len(grants.grants))
+	}
+}
+
+func TestEntitlementService_CreateGrantUsesIdempotencyKeyForFulfillment(t *testing.T) {
+	svc, users, _, grants := newEntitlementTestService()
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+
+	first, err := svc.CreateGrant(context.Background(), GrantInput{
+		UserID:         "usr_1",
+		EntitlementID:  domain.EntitlementEditorialStudio,
+		Source:         domain.GrantSourceFulfillment,
+		IdempotencyKey: "fulfillment:CHK-1:entitlement",
+	})
+	if err != nil {
+		t.Fatalf("expected first fulfillment grant, got %v", err)
+	}
+	second, err := svc.CreateGrant(context.Background(), GrantInput{
+		UserID:         "usr_1",
+		EntitlementID:  domain.EntitlementEditorialStudio,
+		Source:         domain.GrantSourceFulfillment,
+		IdempotencyKey: "fulfillment:CHK-1:entitlement",
+	})
+	if err != nil {
+		t.Fatalf("expected idempotent fulfillment grant, got %v", err)
+	}
+	if first.ID != second.ID || len(grants.grants) != 1 {
+		t.Fatalf("expected one idempotent grant, first=%s second=%s total=%d", first.ID, second.ID, len(grants.grants))
 	}
 }
 

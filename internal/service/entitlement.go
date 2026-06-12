@@ -74,6 +74,7 @@ type GrantInput struct {
 	CreatedBy      string
 	Source         string
 	ExpiresAt      *time.Time
+	IdempotencyKey string
 }
 
 // EntitlementService is the billing-side facade for registration, manual grants,
@@ -224,6 +225,7 @@ func (s *entitlementServiceImpl) ReviewRegistration(ctx context.Context, input R
 func (s *entitlementServiceImpl) CreateGrant(ctx context.Context, input GrantInput) (*domain.EntitlementGrant, error) {
 	userID := strings.TrimSpace(input.UserID)
 	entitlementID := strings.TrimSpace(input.EntitlementID)
+	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
 
 	if strings.TrimSpace(input.RegistrationID) != "" {
 		registration, err := s.registrations.GetByID(ctx, strings.TrimSpace(input.RegistrationID))
@@ -243,28 +245,67 @@ func (s *entitlementServiceImpl) CreateGrant(ctx context.Context, input GrantInp
 		entitlementID = registration.RequestedEntitlement
 	}
 
-	if userID == "" || entitlementID == "" {
+	return createGrantWithRepos(ctx, s.users, s.grants, s.catalog, GrantInput{
+		UserID:         userID,
+		EntitlementID:  entitlementID,
+		CreatedBy:      input.CreatedBy,
+		Source:         input.Source,
+		ExpiresAt:      input.ExpiresAt,
+		IdempotencyKey: idempotencyKey,
+	})
+}
+
+func createGrantWithRepos(
+	ctx context.Context,
+	users repository.UserRepository,
+	grants repository.EntitlementGrantRepository,
+	catalog EntitlementCatalog,
+	input GrantInput,
+) (*domain.EntitlementGrant, error) {
+	userID := strings.TrimSpace(input.UserID)
+	entitlementID := strings.TrimSpace(input.EntitlementID)
+	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
+	if userID == "" || entitlementID == "" || grants == nil {
 		return nil, ErrInvalidGrant
 	}
-	if !s.catalog.HasEntitlement(entitlementID) {
+	if catalog == nil {
+		catalog = DefaultEntitlementCatalog()
+	}
+	if idempotencyKey != "" {
+		existing, err := grants.GetByIdempotencyKey(ctx, idempotencyKey)
+		if err == nil {
+			if existing.UserID != userID || existing.EntitlementID != entitlementID {
+				return nil, ErrInvalidGrant
+			}
+			return existing, nil
+		}
+		if !errors.Is(err, repository.ErrNotFound) {
+			return nil, err
+		}
+	}
+	if !catalog.HasEntitlement(entitlementID) {
 		return nil, ErrUnknownEntitlement
 	}
-	if _, err := s.users.GetByID(ctx, userID); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return nil, ErrUserNotFound
+	if users != nil {
+		if _, err := users.GetByID(ctx, userID); err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return nil, ErrUserNotFound
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 
 	now := time.Now().UTC()
-	existing, err := s.grants.ListByUser(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	for idx := range existing {
-		grant := existing[idx]
-		if grant.EntitlementID == entitlementID && isGrantActive(grant, now) {
-			return &grant, nil
+	if idempotencyKey == "" {
+		existing, err := grants.ListByUser(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		for idx := range existing {
+			grant := existing[idx]
+			if grant.EntitlementID == entitlementID && isGrantActive(grant, now) {
+				return &grant, nil
+			}
 		}
 	}
 
@@ -272,19 +313,24 @@ func (s *entitlementServiceImpl) CreateGrant(ctx context.Context, input GrantInp
 	if err != nil {
 		return nil, err
 	}
-	grant := &domain.EntitlementGrant{
-		ID:            grantID,
-		UserID:        userID,
-		EntitlementID: entitlementID,
-		Status:        domain.GrantStatusActive,
-		Source:        defaultString(strings.TrimSpace(input.Source), domain.GrantSourceManual),
-		StartsAt:      now,
-		ExpiresAt:     input.ExpiresAt,
-		CreatedBy:     defaultString(strings.TrimSpace(input.CreatedBy), "admin"),
-		CreatedAt:     now,
-		UpdatedAt:     now,
+	var idempotencyKeyPtr *string
+	if idempotencyKey != "" {
+		idempotencyKeyPtr = &idempotencyKey
 	}
-	if err := s.grants.Create(ctx, grant); err != nil {
+	grant := &domain.EntitlementGrant{
+		ID:             grantID,
+		UserID:         userID,
+		EntitlementID:  entitlementID,
+		Status:         domain.GrantStatusActive,
+		Source:         defaultString(strings.TrimSpace(input.Source), domain.GrantSourceManual),
+		StartsAt:       now,
+		ExpiresAt:      input.ExpiresAt,
+		CreatedBy:      defaultString(strings.TrimSpace(input.CreatedBy), "admin"),
+		IdempotencyKey: idempotencyKeyPtr,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := grants.Create(ctx, grant); err != nil {
 		return nil, err
 	}
 	return grant, nil

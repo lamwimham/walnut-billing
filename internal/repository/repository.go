@@ -55,11 +55,14 @@ type AuditQuery struct {
 // TransactionalRepositories returns new repository instances bound to a transaction.
 // All operations on these repos will be part of the same transaction.
 type TransactionalRepositories struct {
-	OrderRepo             OrderRepository
-	LicenseRepo           LicenseRepository
-	CreditAccountRepo     CreditAccountRepository
-	CreditReservationRepo CreditReservationRepository
-	CreditTransactionRepo CreditTransactionRepository
+	OrderRepo                OrderRepository
+	LicenseRepo              LicenseRepository
+	UserRepo                 UserRepository
+	EntitlementGrantRepo     EntitlementGrantRepository
+	CreditAccountRepo        CreditAccountRepository
+	CreditReservationRepo    CreditReservationRepository
+	CreditTransactionRepo    CreditTransactionRepository
+	FulfillmentExecutionRepo FulfillmentExecutionRepository
 }
 
 // UnitOfWork manages a database transaction and provides transactional repositories.
@@ -113,6 +116,7 @@ type EntitlementGrantQuery struct {
 type EntitlementGrantRepository interface {
 	Create(ctx context.Context, grant *domain.EntitlementGrant) error
 	GetByID(ctx context.Context, id string) (*domain.EntitlementGrant, error)
+	GetByIdempotencyKey(ctx context.Context, key string) (*domain.EntitlementGrant, error)
 	List(ctx context.Context, query EntitlementGrantQuery) ([]domain.EntitlementGrant, error)
 	ListByUser(ctx context.Context, userID string) ([]domain.EntitlementGrant, error)
 	Update(ctx context.Context, grant *domain.EntitlementGrant) error
@@ -171,4 +175,26 @@ type PaymentEventRepository interface {
 	GetByProviderEventID(ctx context.Context, provider string, providerEventID string) (*domain.PaymentEventInbox, error)
 	List(ctx context.Context, query PaymentEventQuery) ([]domain.PaymentEventInbox, error)
 	Update(ctx context.Context, event *domain.PaymentEventInbox) error
+}
+
+// FulfillmentExecutionQuery defines filtering criteria for fulfillment effects.
+type FulfillmentExecutionQuery struct {
+	OrderID    uint
+	OutTradeNo string
+	UserID     string
+	SKUCode    string
+	RuleID     string
+	TargetType string
+	Status     string
+	Limit      int
+	Offset     int
+}
+
+// FulfillmentExecutionRepository defines data access for idempotent order fulfillment.
+type FulfillmentExecutionRepository interface {
+	Create(ctx context.Context, execution *domain.FulfillmentExecution) error
+	GetByID(ctx context.Context, id string) (*domain.FulfillmentExecution, error)
+	GetByIdempotencyKey(ctx context.Context, key string) (*domain.FulfillmentExecution, error)
+	List(ctx context.Context, query FulfillmentExecutionQuery) ([]domain.FulfillmentExecution, error)
+	Update(ctx context.Context, execution *domain.FulfillmentExecution) error
 }
