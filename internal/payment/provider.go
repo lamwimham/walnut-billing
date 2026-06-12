@@ -54,3 +54,32 @@ type CheckoutProvider interface {
 	Name() string
 	CreateCheckoutSession(ctx context.Context, req CheckoutRequest) (*CheckoutSession, error)
 }
+
+// WebhookVerificationRequest contains the raw provider webhook request after the
+// transport layer has collected headers, normalized params, and raw payload.
+type WebhookVerificationRequest struct {
+	Headers    map[string]string
+	Params     map[string]string
+	RawPayload []byte
+}
+
+// VerifiedWebhookEvent is the normalized payment event emitted by provider
+// adapters after signature and payload verification.
+type VerifiedWebhookEvent struct {
+	ProviderEventID   string
+	EventType         string
+	OutTradeNo        string
+	ProviderTradeNo   string
+	Amount            int64
+	Currency          string
+	SignatureVerified bool
+	RawPayload        string
+}
+
+// WebhookVerifier is an optional provider extension for modern JSON webhook
+// providers. Legacy providers can continue using VerifyCallback through
+// PaymentService's compatibility adapter.
+type WebhookVerifier interface {
+	Name() string
+	VerifyWebhookEvent(ctx context.Context, req WebhookVerificationRequest) (*VerifiedWebhookEvent, error)
+}

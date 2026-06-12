@@ -67,6 +67,7 @@ func main() {
 		&domain.CreditAccount{},
 		&domain.CreditReservation{},
 		&domain.CreditTransaction{},
+		&domain.PaymentEventInbox{},
 	); err != nil {
 		l.Error("Failed to migrate database", "error", err)
 		os.Exit(1)
@@ -86,6 +87,7 @@ func main() {
 	creditAccountRepo := &gorm_repo.CreditAccountRepo{DB: db}
 	creditReservationRepo := &gorm_repo.CreditReservationRepo{DB: db}
 	creditTransactionRepo := &gorm_repo.CreditTransactionRepo{DB: db}
+	paymentEventRepo := &gorm_repo.PaymentEventRepo{DB: db}
 
 	// 5. Init Key Generator Factory
 	keyFactory := generator.DefaultFactory()
@@ -168,6 +170,8 @@ func main() {
 
 	paymentSvc := payment.NewPaymentService(orderRepo, licRepo, registry)
 	checkoutSvc := service.NewCheckoutService(orderRepo, productRepo, userRepo, paymentSvc)
+	paymentEventProcessor := service.NewPaymentOrderEventProcessor(orderRepo)
+	paymentEventSvc := service.NewPaymentEventService(paymentEventRepo, paymentSvc, paymentEventProcessor)
 
 	// 8. Init Handlers
 	authHandler := handler.NewAuthHandler(licSvc, auditSvc)
@@ -181,6 +185,7 @@ func main() {
 	entitlementHandler := handler.NewEntitlementHandler(entitlementSvc, auditSvc)
 	creditHandler := handler.NewCreditHandler(creditSvc, auditSvc)
 	checkoutHandler := handler.NewCheckoutHandler(checkoutSvc)
+	paymentEventHandler := handler.NewPaymentEventHandler(paymentEventSvc)
 
 	// 9. Setup Router
 	if cfg.Server.Env == "prod" {
@@ -225,6 +230,12 @@ func main() {
 		api.POST("/commerce/checkout-sessions", checkoutHandler.CreateCheckoutSession)
 	}
 
+	// Provider-agnostic payment webhook inbox. Legacy /callbacks remains for
+	// current license flows; new commerce providers should use /webhooks.
+	{
+		api.POST("/webhooks/:provider", paymentEventHandler.ReceiveWebhook)
+	}
+
 	// Order & Payment
 	deactivateHandler := handler.NewDeactivateHandler(licSvc)
 	{
@@ -265,6 +276,11 @@ func main() {
 
 		// Audit logs
 		admin.GET("/audit", adminHandler.GetAuditLogs)
+
+		// Payment webhook inbox and reprocessing
+		admin.GET("/payment-events", paymentEventHandler.ListEvents)
+		admin.GET("/payment-events/:id", paymentEventHandler.GetEvent)
+		admin.POST("/payment-events/:id/reprocess", paymentEventHandler.ReprocessEvent)
 
 		// Entitlement registration, manual grants, and credits ledger
 		admin.GET("/registrations", entitlementHandler.ListRegistrations)

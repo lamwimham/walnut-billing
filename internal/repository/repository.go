@@ -153,3 +153,22 @@ type CreditTransactionRepository interface {
 	ListByUser(ctx context.Context, userID string, limit int, offset int) ([]domain.CreditTransaction, error)
 	ListByReservationIDs(ctx context.Context, reservationIDs []string) ([]domain.CreditTransaction, error)
 }
+
+// PaymentEventQuery defines filtering criteria for payment webhook events.
+type PaymentEventQuery struct {
+	Provider   string
+	Status     string
+	EventType  string
+	OutTradeNo string
+	Limit      int
+	Offset     int
+}
+
+// PaymentEventRepository defines data access for provider webhook inbox events.
+type PaymentEventRepository interface {
+	Create(ctx context.Context, event *domain.PaymentEventInbox) error
+	GetByID(ctx context.Context, id string) (*domain.PaymentEventInbox, error)
+	GetByProviderEventID(ctx context.Context, provider string, providerEventID string) (*domain.PaymentEventInbox, error)
+	List(ctx context.Context, query PaymentEventQuery) ([]domain.PaymentEventInbox, error)
+	Update(ctx context.Context, event *domain.PaymentEventInbox) error
+}

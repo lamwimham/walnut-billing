@@ -78,6 +78,17 @@ The commerce checkout facade is the provider-agnostic entry point for future SKU
 
 Development builds register a `mock` checkout provider. Production payment providers can implement the optional hosted checkout adapter without changing app clients.
 
+### Payment Webhook Inbox
+
+New commerce providers should send payment events to the provider-agnostic webhook inbox. The inbox verifies provider payloads through the payment adapter, deduplicates by `provider + provider_event_id`, records processing attempts, and supports admin reprocessing.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/api/v1/webhooks/:provider` | Provider-agnostic webhook inbox for commerce events |
+| GET | `/api/v1/admin/payment-events?provider=&status=&event_type=&out_trade_no=` | List inbox events |
+| GET | `/api/v1/admin/payment-events/:id` | Inspect one inbox event |
+| POST | `/api/v1/admin/payment-events/:id/reprocess` | Retry a failed or unprocessed event |
+
 ### Entitlements & Registration
 
 These endpoints provide the first entitlement projection for Walnut clients. Grants use stable entitlement IDs such as `editorial.studio`; product names, VIP copy, subscriptions, and credits should project into grants rather than being checked directly by clients.
@@ -161,6 +172,7 @@ All settings via environment variables (see `.env.example`):
 | Middleware Chain | Recovery → RequestID → Logger → Prometheus → Auth |
 | EntitlementService | Registration, manual grant, and snapshot projection facade |
 | CheckoutService | Provider-agnostic order + checkout-session orchestration |
+| PaymentEventService | Webhook inbox, provider event idempotency, retries, and reprocessing |
 | Catalog | Validates stable entitlement IDs independently from products and VIP copy |
 
 ## License

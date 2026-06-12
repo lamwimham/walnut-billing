@@ -376,6 +376,39 @@ M6-B 后续仍需补齐：
 - Checkout order list/query/admin 视图。
 - PC Core 代理 checkout facade，前端仍只通过 AccessDecision CTA 触发。
 
+
+### M6-C 第一切片已完成：Webhook Inbox 与幂等处理
+
+本轮继续保持 provider-agnostic，不接入真实支付渠道。目标是把生产级支付闭环中最关键的 webhook 安全入口先固定下来。
+
+已完成：
+
+- 新增 `PaymentEventInbox` 模型，保存 provider、provider event id、event type、payload hash、签名校验结果、处理状态、attempts、last error 与 processed_at。
+- 新增 `PaymentEventRepository` / `PaymentEventRepo`，通过 `provider + provider_event_id` 做幂等去重。
+- 新增 `payment.WebhookVerifier`、`WebhookVerificationRequest`、`VerifiedWebhookEvent`，现代 JSON webhook provider 可实现专属 verifier；旧 callback provider 通过 `VerifyCallback` 兼容适配。
+- 新增 `PaymentEventService`，集中处理 webhook 验证、inbox 入库、重复事件安全返回、失败重试、未知事件 ignored、签名失败拒绝入库。
+- 新增 `PaymentOrderEventProcessor`，先把 `payment.paid` / `payment.cancelled` / `payment.refunded` 映射为 Walnut `Order` 状态；后续 M6-D 可用 FulfillmentService 装饰该 processor。
+- 新增 `POST /api/v1/webhooks/:provider`，handler 只收集 headers/query/form/json/raw payload 并委托 service。
+- 新增 admin 查询与重试入口：
+  - `GET /api/v1/admin/payment-events`
+  - `GET /api/v1/admin/payment-events/:id`
+  - `POST /api/v1/admin/payment-events/:id/reprocess`
+
+验证：
+
+```bash
+go test ./...
+git diff --check
+# 非 docs 区域无 creem/Creem 引用
+```
+
+M6-C 后续仍需补齐：
+
+- 真实 provider 的签名 verifier 和 event mapper。
+- 更严格的 raw payload 保存/脱敏策略与 payload 大小限制。
+- 失败重试后台 worker / 指数退避 / 告警指标。
+- 与 M6-D `FulfillmentService` 合并成 paid -> fulfilled 的完整事务闭环。
+
 ## 测试策略
 
 - Unit tests：catalog rule 解析、provider adapter、event mapper、fulfillment rule executor。

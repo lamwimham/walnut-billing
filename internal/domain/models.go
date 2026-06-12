@@ -71,6 +71,44 @@ const (
 )
 
 const (
+	PaymentEventStatusReceived   = "received"
+	PaymentEventStatusProcessing = "processing"
+	PaymentEventStatusProcessed  = "processed"
+	PaymentEventStatusIgnored    = "ignored"
+	PaymentEventStatusFailed     = "failed"
+)
+
+const (
+	PaymentEventTypePaid      = "payment.paid"
+	PaymentEventTypeCancelled = "payment.cancelled"
+	PaymentEventTypeRefunded  = "payment.refunded"
+)
+
+// PaymentEventInbox stores verified provider webhook events before processing.
+// The composite provider + provider_event_id key makes webhook replay safe and
+// keeps provider-specific payloads away from entitlement and credits decisions.
+type PaymentEventInbox struct {
+	ID                string     `json:"id" gorm:"primaryKey;size:40"`
+	Provider          string     `json:"provider" gorm:"size:32;uniqueIndex:idx_payment_event_provider_event;index"`
+	ProviderEventID   string     `json:"provider_event_id" gorm:"size:128;uniqueIndex:idx_payment_event_provider_event"`
+	EventType         string     `json:"event_type" gorm:"size:64;index"`
+	OutTradeNo        string     `json:"out_trade_no" gorm:"size:64;index"`
+	ProviderTradeNo   string     `json:"provider_trade_no" gorm:"size:128;index"`
+	Amount            int64      `json:"amount"`
+	Currency          string     `json:"currency" gorm:"size:8"`
+	SignatureVerified bool       `json:"signature_verified" gorm:"default:false"`
+	PayloadHash       string     `json:"payload_hash" gorm:"size:64"`
+	RawPayload        string     `json:"raw_payload" gorm:"type:text"`
+	Status            string     `json:"status" gorm:"size:16;default:'received';index"`
+	Attempts          int        `json:"attempts" gorm:"default:0"`
+	LastError         string     `json:"last_error" gorm:"type:text"`
+	ReceivedAt        time.Time  `json:"received_at" gorm:"index"`
+	ProcessedAt       *time.Time `json:"processed_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+const (
 	UserStatusActive   = "active"
 	UserStatusDisabled = "disabled"
 

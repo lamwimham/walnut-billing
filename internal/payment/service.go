@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/repository"
@@ -70,6 +71,56 @@ func (s *PaymentService) CreateCheckoutSession(ctx context.Context, providerName
 		ProviderCheckoutID: req.OutTradeNo,
 		Status:             "checkout_created",
 	}, nil
+}
+
+// VerifyWebhookEvent normalizes a provider webhook event. Providers that expose
+// WebhookVerifier own their signature and payload semantics; legacy callback
+// providers are adapted through VerifyCallback for compatibility.
+func (s *PaymentService) VerifyWebhookEvent(ctx context.Context, providerName string, req WebhookVerificationRequest) (*VerifiedWebhookEvent, error) {
+	provider, err := s.GetProvider(providerName)
+	if err != nil {
+		return nil, err
+	}
+	if verifier, ok := provider.(WebhookVerifier); ok {
+		return verifier.VerifyWebhookEvent(ctx, req)
+	}
+
+	outTradeNo, providerTradeNo, amount, err := provider.VerifyCallback(ctx, req.Params)
+	if err != nil {
+		return nil, err
+	}
+	eventType := strings.TrimSpace(req.Params["event_type"])
+	if eventType == "" {
+		eventType = domain.PaymentEventTypePaid
+	}
+	eventID := firstNonEmpty(
+		req.Params["provider_event_id"],
+		req.Params["event_id"],
+		req.Params["transaction_id"],
+		req.Params["trade_no"],
+		providerTradeNo,
+		outTradeNo,
+	)
+	return &VerifiedWebhookEvent{
+		ProviderEventID:   eventID,
+		EventType:         eventType,
+		OutTradeNo:        outTradeNo,
+		ProviderTradeNo:   providerTradeNo,
+		Amount:            amount,
+		Currency:          strings.TrimSpace(req.Params["currency"]),
+		SignatureVerified: true,
+		RawPayload:        string(req.RawPayload),
+	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // CreatePayment generates a payment URL for an existing order.
