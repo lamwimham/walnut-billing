@@ -128,6 +128,14 @@ func paidCheckoutOrder() *domain.Order {
 	}
 }
 
+func paidRenewalOrder() *domain.Order {
+	order := paidCheckoutOrder()
+	order.ID = 43
+	order.OutTradeNo = "RNL-1"
+	order.OrderType = domain.OrderTypeRenewal
+	return order
+}
+
 func TestFulfillmentService_FulfillPaidOrderGrantsEntitlementAndCredits(t *testing.T) {
 	svc, orders, users, grants, accounts, transactions, executions := newFulfillmentTestService(editorialStudioFulfillmentRules()...)
 	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
@@ -216,6 +224,126 @@ func TestFulfillmentService_ExtendsEntitlementFromExistingExpiry(t *testing.T) {
 	expectedExpiry := existingExpiry.AddDate(0, 1, 0)
 	if !renewed.ExpiresAt.Equal(expectedExpiry) {
 		t.Fatalf("expected renewal to extend from existing expiry %s, got %s", expectedExpiry, renewed.ExpiresAt)
+	}
+}
+
+func TestFulfillmentService_FulfillPaidRenewalOrderExtendsEntitlementAndCredits(t *testing.T) {
+	svc, orders, users, grants, accounts, transactions, _ := newFulfillmentTestService(editorialStudioFulfillmentRules()...)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	paidAt := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	existingExpiry := paidAt.AddDate(0, 1, 0)
+	grants.grants["existing"] = &domain.EntitlementGrant{
+		ID:            "existing",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceFulfillment,
+		StartsAt:      paidAt.AddDate(0, -1, 0),
+		ExpiresAt:     &existingExpiry,
+	}
+	orders.orders["RNL-1"] = paidRenewalOrder()
+
+	if _, err := svc.FulfillOrder(context.Background(), orders.orders["RNL-1"]); err != nil {
+		t.Fatalf("expected renewal fulfillment success, got %v", err)
+	}
+	expectedExpiry := existingExpiry.AddDate(0, 1, 0)
+	var renewalGrant *domain.EntitlementGrant
+	for _, grant := range grants.grants {
+		if grant.ID != "existing" && grant.Source == domain.GrantSourceFulfillment {
+			renewalGrant = grant
+		}
+	}
+	if renewalGrant == nil || renewalGrant.ExpiresAt == nil || !renewalGrant.ExpiresAt.Equal(expectedExpiry) {
+		t.Fatalf("expected renewal grant to extend from paid expiry %s, got %#v", expectedExpiry, renewalGrant)
+	}
+	if len(transactions.transactions) != 1 {
+		t.Fatalf("expected period credits to be granted on renewal paid, got %d", len(transactions.transactions))
+	}
+	account, err := accounts.GetByUserID(context.Background(), "usr_1")
+	if err != nil || account.Balance != 600 {
+		t.Fatalf("expected 600 renewal credits, account=%#v err=%v", account, err)
+	}
+}
+
+func TestFulfillmentService_RenewalIgnoresGraceGrantWhenAnchoringPaidPeriod(t *testing.T) {
+	svc, orders, users, grants, _, _, _ := newFulfillmentTestService(FulfillmentRule{
+		ID:            "studio:entitlement",
+		SKUCode:       "editorial_studio_monthly",
+		Type:          FulfillmentRuleGrantEntitlement,
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Duration:      "monthly",
+	})
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	paidAt := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	paidExpiry := paidAt.AddDate(0, 1, 0)
+	graceExpiry := paidExpiry.AddDate(0, 0, domain.GracePeriodDays)
+	grants.grants["paid"] = &domain.EntitlementGrant{
+		ID:            "paid",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceFulfillment,
+		StartsAt:      paidAt.AddDate(0, -1, 0),
+		ExpiresAt:     &paidExpiry,
+	}
+	grants.grants["grace"] = &domain.EntitlementGrant{
+		ID:            "grace",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceSubscriptionGrace,
+		StartsAt:      paidExpiry,
+		ExpiresAt:     &graceExpiry,
+	}
+	orders.orders["RNL-1"] = paidRenewalOrder()
+
+	if _, err := svc.FulfillOrder(context.Background(), orders.orders["RNL-1"]); err != nil {
+		t.Fatalf("expected renewal fulfillment success, got %v", err)
+	}
+	expectedExpiry := paidExpiry.AddDate(0, 1, 0)
+	for _, grant := range grants.grants {
+		if grant.ID != "paid" && grant.ID != "grace" {
+			if grant.ExpiresAt == nil || !grant.ExpiresAt.Equal(expectedExpiry) {
+				t.Fatalf("expected renewal to extend from paid expiry %s, got %#v", expectedExpiry, grant)
+			}
+		}
+	}
+}
+
+func TestFulfillmentService_RenewalAfterPaidExpiryAnchorsAtGraceStart(t *testing.T) {
+	svc, orders, users, grants, _, _, _ := newFulfillmentTestService(FulfillmentRule{
+		ID:            "studio:entitlement",
+		SKUCode:       "editorial_studio_monthly",
+		Type:          FulfillmentRuleGrantEntitlement,
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Duration:      "monthly",
+	})
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	paidExpiry := time.Now().UTC().Add(-time.Hour)
+	graceExpiry := paidExpiry.AddDate(0, 0, domain.GracePeriodDays)
+	grants.grants["grace"] = &domain.EntitlementGrant{
+		ID:            "grace",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceSubscriptionGrace,
+		StartsAt:      paidExpiry,
+		ExpiresAt:     &graceExpiry,
+	}
+	order := paidRenewalOrder()
+	order.PaidAt = nil
+	orders.orders["RNL-1"] = order
+
+	if _, err := svc.FulfillOrder(context.Background(), orders.orders["RNL-1"]); err != nil {
+		t.Fatalf("expected renewal fulfillment success, got %v", err)
+	}
+	expectedExpiry := paidExpiry.AddDate(0, 1, 0)
+	for _, grant := range grants.grants {
+		if grant.ID != "grace" {
+			if grant.ExpiresAt == nil || !grant.ExpiresAt.Equal(expectedExpiry) {
+				t.Fatalf("expected late renewal to anchor at grace start %s, got %#v", expectedExpiry, grant)
+			}
+		}
 	}
 }
 

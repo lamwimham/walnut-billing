@@ -120,6 +120,41 @@ func TestCreemAdapter_VerifyDisputeWebhookMapsToPaymentDisputed(t *testing.T) {
 	}
 }
 
+func TestCreemAdapter_VerifySubscriptionWebhooksMapToRenewalEvents(t *testing.T) {
+	adapter, err := NewCreemAdapter(CreemConfig{
+		APIKey:        "creem_test_key",
+		WebhookSecret: "whsec_test",
+		ProductIDs:    map[string]string{"editorial_studio_monthly": "prod_studio"},
+	})
+	if err != nil {
+		t.Fatalf("create adapter: %v", err)
+	}
+	tests := []struct {
+		name      string
+		creemType string
+		wantType  string
+	}{
+		{name: "paid", creemType: "subscription.paid", wantType: domain.PaymentEventTypeRenewalPaid},
+		{name: "past_due", creemType: "subscription.past_due", wantType: domain.PaymentEventTypeRenewalFailed},
+		{name: "expired", creemType: "subscription.expired", wantType: domain.PaymentEventTypeSubscriptionExpired},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"id":"evt_` + tt.name + `","eventType":"` + tt.creemType + `","object":{"id":"sub_1","subscription":{"id":"sub_1","metadata":{"walnut_out_trade_no":"RNL-1"}},"order":{"id":"ord_renewal_1","amount":1900,"currency":"USD","period_start":1782997200000,"period_end":1785675600000},"current_period_start_date":"2026-07-02T09:00:00.000Z","current_period_end_date":"2026-08-02T09:00:00.000Z"}}`)
+			event, err := adapter.VerifyWebhookEvent(context.Background(), WebhookVerificationRequest{
+				Headers:    map[string]string{"creem-signature": testCreemSignature(payload, "whsec_test")},
+				RawPayload: payload,
+			})
+			if err != nil {
+				t.Fatalf("verify webhook: %v", err)
+			}
+			if event.EventType != tt.wantType || event.OutTradeNo != "RNL-1" || event.ProviderTradeNo != "ord_renewal_1" || event.PeriodStartAt == nil || event.PeriodEndAt == nil {
+				t.Fatalf("unexpected subscription event: %#v", event)
+			}
+		})
+	}
+}
+
 func TestCreemAdapter_RejectsBadWebhookSignature(t *testing.T) {
 	adapter, err := NewCreemAdapter(CreemConfig{
 		APIKey:        "creem_test_key",

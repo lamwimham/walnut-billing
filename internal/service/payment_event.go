@@ -295,6 +295,8 @@ func (s *paymentEventServiceImpl) eventFromVerified(provider string, rawPayload 
 		ProviderTradeNo:   strings.TrimSpace(verified.ProviderTradeNo),
 		Amount:            verified.Amount,
 		Currency:          strings.TrimSpace(verified.Currency),
+		PeriodStartAt:     verified.PeriodStartAt,
+		PeriodEndAt:       verified.PeriodEndAt,
 		SignatureVerified: verified.SignatureVerified,
 		PayloadHash:       payloadHash(raw),
 		RawPayload:        raw,
@@ -312,7 +314,13 @@ func payloadHash(payload string) string {
 
 func isProcessablePaymentEventType(eventType string) bool {
 	switch eventType {
-	case domain.PaymentEventTypePaid, domain.PaymentEventTypeCancelled, domain.PaymentEventTypeRefunded, domain.PaymentEventTypeDisputed:
+	case domain.PaymentEventTypePaid,
+		domain.PaymentEventTypeCancelled,
+		domain.PaymentEventTypeRefunded,
+		domain.PaymentEventTypeDisputed,
+		domain.PaymentEventTypeRenewalPaid,
+		domain.PaymentEventTypeRenewalFailed,
+		domain.PaymentEventTypeSubscriptionExpired:
 		return true
 	default:
 		return false

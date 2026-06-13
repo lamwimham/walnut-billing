@@ -17,6 +17,7 @@ type Config struct {
 	Fulfillment FulfillmentConfig
 	Checkout    CheckoutConfig
 	Adjustment  AdjustmentConfig
+	Renewal     RenewalConfig
 	Admin       AdminConfig
 	RateLimit   RateLimitConfig
 }
@@ -109,6 +110,11 @@ type AdjustmentConfig struct {
 	CancelAction            string
 }
 
+type RenewalConfig struct {
+	GracePeriodDays int
+	ExpiredAction   string
+}
+
 type AdminConfig struct {
 	APIKeys []string // List of allowed admin API keys
 }
@@ -161,6 +167,8 @@ func Load() (*Config, error) {
 	v.SetDefault("adjustment.high_usage_action", "manual_review")
 	v.SetDefault("adjustment.dispute_action", "auto_refund")
 	v.SetDefault("adjustment.cancel_action", "keep_current_period")
+	v.SetDefault("renewal.grace_period_days", 3)
+	v.SetDefault("renewal.expired_action", "expire_grace")
 
 	// 读取环境变量或配置文件
 	v.AutomaticEnv()
@@ -223,6 +231,12 @@ func Load() (*Config, error) {
 	}
 	if val := os.Getenv("ADJUSTMENT_CANCEL_ACTION"); val != "" {
 		cfg.Adjustment.CancelAction = val
+	}
+	if val := os.Getenv("RENEWAL_GRACE_PERIOD_DAYS"); val != "" {
+		cfg.Renewal.GracePeriodDays = parseIntEnv(val, cfg.Renewal.GracePeriodDays)
+	}
+	if val := os.Getenv("RENEWAL_EXPIRED_ACTION"); val != "" {
+		cfg.Renewal.ExpiredAction = val
 	}
 	if val := os.Getenv("FULFILLMENT_RULES_JSON"); val != "" {
 		cfg.Fulfillment.RulesJSON = val

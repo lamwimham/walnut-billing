@@ -210,6 +210,8 @@ func paymentEventResponse(event *domain.PaymentEventInbox) gin.H {
 		"provider_trade_no":  event.ProviderTradeNo,
 		"amount":             event.Amount,
 		"currency":           event.Currency,
+		"period_start_at":    event.PeriodStartAt,
+		"period_end_at":      event.PeriodEndAt,
 		"signature_verified": event.SignatureVerified,
 		"status":             event.Status,
 		"attempts":           event.Attempts,

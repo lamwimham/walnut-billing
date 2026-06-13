@@ -1,6 +1,9 @@
 package payment
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // PaymentProvider defines the interface for payment gateway adapters.
 // Each payment provider (WeChat, Alipay) implements this interface.
@@ -74,6 +77,8 @@ type VerifiedWebhookEvent struct {
 	ProviderTradeNo   string
 	Amount            int64
 	Currency          string
+	PeriodStartAt     *time.Time
+	PeriodEndAt       *time.Time
 	SignatureVerified bool
 	RawPayload        string
 }

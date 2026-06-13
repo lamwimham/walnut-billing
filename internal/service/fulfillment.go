@@ -208,7 +208,7 @@ func (s *fulfillmentServiceImpl) fulfillOrderWithRepos(ctx context.Context, repo
 		}
 		order = latest
 	}
-	if strings.TrimSpace(order.UserID) == "" || strings.TrimSpace(order.SKUCode) == "" || order.OrderType != domain.OrderTypeCheckout {
+	if strings.TrimSpace(order.UserID) == "" || strings.TrimSpace(order.SKUCode) == "" || !isFulfillableOrderType(order.OrderType) {
 		return nil, ErrInvalidFulfillmentOrder
 	}
 	if order.Status == domain.OrderStatusFulfilled {
@@ -535,13 +535,38 @@ func entitlementFulfillmentAnchor(ctx context.Context, grants repository.Entitle
 	if err != nil {
 		return fallback
 	}
-	anchor := fallback
+	paidAnchor := fallback
+	var graceAnchor *time.Time
 	for _, grant := range existing {
-		if grant.ExpiresAt != nil && grant.ExpiresAt.After(anchor) {
-			anchor = grant.ExpiresAt.UTC()
+		if grant.Source == domain.GrantSourceSubscriptionGrace {
+			if !grant.StartsAt.IsZero() && grant.StartsAt.Before(fallback) {
+				start := grant.StartsAt.UTC()
+				if graceAnchor == nil || start.After(*graceAnchor) {
+					graceAnchor = &start
+				}
+			}
+			continue
+		}
+		if grant.ExpiresAt != nil && grant.ExpiresAt.After(paidAnchor) {
+			paidAnchor = grant.ExpiresAt.UTC()
 		}
 	}
-	return anchor
+	if paidAnchor.After(fallback) {
+		return paidAnchor
+	}
+	if graceAnchor != nil {
+		return *graceAnchor
+	}
+	return fallback
+}
+
+func isFulfillableOrderType(orderType string) bool {
+	switch strings.TrimSpace(orderType) {
+	case domain.OrderTypeCheckout, domain.OrderTypeRenewal:
+		return true
+	default:
+		return false
+	}
 }
 
 func newExecutionFromOrderRule(order *domain.Order, rule FulfillmentRule, key string) (*domain.FulfillmentExecution, error) {

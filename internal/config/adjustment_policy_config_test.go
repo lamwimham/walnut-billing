@@ -27,3 +27,16 @@ func TestLoadReadsPaymentAdjustmentPolicyEnvConfig(t *testing.T) {
 		t.Fatalf("unexpected adjustment actions: %#v", cfg.Adjustment)
 	}
 }
+
+func TestLoadReadsSubscriptionRenewalPolicyEnvConfig(t *testing.T) {
+	t.Setenv("RENEWAL_GRACE_PERIOD_DAYS", "5")
+	t.Setenv("RENEWAL_EXPIRED_ACTION", "natural_expiry")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Renewal.GracePeriodDays != 5 || cfg.Renewal.ExpiredAction != "natural_expiry" {
+		t.Fatalf("unexpected renewal config: %#v", cfg.Renewal)
+	}
+}

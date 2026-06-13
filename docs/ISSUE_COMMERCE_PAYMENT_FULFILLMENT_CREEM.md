@@ -602,7 +602,7 @@ M6 后续收敛优先级：
 1. P0：admin 风险处理视图/API：列出、备注、解决 `PaymentRiskFlag`，让 `manual_review` 能闭环解除 checkout hold。
 2. P0：端到端运行手册：本地/测试环境如何配置 Creem、创建 SKU、触发 webhook、检查 snapshot、验证 dispute hold。
 3. P1：7 天退款窗口、低使用条件、人工审核策略落为 DB policy；当前 refund/dispute 补偿策略已可用，但策略参数仍在代码/config 层。
-4. P1：订阅续费失败 3 天 grace period，需要结合 provider subscription renewal event 单独处理。
+4. P1：订阅续费失败 3 天 grace period 已落地为 provider-agnostic renewal policy；后续只需按真实生产 webhook 做沙箱回归。
 5. P2：订阅赠点 bucket / expiry；当前通过 ledger source/idempotency 区分，满足第一阶段账务可追踪。
 
 
@@ -668,6 +668,32 @@ go test ./internal/config -run 'TestLoadReads.*Adjustment|TestLoadReadsCheckoutR
 go test ./...
 git diff --check
 rg -n "creem|Creem|PaymentRiskFlag|payment\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy|PaymentAdjustmentPolicy|policy_rejected" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true
+```
+
+### M6-L P1 已完成：Subscription renewal / grace period
+
+本轮把 Creem subscription lifecycle 事件收敛为 Walnut 自有续费事件，并通过独立 `SubscriptionRenewalService` 执行业务策略。Creem adapter 仍只负责事件归一化；PC/mobile 继续只读取 `EntitlementSnapshot` 与 credits，不接触 provider subscription 状态。
+
+已完成：
+
+- 新增 provider-agnostic event type：`payment.renewal_paid`、`payment.renewal_failed`、`payment.subscription_expired`。
+- Creem adapter 映射 `subscription.paid` / `subscription.past_due` / `subscription.expired`，并提取 `current_period_start_date` / `current_period_end_date` 到 `PaymentEventInbox`。
+- 新增 `SubscriptionRenewalPolicy` 策略接口与可配置实现，默认 3 天 grace period，支持 `expire_grace` / `natural_expiry`。
+- 新增 `SubscriptionRenewalService`：续费成功复用 `FulfillmentService`，续费失败创建 `EntitlementGrant(source=subscription_grace)` 且不发 credits；`subscription.expired` 只在 grace grant 到期后才主动标记 expired，避免 provider 事件早到截断宽限期。
+- 支持 provider 只回传原 checkout `out_trade_no` 的情况：按 `source_out_trade_no + billing period` 派生 Walnut renewal order，避免 provider 订单直接成为门禁事实。
+- 处理首次订阅付款 `checkout.completed` 与 `subscription.paid` 双事件：使用 checkout fulfillment 幂等键，避免重复发放 entitlement / credits。
+- `FulfillmentService` 支持 `OrderTypeRenewal`，并在续费锚点计算中识别 `subscription_grace`：已付周期优先，late renewal 不把 grace 天数叠加成额外付费周期。
+- 新增 `RENEWAL_GRACE_PERIOD_DAYS`、`RENEWAL_EXPIRED_ACTION` 配置，README / runbook / `.env.example` 已同步。
+
+验证：
+
+```bash
+go test ./internal/payment -run 'TestCreemAdapter_.*Subscription|TestCreemAdapter_Verify|TestCreemProduct' -v
+go test ./internal/config -run 'TestLoadReads.*Renewal|TestLoadReads.*Adjustment' -v
+go test ./internal/service -run 'TestSubscriptionRenewal|TestFulfillmentService_.*Renewal|TestPaymentFulfillmentEventProcessor_RoutesRenewal|TestPaymentEventService_ProcessesSubscriptionRenewal|TestPaymentOrderEventProcessor_MarksRenewal|TestCommerceFlow_GormSubscriptionRenewal' -v
+go test ./...
+git diff --check
+rg -n "creem|Creem|PaymentRiskFlag|payment\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy|PaymentAdjustmentPolicy|policy_rejected|renewal_failed|subscription_expired|SubscriptionRenewalPolicy|subscription_grace" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true
 ```
 
 ## 测试策略

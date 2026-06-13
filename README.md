@@ -90,6 +90,12 @@ Paid commerce orders are fulfilled through Walnut-owned rules, not through provi
 
 Fulfillment rules can be supplied through `FULFILLMENT_RULES_JSON`; the dev defaults include `editorial_studio_monthly` and `credits_600`. The production path uses UnitOfWork so order status, entitlement grants, credit ledger rows, and fulfillment executions converge safely under retries.
 
+### Subscription Renewal
+
+Subscription webhooks are normalized into Walnut-owned events before they affect access: `payment.renewal_paid`, `payment.renewal_failed`, and `payment.subscription_expired`. `SubscriptionRenewalService` applies a configurable policy: paid renewals reuse `FulfillmentService`, failed renewals create a short `subscription_grace` entitlement grant without credits, and expiry events can expire grace grants or let them naturally expire.
+
+Creem-specific statuses remain inside the payment adapter. PC/mobile gates still consume only `EntitlementSnapshot` and credit balances.
+
 ### Payment Webhook Inbox
 
 New commerce providers should send payment events to the provider-agnostic webhook inbox. The inbox verifies provider payloads through the payment adapter, deduplicates by `provider + provider_event_id`, records processing attempts, and supports admin reprocessing.
@@ -179,6 +185,8 @@ All settings via environment variables (see `.env.example`):
 | `ADJUSTMENT_HIGH_USAGE_ACTION` | manual_review | Action for high-usage in-window refunds |
 | `ADJUSTMENT_DISPUTE_ACTION` | auto_refund | Action for dispute/chargeback events; risk flag creation stays enabled |
 | `ADJUSTMENT_CANCEL_ACTION` | keep_current_period | Action for cancellation events; default keeps the current paid period |
+| `RENEWAL_GRACE_PERIOD_DAYS` | 3 | Grace window after renewal payment failure; grants access only, no period credits |
+| `RENEWAL_EXPIRED_ACTION` | expire_grace | Expiry handling: `expire_grace` or `natural_expiry` |
 
 **Note**: If payment credentials are not configured, the service uses mock adapters (suitable for development).
 
@@ -216,7 +224,8 @@ All settings via environment variables (see `.env.example`):
 | CheckoutService | Provider-agnostic order + checkout-session orchestration |
 | PaymentEventService | Webhook inbox, provider event idempotency, retries, and reprocessing |
 | FulfillmentService | Rule-engine facade for paid order delivery into grants and credit ledger rows |
-| Strategy | Fulfillment rule executors for entitlement and credits targets |
+| SubscriptionRenewalService | Provider-agnostic renewal/grace policy executor |
+| Strategy | Fulfillment rule executors, payment adjustment policy, and subscription renewal policy |
 | Catalog | Validates stable entitlement IDs and configurable fulfillment rules independently from provider copy |
 
 ## License

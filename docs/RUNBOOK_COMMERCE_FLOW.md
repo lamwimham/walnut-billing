@@ -12,12 +12,13 @@
 - 验证 `Order -> PaymentEventInbox -> FulfillmentExecution -> EntitlementGrant/CreditTransaction -> EntitlementSnapshot`。
 - 验证重复 webhook 幂等。
 - 模拟 dispute/chargeback，完成 revoke/clawback、创建 `PaymentRiskFlag`、阻断新 checkout、人工 resolve 后恢复 checkout。
+- 模拟订阅续费成功、续费失败 3 天 grace period、subscription expired 的权益变化。
 
 暂不覆盖：
 
 - PC/mobile 直接集成 Creem SDK 或 Creem API。
 - 国内支付渠道新增开发；WeChat/Alipay 只保留 legacy 兼容。
-- 订阅续费 grace period、credit bucket/expiry；这些仍作为 issue #1 后续项推进。
+- credit bucket/expiry；当前订阅续费会按周期授予 credits，但 bucket 过期仍作为 issue #1 后续项推进。
 
 ## 依赖边界
 
@@ -46,6 +47,9 @@ Provider Webhook
           -> EntitlementGrantRepository / CreditTransactionRepository
         -> PaymentAdjustmentService(refund | cancel | dispute)
           -> PaymentRiskFlagRepository
+        -> SubscriptionRenewalService(renewal | grace | expired)
+          -> FulfillmentService(paid renewal)
+          -> EntitlementGrantRepository(subscription_grace)
 
 PC / Mobile access gate
   -> EntitlementSnapshot / Credit snapshot only
@@ -55,6 +59,7 @@ PC / Mobile access gate
 
 - Provider facts 到 `PaymentEventInbox` 为止，不能直接成为 app access facts。
 - `EntitlementGrant` 和 `CreditTransaction` 是 Walnut 自有权益事实。
+- 订阅宽限期只写 `EntitlementGrant(source=subscription_grace)`，不发新周期 credits。
 - `PaymentRiskFlag` 只控制新的 checkout 尝试，不直接改写 PC/mobile 的 access snapshot。
 - Admin 风险解除路径固定为 `PaymentRiskHandler -> PaymentRiskService -> PaymentRiskFlagRepository`。
 
@@ -343,6 +348,79 @@ curl -sS -X POST "$BASE_URL/api/v1/webhooks/creem" \
 - 金额和币种必须匹配 Walnut order；不匹配会失败并进入可排障/重试路径。
 - 后续验证与 mock happy path 一致。
 
+## Subscription Renewal / Grace Period
+
+该流程验证 provider subscription 事件不会直接驱动 PC/mobile 门禁，而是通过 Walnut 的 `Order`、`EntitlementGrant` 和 `CreditTransaction` 生效。Creem 官方事件映射：
+
+| Creem event | Walnut event | 行为 |
+|---|---|---|
+| `subscription.paid` | `payment.renewal_paid` | 续费成功，执行新周期 fulfillment，发放 entitlement + period credits |
+| `subscription.past_due` | `payment.renewal_failed` | 进入 grace period，仅保留高级权益，不发 credits |
+| `subscription.expired` | `payment.subscription_expired` | 触发 grace 到期检查；若仍在 grace 窗口内则不截断，若已到 `expires_at` 后默认标记 `subscription_grace` expired |
+
+本地模拟续费失败：
+
+```bash
+PAST_DUE_PAYLOAD=$(cat <<JSON
+{"id":"evt_sub_past_due_1","eventType":"subscription.past_due","object":{"id":"sub_1","subscription":{"id":"sub_1","metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}},"order":{"id":"ord_renewal_failed_1","amount":1900,"currency":"USD"},"current_period_start_date":"2026-07-12T10:00:00.000Z","current_period_end_date":"2026-08-12T10:00:00.000Z"}}
+JSON
+)
+SIG=$(printf '%s' "$PAST_DUE_PAYLOAD" | openssl dgst -sha256 -hmac "$PAYMENT_CREEM_WEBHOOK_SECRET" -binary | xxd -p -c 256)
+curl -sS -X POST "$BASE_URL/api/v1/webhooks/creem" \
+  -H 'Content-Type: application/json' \
+  -H "creem-signature: $SIG" \
+  -d "$PAST_DUE_PAYLOAD"
+```
+
+预期：
+
+- `PaymentEventInbox.event_type=payment.renewal_failed`。
+- 若 webhook 只携带原 checkout `out_trade_no`，billing 会按 `source_out_trade_no + billing period` 派生 Walnut renewal order，避免 provider 订单直接进入门禁。
+- 创建 `EntitlementGrant(source=subscription_grace)`，`starts_at = current_period_end_date`，`expires_at = current_period_end_date + RENEWAL_GRACE_PERIOD_DAYS`。
+- 不新增 credit grant transaction。
+
+本地模拟续费成功：
+
+```bash
+PAID_PAYLOAD=$(cat <<JSON
+{"id":"evt_sub_paid_1","eventType":"subscription.paid","object":{"id":"sub_1","subscription":{"id":"sub_1","metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}},"order":{"id":"ord_renewal_paid_1","amount":1900,"currency":"USD"},"current_period_start_date":"2026-07-12T10:00:00.000Z","current_period_end_date":"2026-08-12T10:00:00.000Z"}}
+JSON
+)
+SIG=$(printf '%s' "$PAID_PAYLOAD" | openssl dgst -sha256 -hmac "$PAYMENT_CREEM_WEBHOOK_SECRET" -binary | xxd -p -c 256)
+curl -sS -X POST "$BASE_URL/api/v1/webhooks/creem" \
+  -H 'Content-Type: application/json' \
+  -H "creem-signature: $SIG" \
+  -d "$PAID_PAYLOAD"
+```
+
+预期：
+
+- `PaymentEventInbox.event_type=payment.renewal_paid`。
+- 已付续费 order 经 `FulfillmentService` 执行新周期 entitlement 和 period credits；重复 webhook 不重复发放。
+- 首次订阅付款若同时收到 `checkout.completed` 和 `subscription.paid`，使用 checkout fulfillment 幂等键，不重复发放。
+
+本地模拟 grace 结束：
+
+> 注意：Creem 的 `subscription.expired` 可能在 paid period 结束时到达；Walnut 的 grace 从 `current_period_end_date` 开始计算。若在 grace 窗口内收到该事件，事件会 processed，但 access 继续有效直到 `subscription_grace.expires_at`。要验证主动过期，请把 `current_period_end_date` 设置为当前时间至少 `RENEWAL_GRACE_PERIOD_DAYS` 天以前，或等 grace 自然结束后 reprocess。
+
+```bash
+EXPIRED_PAYLOAD=$(cat <<JSON
+{"id":"evt_sub_expired_1","eventType":"subscription.expired","object":{"id":"sub_1","subscription":{"id":"sub_1","metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}},"current_period_start_date":"2026-07-12T10:00:00.000Z","current_period_end_date":"2026-08-12T10:00:00.000Z"}}
+JSON
+)
+SIG=$(printf '%s' "$EXPIRED_PAYLOAD" | openssl dgst -sha256 -hmac "$PAYMENT_CREEM_WEBHOOK_SECRET" -binary | xxd -p -c 256)
+curl -sS -X POST "$BASE_URL/api/v1/webhooks/creem" \
+  -H 'Content-Type: application/json' \
+  -H "creem-signature: $SIG" \
+  -d "$EXPIRED_PAYLOAD"
+```
+
+预期：
+
+- 默认 `RENEWAL_EXPIRED_ACTION=expire_grace` 只会把已到 `expires_at` 的相关 `subscription_grace` grant 标记为 expired；早到的 `subscription.expired` 不截断 grace。
+- 若配置 `RENEWAL_EXPIRED_ACTION=natural_expiry`，不主动改写 grant，等待 `expires_at` 自然失效。
+- PC/mobile 仍只通过 snapshot 看最终 entitlement 状态。
+
 ## Dispute / Chargeback 流程
 
 该流程验证 refund/dispute 能安全撤销履约、扣回 credits，并产生人工审核 checkout hold。
@@ -512,6 +590,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 - [ ] `FULFILLMENT_RULES_JSON` 已评审，或明确接受内置默认规则。
 - [ ] `CHECKOUT_RISK_POLICY_ENABLED=true`。
 - [ ] `ADJUSTMENT_REFUND_WINDOW_DAYS`、`ADJUSTMENT_*_ACTION` 和低使用阈值已按业务策略评审。
+- [ ] `RENEWAL_GRACE_PERIOD_DAYS` 与 `RENEWAL_EXPIRED_ACTION` 已按业务策略评审。
 - [ ] 公网 webhook endpoint 使用 TLS，并保持 raw request body 不被代理改写。
 - [ ] Creem dashboard webhook URL 指向 `/api/v1/webhooks/creem`。
 - [ ] 目标环境 happy path 与 dispute path 均通过。

@@ -73,6 +73,7 @@ type GrantInput struct {
 	EntitlementID  string
 	CreatedBy      string
 	Source         string
+	StartsAt       time.Time
 	ExpiresAt      *time.Time
 	IdempotencyKey string
 }
@@ -250,6 +251,7 @@ func (s *entitlementServiceImpl) CreateGrant(ctx context.Context, input GrantInp
 		EntitlementID:  entitlementID,
 		CreatedBy:      input.CreatedBy,
 		Source:         input.Source,
+		StartsAt:       input.StartsAt,
 		ExpiresAt:      input.ExpiresAt,
 		IdempotencyKey: idempotencyKey,
 	})
@@ -296,6 +298,10 @@ func createGrantWithRepos(
 	}
 
 	now := time.Now().UTC()
+	startsAt := now
+	if !input.StartsAt.IsZero() {
+		startsAt = input.StartsAt.UTC()
+	}
 	if idempotencyKey == "" {
 		existing, err := grants.ListByUser(ctx, userID)
 		if err != nil {
@@ -323,7 +329,7 @@ func createGrantWithRepos(
 		EntitlementID:  entitlementID,
 		Status:         domain.GrantStatusActive,
 		Source:         defaultString(strings.TrimSpace(input.Source), domain.GrantSourceManual),
-		StartsAt:       now,
+		StartsAt:       startsAt,
 		ExpiresAt:      input.ExpiresAt,
 		CreatedBy:      defaultString(strings.TrimSpace(input.CreatedBy), "admin"),
 		IdempotencyKey: idempotencyKeyPtr,

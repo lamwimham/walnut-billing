@@ -54,6 +54,15 @@ func buildPaymentAdjustmentPolicy(cfg *config.Config) service.PaymentAdjustmentP
 	return service.NewConfigurablePaymentAdjustmentPolicy(policyConfig)
 }
 
+func buildSubscriptionRenewalPolicy(cfg *config.Config) service.SubscriptionRenewalPolicy {
+	policyConfig := service.DefaultSubscriptionRenewalPolicyConfig()
+	if cfg != nil {
+		policyConfig.GracePeriodDays = cfg.Renewal.GracePeriodDays
+		policyConfig.ExpiredAction = cfg.Renewal.ExpiredAction
+	}
+	return service.NewConfigurableSubscriptionRenewalPolicy(policyConfig)
+}
+
 func main() {
 	// 0. Init Logger
 	cfg, err := config.Load()
@@ -247,8 +256,19 @@ func main() {
 		Policy:            buildPaymentAdjustmentPolicy(cfg),
 		UnitOfWorkFactory: uowFactory,
 	})
+	subscriptionRenewalSvc := service.NewSubscriptionRenewalService(service.SubscriptionRenewalDependencies{
+		Repositories: service.SubscriptionRenewalRepositories{
+			Orders:            orderRepo,
+			Users:             userRepo,
+			EntitlementGrants: grantRepo,
+		},
+		Fulfillment:        fulfillmentSvc,
+		Policy:             buildSubscriptionRenewalPolicy(cfg),
+		EntitlementCatalog: service.DefaultEntitlementCatalog(),
+		UnitOfWorkFactory:  uowFactory,
+	})
 	paymentOrderProcessor := service.NewPaymentOrderEventProcessor(orderRepo)
-	paymentEventProcessor := service.NewPaymentFulfillmentEventProcessorWithAdjustments(orderRepo, paymentOrderProcessor, fulfillmentSvc, paymentAdjustmentSvc)
+	paymentEventProcessor := service.NewPaymentFulfillmentEventProcessorWithPolicies(orderRepo, paymentOrderProcessor, fulfillmentSvc, paymentAdjustmentSvc, subscriptionRenewalSvc)
 	paymentEventSvc := service.NewPaymentEventService(paymentEventRepo, paymentSvc, paymentEventProcessor)
 
 	// 8. Init Handlers

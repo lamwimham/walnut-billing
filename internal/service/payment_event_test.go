@@ -295,6 +295,34 @@ func TestPaymentEventService_ProcessesDisputedEventType(t *testing.T) {
 	}
 }
 
+func TestPaymentEventService_ProcessesSubscriptionRenewalEventTypes(t *testing.T) {
+	for _, eventType := range []string{
+		domain.PaymentEventTypeRenewalPaid,
+		domain.PaymentEventTypeRenewalFailed,
+		domain.PaymentEventTypeSubscriptionExpired,
+	} {
+		t.Run(eventType, func(t *testing.T) {
+			repo := newMockPaymentEventRepo()
+			gateway := &mockWebhookGateway{event: &payment.VerifiedWebhookEvent{
+				ProviderEventID:   "evt_" + eventType,
+				EventType:         eventType,
+				OutTradeNo:        "RNL-1",
+				SignatureVerified: true,
+			}}
+			processor := &mockPaymentProcessor{}
+			svc := NewPaymentEventService(repo, gateway, processor)
+
+			result, err := svc.ReceiveWebhook(context.Background(), PaymentWebhookInput{Provider: "creem"})
+			if err != nil {
+				t.Fatalf("expected renewal event to process, got %v", err)
+			}
+			if !result.Processed || result.Event.EventType != eventType || processor.calls != 1 {
+				t.Fatalf("expected processed renewal event, result=%#v calls=%d", result, processor.calls)
+			}
+		})
+	}
+}
+
 func TestPaymentOrderEventProcessor_MarksOrderPaid(t *testing.T) {
 	orders := newMockTxOrderRepo()
 	orders.orders["CHK-1"] = &domain.Order{OutTradeNo: "CHK-1", Amount: 1900, Status: domain.OrderStatusCheckoutCreated}

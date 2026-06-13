@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/payment"
 	"walnut-billing/internal/repository"
@@ -185,6 +186,161 @@ func TestCommerceFlow_GormCheckoutWebhookSnapshotDisputeRiskHold(t *testing.T) {
 	}
 }
 
+func TestCommerceFlow_GormSubscriptionRenewalPaidCreatesNewPeriod(t *testing.T) {
+	ctx := context.Background()
+	db := openCommerceFlowTestDB(t)
+	repos := newCommerceFlowGormRepos(db)
+	if err := repos.users.Create(ctx, &domain.User{ID: "usr_renew_paid", Email: "renew-paid@example.com", Status: domain.UserStatusActive}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := repos.products.Create(ctx, &domain.Product{Code: "editorial_studio_monthly", Name: "Editorial Studio", Price: 1900, Currency: "USD", Validity: "monthly", IsVisible: true}); err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	paymentSvc := newCommerceFlowPaymentService(t, "http://127.0.0.1", repos.orders)
+	fulfillmentSvc, eventSvc, entitlementSvc := newCommerceFlowRenewalServices(t, db, repos, paymentSvc)
+
+	paidAt := time.Now().UTC().AddDate(0, -1, 0).Add(-time.Hour)
+	initial := &domain.Order{
+		OutTradeNo: "CHK-GORM-RENEW-PAID",
+		UserID:     "usr_renew_paid",
+		SKUCode:    "editorial_studio_monthly",
+		Amount:     1900,
+		Currency:   "USD",
+		Status:     domain.OrderStatusPaid,
+		OrderType:  domain.OrderTypeCheckout,
+		PaidAt:     &paidAt,
+	}
+	if err := repos.orders.Create(ctx, initial); err != nil {
+		t.Fatalf("create initial order: %v", err)
+	}
+	if _, err := fulfillmentSvc.FulfillOrder(ctx, initial); err != nil {
+		t.Fatalf("initial fulfillment: %v", err)
+	}
+	initialExpiry := paidAt.AddDate(0, 1, 0)
+	renewalEnd := initialExpiry.AddDate(0, 1, 0)
+
+	payload := creemSubscriptionWebhookPayload(initial.OutTradeNo, "evt_gorm_subscription_paid_1", "subscription.paid", initialExpiry, renewalEnd)
+	paid, err := eventSvc.ReceiveWebhook(ctx, PaymentWebhookInput{
+		Provider:   "creem",
+		Headers:    map[string]string{"creem-signature": creemIntegrationSignature(payload, "whsec_test")},
+		RawPayload: payload,
+	})
+	if err != nil {
+		t.Fatalf("renewal paid webhook: %v", err)
+	}
+	if !paid.Processed || paid.Event.EventType != domain.PaymentEventTypeRenewalPaid {
+		t.Fatalf("expected renewal paid event, got %#v", paid)
+	}
+	assertCommerceFlowCounts(t, db, 2, 2, 4)
+	snapshot, err := entitlementSvc.SnapshotForUser(ctx, "usr_renew_paid")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if !snapshot.Entitlements[domain.EntitlementEditorialStudio] || snapshot.Credits[domain.CreditMetricBalance] != 1200 {
+		t.Fatalf("expected renewed entitlement and second period credits, got %#v", snapshot)
+	}
+}
+
+func TestCommerceFlow_GormSubscriptionRenewalFailedGraceAndExpired(t *testing.T) {
+	ctx := context.Background()
+	db := openCommerceFlowTestDB(t)
+	repos := newCommerceFlowGormRepos(db)
+	if err := repos.users.Create(ctx, &domain.User{ID: "usr_renew_grace", Email: "renew-grace@example.com", Status: domain.UserStatusActive}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := repos.products.Create(ctx, &domain.Product{Code: "editorial_studio_monthly", Name: "Editorial Studio", Price: 1900, Currency: "USD", Validity: "monthly", IsVisible: true}); err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	paymentSvc := newCommerceFlowPaymentService(t, "http://127.0.0.1", repos.orders)
+	fulfillmentSvc, eventSvc, entitlementSvc := newCommerceFlowRenewalServices(t, db, repos, paymentSvc)
+
+	paidAt := time.Now().UTC().AddDate(0, -1, 0).Add(-time.Hour)
+	initial := &domain.Order{
+		OutTradeNo: "CHK-GORM-RENEW-GRACE",
+		UserID:     "usr_renew_grace",
+		SKUCode:    "editorial_studio_monthly",
+		Amount:     1900,
+		Currency:   "USD",
+		Status:     domain.OrderStatusPaid,
+		OrderType:  domain.OrderTypeCheckout,
+		PaidAt:     &paidAt,
+	}
+	if err := repos.orders.Create(ctx, initial); err != nil {
+		t.Fatalf("create initial order: %v", err)
+	}
+	if _, err := fulfillmentSvc.FulfillOrder(ctx, initial); err != nil {
+		t.Fatalf("initial fulfillment: %v", err)
+	}
+	initialExpiry := paidAt.AddDate(0, 1, 0)
+	graceEnd := initialExpiry.AddDate(0, 0, domain.GracePeriodDays)
+
+	pastDuePayload := creemSubscriptionWebhookPayload(initial.OutTradeNo, "evt_gorm_subscription_past_due_1", "subscription.past_due", paidAt, initialExpiry)
+	failed, err := eventSvc.ReceiveWebhook(ctx, PaymentWebhookInput{
+		Provider:   "creem",
+		Headers:    map[string]string{"creem-signature": creemIntegrationSignature(pastDuePayload, "whsec_test")},
+		RawPayload: pastDuePayload,
+	})
+	if err != nil {
+		t.Fatalf("renewal failed webhook: %v", err)
+	}
+	if !failed.Processed || failed.Event.EventType != domain.PaymentEventTypeRenewalFailed {
+		t.Fatalf("expected renewal failed event, got %#v", failed)
+	}
+	assertCommerceFlowCounts(t, db, 2, 1, 2)
+	snapshot, err := entitlementSvc.SnapshotForUser(ctx, "usr_renew_grace")
+	if err != nil {
+		t.Fatalf("snapshot during grace: %v", err)
+	}
+	if !snapshot.Entitlements[domain.EntitlementEditorialStudio] || snapshot.Credits[domain.CreditMetricBalance] != 600 {
+		t.Fatalf("expected grace access without new credits, got %#v", snapshot)
+	}
+
+	earlyExpiredPayload := creemSubscriptionWebhookPayload(initial.OutTradeNo, "evt_gorm_subscription_expired_early_1", "subscription.expired", initialExpiry, initialExpiry)
+	earlyExpired, err := eventSvc.ReceiveWebhook(ctx, PaymentWebhookInput{
+		Provider:   "creem",
+		Headers:    map[string]string{"creem-signature": creemIntegrationSignature(earlyExpiredPayload, "whsec_test")},
+		RawPayload: earlyExpiredPayload,
+	})
+	if err != nil {
+		t.Fatalf("early subscription expired webhook: %v", err)
+	}
+	if !earlyExpired.Processed || earlyExpired.Event.EventType != domain.PaymentEventTypeSubscriptionExpired {
+		t.Fatalf("expected early subscription expired event, got %#v", earlyExpired)
+	}
+	duringGraceAfterExpired, err := entitlementSvc.SnapshotForUser(ctx, "usr_renew_grace")
+	if err != nil {
+		t.Fatalf("snapshot during grace after expired: %v", err)
+	}
+	if !duringGraceAfterExpired.Entitlements[domain.EntitlementEditorialStudio] || duringGraceAfterExpired.Credits[domain.CreditMetricBalance] != 600 {
+		t.Fatalf("expected early subscription.expired to preserve grace access, got %#v", duringGraceAfterExpired)
+	}
+
+	expiredPayload := creemSubscriptionWebhookPayload(initial.OutTradeNo, "evt_gorm_subscription_expired_1", "subscription.expired", paidAt, initialExpiry)
+	expiredEvent := mustPaymentEventFromWebhookPayload(t, paymentSvc, expiredPayload)
+	expiredEvent.ID = "pev_gorm_subscription_expired_1"
+	expiredEvent.Provider = "creem"
+	expiredEvent.ReceivedAt = graceEnd.Add(time.Second)
+	expiredEvent.CreatedAt = expiredEvent.ReceivedAt
+	expiredEvent.UpdatedAt = expiredEvent.ReceivedAt
+	if err := repos.events.Create(ctx, expiredEvent); err != nil {
+		t.Fatalf("create delayed expired event: %v", err)
+	}
+	expired, err := eventSvc.Process(ctx, expiredEvent.ID)
+	if err != nil {
+		t.Fatalf("process delayed subscription expired event: %v", err)
+	}
+	if !expired.Processed || expired.Event.EventType != domain.PaymentEventTypeSubscriptionExpired {
+		t.Fatalf("expected delayed subscription expired event, got %#v", expired)
+	}
+	afterExpired, err := entitlementSvc.SnapshotForUser(ctx, "usr_renew_grace")
+	if err != nil {
+		t.Fatalf("snapshot after expired: %v", err)
+	}
+	if afterExpired.Entitlements[domain.EntitlementEditorialStudio] || afterExpired.Credits[domain.CreditMetricBalance] != 600 {
+		t.Fatalf("expected grace access expired without credit clawback, got %#v", afterExpired)
+	}
+}
+
 type commerceFlowGormRepos struct {
 	orders        *gorm_repo.OrderRepo
 	products      *gorm_repo.ProductRepo
@@ -251,6 +407,91 @@ func newCommerceFlowPaymentService(t *testing.T, creemBaseURL string, orders rep
 	registry := payment.NewProviderRegistry()
 	registry.Register("creem", creemAdapter, payment.ProviderStatus{SandboxMode: true})
 	return payment.NewPaymentService(orders, nil, registry)
+}
+
+func newCommerceFlowRenewalServices(
+	t *testing.T,
+	db *gorm.DB,
+	repos commerceFlowGormRepos,
+	paymentSvc *payment.PaymentService,
+) (FulfillmentService, PaymentEventService, EntitlementService) {
+	t.Helper()
+	fulfillmentCatalog, err := NewStaticFulfillmentCatalog(editorialStudioFulfillmentRules()...)
+	if err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
+	uowFactory := func() repository.UnitOfWork { return gorm_repo.NewUnitOfWork(db) }
+	fulfillmentSvc := NewFulfillmentService(FulfillmentDependencies{
+		Repositories: FulfillmentRepositories{
+			Orders:                repos.orders,
+			Users:                 repos.users,
+			EntitlementGrants:     repos.grants,
+			CreditAccounts:        repos.accounts,
+			CreditTransactions:    repos.transactions,
+			FulfillmentExecutions: repos.executions,
+		},
+		Catalog:            fulfillmentCatalog,
+		EntitlementCatalog: DefaultEntitlementCatalog(),
+		UnitOfWorkFactory:  uowFactory,
+	})
+	renewalSvc := NewSubscriptionRenewalService(SubscriptionRenewalDependencies{
+		Repositories: SubscriptionRenewalRepositories{
+			Orders:            repos.orders,
+			Users:             repos.users,
+			EntitlementGrants: repos.grants,
+		},
+		Fulfillment:        fulfillmentSvc,
+		EntitlementCatalog: DefaultEntitlementCatalog(),
+		UnitOfWorkFactory:  uowFactory,
+	})
+	eventSvc := NewPaymentEventService(
+		repos.events,
+		paymentSvc,
+		NewPaymentFulfillmentEventProcessorWithPolicies(repos.orders, NewPaymentOrderEventProcessor(repos.orders), fulfillmentSvc, nil, renewalSvc),
+	)
+	entitlementSvc := NewEntitlementServiceWithCredits(repos.users, repos.registrations, repos.grants, repos.accounts, DefaultEntitlementCatalog())
+	return fulfillmentSvc, eventSvc, entitlementSvc
+}
+
+func creemSubscriptionWebhookPayload(outTradeNo string, eventID string, eventType string, periodStart time.Time, periodEnd time.Time) []byte {
+	return []byte(fmt.Sprintf(
+		`{"id":"%s","eventType":"%s","object":{"id":"sub_1","subscription":{"id":"sub_1","metadata":{"walnut_out_trade_no":"%s"}},"order":{"id":"ord_%s","amount":1900,"currency":"USD"},"current_period_start_date":"%s","current_period_end_date":"%s"}}`,
+		eventID,
+		eventType,
+		outTradeNo,
+		eventID,
+		periodStart.UTC().Format(time.RFC3339Nano),
+		periodEnd.UTC().Format(time.RFC3339Nano),
+	))
+}
+
+func mustPaymentEventFromWebhookPayload(t *testing.T, paymentSvc PaymentWebhookGateway, payload []byte) *domain.PaymentEventInbox {
+	t.Helper()
+	verified, err := paymentSvc.VerifyWebhookEvent(context.Background(), "creem", payment.WebhookVerificationRequest{
+		Headers:    map[string]string{"creem-signature": creemIntegrationSignature(payload, "whsec_test")},
+		RawPayload: payload,
+	})
+	if err != nil {
+		t.Fatalf("verify webhook payload: %v", err)
+	}
+	now := time.Now().UTC()
+	return &domain.PaymentEventInbox{
+		ProviderEventID:   verified.ProviderEventID,
+		EventType:         verified.EventType,
+		OutTradeNo:        verified.OutTradeNo,
+		ProviderTradeNo:   verified.ProviderTradeNo,
+		Amount:            verified.Amount,
+		Currency:          verified.Currency,
+		PeriodStartAt:     verified.PeriodStartAt,
+		PeriodEndAt:       verified.PeriodEndAt,
+		SignatureVerified: verified.SignatureVerified,
+		RawPayload:        string(payload),
+		PayloadHash:       payloadHash(string(payload)),
+		Status:            domain.PaymentEventStatusReceived,
+		ReceivedAt:        now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
 }
 
 func assertCommerceFlowCounts(t *testing.T, db *gorm.DB, wantGrants int64, wantCreditTransactions int64, wantExecutions int64) {

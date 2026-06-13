@@ -183,6 +183,8 @@ func (c *CreemAdapter) VerifyWebhookEvent(ctx context.Context, req WebhookVerifi
 		ProviderTradeNo:   creemProviderTradeNo(payload),
 		Amount:            creemAmount(payload),
 		Currency:          creemCurrency(payload),
+		PeriodStartAt:     creemPeriodTime(payload, "current_period_start_date", "period_start"),
+		PeriodEndAt:       creemPeriodTime(payload, "current_period_end_date", "period_end"),
 		SignatureVerified: true,
 		RawPayload:        string(req.RawPayload),
 	}, nil
@@ -348,7 +350,15 @@ func mapCreemEventType(eventType string, payload map[string]any) string {
 		}
 	case "subscription.paid":
 		if creemOutTradeNo(payload) != "" {
-			return domain.PaymentEventTypePaid
+			return domain.PaymentEventTypeRenewalPaid
+		}
+	case "subscription.past_due":
+		if creemOutTradeNo(payload) != "" {
+			return domain.PaymentEventTypeRenewalFailed
+		}
+	case "subscription.expired":
+		if creemOutTradeNo(payload) != "" {
+			return domain.PaymentEventTypeSubscriptionExpired
 		}
 	}
 	return strings.TrimSpace(eventType)
@@ -402,6 +412,42 @@ func creemCurrency(payload map[string]any) string {
 		stringAt(payload, "object", "currency"),
 		stringAt(payload, "object", "product", "currency"),
 	)
+}
+
+func creemPeriodTime(payload map[string]any, subscriptionField string, transactionField string) *time.Time {
+	if value := stringAt(payload, "object", subscriptionField); value != "" {
+		return parseCreemTime(value)
+	}
+	if value := stringAt(payload, "object", "subscription", subscriptionField); value != "" {
+		return parseCreemTime(value)
+	}
+	if value := intAt(payload, "object", transactionField); value > 0 {
+		return creemUnixMillis(value)
+	}
+	if value := intAt(payload, "object", "order", transactionField); value > 0 {
+		return creemUnixMillis(value)
+	}
+	return nil
+}
+
+func parseCreemTime(value string) *time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		utc := parsed.UTC()
+		return &utc
+	}
+	return nil
+}
+
+func creemUnixMillis(value int64) *time.Time {
+	if value <= 0 {
+		return nil
+	}
+	parsed := time.UnixMilli(value).UTC()
+	return &parsed
 }
 
 func stringAt(value any, path ...string) string {

@@ -28,16 +28,16 @@ func (p *PaymentOrderEventProcessor) ProcessPaymentEvent(ctx context.Context, ev
 	if err != nil {
 		return fmt.Errorf("order %q not found: %w", event.OutTradeNo, err)
 	}
-	if event.EventType == domain.PaymentEventTypePaid && event.Amount > 0 && order.Amount > 0 && event.Amount != order.Amount {
+	if isPaymentPaidEvent(event.EventType) && event.Amount > 0 && order.Amount > 0 && event.Amount != order.Amount {
 		return fmt.Errorf("payment amount mismatch: order=%d event=%d", order.Amount, event.Amount)
 	}
-	if event.EventType == domain.PaymentEventTypePaid && !paymentCurrencyMatches(order.Currency, event.Currency) {
+	if isPaymentPaidEvent(event.EventType) && !paymentCurrencyMatches(order.Currency, event.Currency) {
 		return fmt.Errorf("payment currency mismatch: order=%s event=%s", order.Currency, event.Currency)
 	}
 
 	now := time.Now().UTC()
 	switch event.EventType {
-	case domain.PaymentEventTypePaid:
+	case domain.PaymentEventTypePaid, domain.PaymentEventTypeRenewalPaid:
 		if order.Status == domain.OrderStatusPaid || order.Status == domain.OrderStatusFulfilled {
 			return nil
 		}
@@ -54,10 +54,23 @@ func (p *PaymentOrderEventProcessor) ProcessPaymentEvent(ctx context.Context, ev
 		order.Status = domain.OrderStatusCancelled
 	case domain.PaymentEventTypeRefunded, domain.PaymentEventTypeDisputed:
 		order.Status = domain.OrderStatusRefunded
+	case domain.PaymentEventTypeRenewalFailed:
+		if order.Status == domain.OrderStatusPaid || order.Status == domain.OrderStatusFulfilled {
+			return nil
+		}
+		order.Status = domain.OrderStatusFailed
+	case domain.PaymentEventTypeSubscriptionExpired:
+		if order.Status == domain.OrderStatusPending || order.Status == domain.OrderStatusCheckoutCreated {
+			order.Status = domain.OrderStatusFailed
+		}
 	default:
 		return ErrPaymentEventNotProcessable
 	}
 	return p.orders.Update(ctx, order)
+}
+
+func isPaymentPaidEvent(eventType string) bool {
+	return eventType == domain.PaymentEventTypePaid || eventType == domain.PaymentEventTypeRenewalPaid
 }
 
 func paymentCurrencyMatches(orderCurrency string, eventCurrency string) bool {

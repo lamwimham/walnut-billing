@@ -82,10 +82,13 @@ const (
 )
 
 const (
-	PaymentEventTypePaid      = "payment.paid"
-	PaymentEventTypeCancelled = "payment.cancelled"
-	PaymentEventTypeRefunded  = "payment.refunded"
-	PaymentEventTypeDisputed  = "payment.disputed"
+	PaymentEventTypePaid                = "payment.paid"
+	PaymentEventTypeCancelled           = "payment.cancelled"
+	PaymentEventTypeRefunded            = "payment.refunded"
+	PaymentEventTypeDisputed            = "payment.disputed"
+	PaymentEventTypeRenewalPaid         = "payment.renewal_paid"
+	PaymentEventTypeRenewalFailed       = "payment.renewal_failed"
+	PaymentEventTypeSubscriptionExpired = "payment.subscription_expired"
 )
 
 const (
@@ -111,6 +114,8 @@ type PaymentEventInbox struct {
 	ProviderTradeNo   string     `json:"provider_trade_no" gorm:"size:128;index"`
 	Amount            int64      `json:"amount"`
 	Currency          string     `json:"currency" gorm:"size:8"`
+	PeriodStartAt     *time.Time `json:"period_start_at" gorm:"index"`
+	PeriodEndAt       *time.Time `json:"period_end_at" gorm:"index"`
 	SignatureVerified bool       `json:"signature_verified" gorm:"default:false"`
 	PayloadHash       string     `json:"payload_hash" gorm:"size:64"`
 	RawPayload        string     `json:"raw_payload" gorm:"type:text"`
@@ -187,8 +192,9 @@ const (
 	GrantStatusRevoked = "revoked"
 	GrantStatusExpired = "expired"
 
-	GrantSourceManual      = "manual"
-	GrantSourceFulfillment = "fulfillment"
+	GrantSourceManual            = "manual"
+	GrantSourceFulfillment       = "fulfillment"
+	GrantSourceSubscriptionGrace = "subscription_grace"
 
 	EntitlementEditorialStudio = "editorial.studio"
 )

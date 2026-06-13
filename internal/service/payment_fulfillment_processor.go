@@ -14,6 +14,7 @@ type PaymentFulfillmentEventProcessor struct {
 	orderEvents PaymentEventProcessor
 	fulfillment FulfillmentService
 	adjustment  PaymentAdjustmentService
+	renewal     SubscriptionRenewalService
 }
 
 func NewPaymentFulfillmentEventProcessor(
@@ -30,18 +31,38 @@ func NewPaymentFulfillmentEventProcessorWithAdjustments(
 	fulfillment FulfillmentService,
 	adjustment PaymentAdjustmentService,
 ) *PaymentFulfillmentEventProcessor {
-	return &PaymentFulfillmentEventProcessor{orders: orders, orderEvents: orderEvents, fulfillment: fulfillment, adjustment: adjustment}
+	return NewPaymentFulfillmentEventProcessorWithPolicies(orders, orderEvents, fulfillment, adjustment, nil)
+}
+
+func NewPaymentFulfillmentEventProcessorWithPolicies(
+	orders repository.OrderRepository,
+	orderEvents PaymentEventProcessor,
+	fulfillment FulfillmentService,
+	adjustment PaymentAdjustmentService,
+	renewal SubscriptionRenewalService,
+) *PaymentFulfillmentEventProcessor {
+	return &PaymentFulfillmentEventProcessor{orders: orders, orderEvents: orderEvents, fulfillment: fulfillment, adjustment: adjustment, renewal: renewal}
 }
 
 func (p *PaymentFulfillmentEventProcessor) ProcessPaymentEvent(ctx context.Context, event *domain.PaymentEventInbox) error {
-	if p == nil || p.orderEvents == nil {
+	if p == nil {
+		return ErrPaymentEventNotProcessable
+	}
+	if event == nil {
+		return nil
+	}
+	if isSubscriptionRenewalEventType(event.EventType) {
+		if p.renewal == nil {
+			return ErrPaymentEventNotProcessable
+		}
+		_, err := p.renewal.Apply(ctx, event)
+		return err
+	}
+	if p.orderEvents == nil {
 		return ErrPaymentEventNotProcessable
 	}
 	if err := p.orderEvents.ProcessPaymentEvent(ctx, event); err != nil {
 		return err
-	}
-	if event == nil {
-		return nil
 	}
 	if event.EventType == domain.PaymentEventTypeRefunded || event.EventType == domain.PaymentEventTypeCancelled || event.EventType == domain.PaymentEventTypeDisputed {
 		if p.adjustment == nil {
