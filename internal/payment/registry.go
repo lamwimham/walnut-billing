@@ -47,7 +47,7 @@ func (r *ProviderRegistry) Get(name string) (PaymentProvider, error) {
 	defer r.mu.RUnlock()
 	provider, ok := r.providers[name]
 	if !ok {
-		return nil, fmt.Errorf("payment provider %q not found", name)
+		return nil, fmt.Errorf("%w: %q", ErrProviderNotFound, name)
 	}
 	return provider, nil
 }

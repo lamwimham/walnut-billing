@@ -16,6 +16,8 @@ var (
 	ErrInvalidPaymentEvent        = errors.New("invalid payment event")
 	ErrPaymentEventNotFound       = errors.New("payment event not found")
 	ErrPaymentEventNotProcessable = errors.New("payment event is not processable")
+	ErrPaymentAmountMismatch      = errors.New("payment amount mismatch")
+	ErrPaymentCurrencyMismatch    = errors.New("payment currency mismatch")
 )
 
 // PaymentWebhookGateway is the narrow payment-provider boundary consumed by the

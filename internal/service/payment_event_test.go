@@ -370,7 +370,7 @@ func TestPaymentOrderEventProcessor_RejectsAmountMismatch(t *testing.T) {
 		OutTradeNo: "CHK-1",
 		Amount:     1800,
 	})
-	if err == nil {
-		t.Fatalf("expected amount mismatch")
+	if !errors.Is(err, ErrPaymentAmountMismatch) {
+		t.Fatalf("expected amount mismatch, got %v", err)
 	}
 }

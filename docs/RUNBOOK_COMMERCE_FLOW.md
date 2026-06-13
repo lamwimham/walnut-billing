@@ -565,6 +565,37 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 - `review_required` / `policy_rejected` 是 Walnut policy decision，不是 provider 处理失败；webhook 响应会保持 accepted，避免 Creem 因业务人工审核反复重投。
 - `PaymentAdjustmentPolicy` 只根据 Walnut 订单、履约记录和 credits ledger 做决策；Creem adapter 只归一化支付事实，不承载退款业务规则。
 
+
+## 可观测性与告警
+
+生产环境至少需要采集 `/metrics` 与结构化日志。商业化链路通过 service decorator 统一观测，provider adapter、handler 和 PC/mobile 不直接写业务指标，避免 Creem 或未来渠道反向污染 Walnut 门禁模型。
+
+关键日志事件：
+
+| 事件 | 关键字段 | 用途 |
+|---|---|---|
+| `commerce_checkout_observed` | `provider`、`sku_code`、`user_id`、`out_trade_no`、`status`、`error_kind`、`policy_reason`、`policy_action` | 定位 checkout 创建失败、provider timeout、risk hold |
+| `payment_event_observed` | `operation`、`provider`、`provider_event_id`、`event_type`、`out_trade_no`、`inbox_status`、`attempts`、`error_kind` | 定位 webhook 验签、幂等、处理失败与 reprocess |
+| `commerce_fulfillment_observed` | `out_trade_no`、`user_id`、`sku_code`、`order_type`、`status`、`execution_count`、`error_kind` | 定位 paid 后未履约、重复履约保护 |
+| `payment_adjustment_observed` | `provider`、`provider_event_id`、`event_type`、`out_trade_no`、`status`、`policy_action`、`policy_reason`、`risk_flag_created` | 定位 refund/dispute/cancel 策略和风险标记 |
+
+关键 metrics：
+
+| Metric | 关注点 | 建议告警 |
+|---|---|---|
+| `payment_events_total{status="failed"}` | webhook 处理失败 | 5 分钟内持续增长时排查 provider payload、order 映射或履约依赖 |
+| `payment_events_total{error_kind="signature_verification_failed"}` | webhook 验签失败 | 任意突增都检查 Creem webhook secret、代理是否改写 raw body |
+| `payment_events_total{error_kind="amount_mismatch"}` / `currency_mismatch` | 金额/币种不匹配 | 按高风险处理，不手工强制 paid；核对 SKU/product map |
+| `fulfillments_total{status="failed"}` | 履约失败 | 修复 rule/repository 后通过 admin reprocess 恢复 |
+| `checkout_policy_blocks_total` | risk hold 数量 | 突增时检查 dispute 来源和误伤，必要时运营 review/resolve |
+| `payment_adjustments_total{status="review_required"}` | 退款人工审核积压 | 排队处理，确认后调整 policy 或 reprocess |
+
+日志安全约束：
+
+- 不记录 raw webhook payload、完整 headers、API key、webhook secret、checkout URL token。
+- 指标 label 只使用低基数字段：provider、event_type、status、sku_code、order_type、policy_action、error_kind；`user_id`、`out_trade_no`、`provider_event_id` 只进入日志。
+- 签名失败事件可能不会入 inbox，但会产生 `payment_event_observed`，用于定位 provider secret / proxy 问题。
+
 ## 排障矩阵
 
 | 现象 | 可能原因 | 检查 | 处理 |

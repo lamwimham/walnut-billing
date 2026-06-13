@@ -17,6 +17,7 @@ import (
 	"walnut-billing/internal/generator"
 	"walnut-billing/internal/logger"
 	"walnut-billing/internal/metrics"
+	"walnut-billing/internal/observability"
 	"walnut-billing/internal/payment"
 	"walnut-billing/internal/repository"
 	gorm_repo "walnut-billing/internal/repository/gorm_repo"
@@ -228,9 +229,11 @@ func main() {
 	}
 
 	paymentSvc := payment.NewPaymentService(orderRepo, licRepo, registry)
+	commerceObserver := observability.NewCommerceObserver(l)
 	checkoutPolicies := buildCheckoutPolicies(cfg, paymentRiskFlagRepo)
-	checkoutSvc := service.NewCheckoutServiceWithPolicies(orderRepo, productRepo, userRepo, paymentSvc, checkoutPolicies...)
-	fulfillmentSvc := service.NewFulfillmentService(service.FulfillmentDependencies{
+	var checkoutSvc service.CheckoutService = service.NewCheckoutServiceWithPolicies(orderRepo, productRepo, userRepo, paymentSvc, checkoutPolicies...)
+	checkoutSvc = service.NewObservedCheckoutService(checkoutSvc, commerceObserver)
+	var fulfillmentSvc service.FulfillmentService = service.NewFulfillmentService(service.FulfillmentDependencies{
 		Repositories: service.FulfillmentRepositories{
 			Orders:                orderRepo,
 			Users:                 userRepo,
@@ -243,8 +246,9 @@ func main() {
 		EntitlementCatalog: service.DefaultEntitlementCatalog(),
 		UnitOfWorkFactory:  uowFactory,
 	})
+	fulfillmentSvc = service.NewObservedFulfillmentService(fulfillmentSvc, commerceObserver)
 	paymentRiskSvc := service.NewPaymentRiskService(paymentRiskFlagRepo)
-	paymentAdjustmentSvc := service.NewPaymentAdjustmentService(service.PaymentAdjustmentDependencies{
+	var paymentAdjustmentSvc service.PaymentAdjustmentService = service.NewPaymentAdjustmentService(service.PaymentAdjustmentDependencies{
 		Repositories: service.PaymentAdjustmentRepositories{
 			Orders:                orderRepo,
 			EntitlementGrants:     grantRepo,
@@ -256,6 +260,7 @@ func main() {
 		Policy:            buildPaymentAdjustmentPolicy(cfg),
 		UnitOfWorkFactory: uowFactory,
 	})
+	paymentAdjustmentSvc = service.NewObservedPaymentAdjustmentService(paymentAdjustmentSvc, commerceObserver)
 	subscriptionRenewalSvc := service.NewSubscriptionRenewalService(service.SubscriptionRenewalDependencies{
 		Repositories: service.SubscriptionRenewalRepositories{
 			Orders:            orderRepo,
@@ -269,7 +274,8 @@ func main() {
 	})
 	paymentOrderProcessor := service.NewPaymentOrderEventProcessor(orderRepo)
 	paymentEventProcessor := service.NewPaymentFulfillmentEventProcessorWithPolicies(orderRepo, paymentOrderProcessor, fulfillmentSvc, paymentAdjustmentSvc, subscriptionRenewalSvc)
-	paymentEventSvc := service.NewPaymentEventService(paymentEventRepo, paymentSvc, paymentEventProcessor)
+	var paymentEventSvc service.PaymentEventService = service.NewPaymentEventService(paymentEventRepo, paymentSvc, paymentEventProcessor)
+	paymentEventSvc = service.NewObservedPaymentEventService(paymentEventSvc, commerceObserver)
 
 	// 8. Init Handlers
 	authHandler := handler.NewAuthHandler(licSvc, auditSvc)

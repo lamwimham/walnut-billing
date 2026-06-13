@@ -2,7 +2,17 @@ package payment
 
 import (
 	"context"
+	"errors"
 	"time"
+)
+
+var (
+	// ErrProviderNotFound marks a missing payment provider without exposing registry internals.
+	ErrProviderNotFound = errors.New("payment provider not found")
+	// ErrWebhookInvalidPayload marks provider webhook payloads that cannot be trusted or normalized.
+	ErrWebhookInvalidPayload = errors.New("webhook invalid payload")
+	// ErrWebhookSignatureVerificationFailed marks provider webhook signature failures.
+	ErrWebhookSignatureVerificationFailed = errors.New("webhook signature verification failed")
 )
 
 // PaymentProvider defines the interface for payment gateway adapters.

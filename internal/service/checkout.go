@@ -166,7 +166,7 @@ func (s *checkoutServiceImpl) CreateCheckoutSession(ctx context.Context, input C
 	if err != nil {
 		order.Status = domain.OrderStatusFailed
 		_ = s.orders.Update(ctx, order)
-		return nil, fmt.Errorf("%w: %v", ErrCheckoutProviderFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrCheckoutProviderFailed, err)
 	}
 
 	order.Status = defaultString(strings.TrimSpace(session.Status), domain.OrderStatusCheckoutCreated)

@@ -696,6 +696,31 @@ git diff --check
 rg -n "creem|Creem|PaymentRiskFlag|payment\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy|PaymentAdjustmentPolicy|policy_rejected|renewal_failed|subscription_expired|SubscriptionRenewalPolicy|subscription_grace" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true
 ```
 
+
+### M6-M P2 已完成：Commerce observability / ops hardening baseline
+
+本轮把可观测性作为 provider-agnostic 横切能力接入，而不是把日志/指标散落在 Creem adapter、handler 或履约实现内部。实现采用 `Observer + Decorator`：核心 service 继续专注业务编排，observability package 负责把稳定的 Walnut 事件转换为结构化日志和 Prometheus metrics。
+
+已完成：
+
+- 新增 `CheckoutObserver`、`PaymentEventObserver`、`FulfillmentObserver`、`PaymentAdjustmentObserver` 接口与对应 service decorator。
+- 新增 `observability.CommerceObserver`，统一记录 checkout、webhook receive/reprocess、fulfillment、adjustment 的结构化日志。
+- 新增 Prometheus 指标：`commerce_checkouts_total`、`checkout_policy_blocks_total`、`payment_events_total`、`fulfillments_total`、`payment_adjustments_total` 及对应 duration histogram。
+- 指标 label 保持低基数；`user_id`、`out_trade_no`、`provider_event_id` 仅进入日志，不进入 metrics label。
+- 明确错误分类：risk hold、签名失败、amount/currency mismatch、provider timeout、policy review/rejected、fulfillment rule 缺失等。
+- `cmd/server` 通过 DI 包装 checkout、payment event、fulfillment、adjustment service；PC/mobile 和 provider adapter 均不感知 observability 实现。
+- README / runbook 同步 metrics、告警建议、admin reprocess 恢复路径与日志安全约束。
+
+验证：
+
+```bash
+go test ./internal/service -run 'TestObserved' -v
+go test ./internal/service ./internal/metrics ./internal/observability
+go test ./...
+git diff --check
+rg -n "creem|Creem|PaymentRiskFlag|payment\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy|PaymentAdjustmentPolicy|policy_rejected|renewal_failed|subscription_expired|SubscriptionRenewalPolicy|subscription_grace|payment_events_total|checkout_policy_blocks_total" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true
+```
+
 ## 测试策略
 
 - Unit tests：catalog rule 解析、provider adapter、event mapper、fulfillment rule executor。

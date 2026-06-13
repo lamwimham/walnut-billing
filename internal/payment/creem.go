@@ -159,21 +159,21 @@ func (c *CreemAdapter) VerifyCallback(ctx context.Context, params map[string]str
 
 func (c *CreemAdapter) VerifyWebhookEvent(ctx context.Context, req WebhookVerificationRequest) (*VerifiedWebhookEvent, error) {
 	if c == nil || strings.TrimSpace(c.webhookSecret) == "" || len(req.RawPayload) == 0 {
-		return nil, ErrCreemInvalidWebhook
+		return nil, fmt.Errorf("%w: %w", ErrWebhookInvalidPayload, ErrCreemInvalidWebhook)
 	}
 	signature := headerValue(req.Headers, "creem-signature")
 	if signature == "" || !verifyCreemSignature(req.RawPayload, c.webhookSecret, signature) {
-		return nil, ErrCreemWebhookUnverified
+		return nil, fmt.Errorf("%w: %w", ErrWebhookSignatureVerificationFailed, ErrCreemWebhookUnverified)
 	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(req.RawPayload, &payload); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCreemInvalidWebhook, err)
+		return nil, fmt.Errorf("%w: %w", ErrWebhookInvalidPayload, fmt.Errorf("%w: %v", ErrCreemInvalidWebhook, err))
 	}
 	eventID := stringAt(payload, "id")
 	eventType := stringAt(payload, "eventType")
 	if eventID == "" || eventType == "" {
-		return nil, ErrCreemInvalidWebhook
+		return nil, fmt.Errorf("%w: %w", ErrWebhookInvalidPayload, ErrCreemInvalidWebhook)
 	}
 
 	return &VerifiedWebhookEvent{

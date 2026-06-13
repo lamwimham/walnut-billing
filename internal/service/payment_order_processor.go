@@ -29,10 +29,10 @@ func (p *PaymentOrderEventProcessor) ProcessPaymentEvent(ctx context.Context, ev
 		return fmt.Errorf("order %q not found: %w", event.OutTradeNo, err)
 	}
 	if isPaymentPaidEvent(event.EventType) && event.Amount > 0 && order.Amount > 0 && event.Amount != order.Amount {
-		return fmt.Errorf("payment amount mismatch: order=%d event=%d", order.Amount, event.Amount)
+		return fmt.Errorf("%w: order=%d event=%d", ErrPaymentAmountMismatch, order.Amount, event.Amount)
 	}
 	if isPaymentPaidEvent(event.EventType) && !paymentCurrencyMatches(order.Currency, event.Currency) {
-		return fmt.Errorf("payment currency mismatch: order=%s event=%s", order.Currency, event.Currency)
+		return fmt.Errorf("%w: order=%s event=%s", ErrPaymentCurrencyMismatch, order.Currency, event.Currency)
 	}
 
 	now := time.Now().UTC()

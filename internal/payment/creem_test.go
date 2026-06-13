@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -168,8 +169,8 @@ func TestCreemAdapter_RejectsBadWebhookSignature(t *testing.T) {
 		Headers:    map[string]string{"creem-signature": "bad"},
 		RawPayload: []byte(`{"id":"evt_1","eventType":"checkout.completed"}`),
 	})
-	if err == nil {
-		t.Fatalf("expected bad signature error")
+	if !errors.Is(err, ErrWebhookSignatureVerificationFailed) || !errors.Is(err, ErrCreemWebhookUnverified) {
+		t.Fatalf("expected wrapped bad signature error, got %v", err)
 	}
 }
 

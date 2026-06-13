@@ -196,7 +196,16 @@ All settings via environment variables (see `.env.example`):
 |--------|------|-------------|
 | `http_requests_total` | Counter | Total HTTP requests by method, path, status |
 | `http_request_duration_seconds` | Histogram | Request latency |
-| `orders_created_total` | Counter | Total orders created |
+| `commerce_checkouts_total` | Counter | Checkout attempts by provider, SKU, status, error kind |
+| `commerce_checkout_duration_seconds` | Histogram | Checkout orchestration latency by provider, SKU, status |
+| `checkout_policy_blocks_total` | Counter | Checkout holds by policy reason and action, including payment-risk manual review |
+| `payment_events_total` | Counter | Webhook receive/reprocess attempts by provider, event type, inbox status, error kind |
+| `payment_event_duration_seconds` | Histogram | Webhook receive/reprocess latency by provider, event type, inbox status |
+| `fulfillments_total` | Counter | Fulfillment attempts by SKU, order type, status, error kind |
+| `fulfillment_duration_seconds` | Histogram | Fulfillment latency by SKU, order type, status |
+| `payment_adjustments_total` | Counter | Refund/dispute/cancel adjustment attempts by event type, status, policy action, error kind |
+| `payment_adjustment_duration_seconds` | Histogram | Adjustment policy latency by event type, status, policy action |
+| `orders_created_total` | Counter | Total legacy orders created |
 | `license_activations_total` | Counter | Total license activations |
 
 ## Seed Products
