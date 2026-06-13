@@ -334,6 +334,7 @@ func main() {
 		admin.GET("/payment/providers", configHandler.GetProviderStatus)
 		admin.PUT("/payment/wechat", configHandler.UpdateWechatConfig)
 		admin.PUT("/payment/alipay", configHandler.UpdateAlipayConfig)
+		admin.PUT("/payment/creem", configHandler.UpdateCreemConfig)
 		admin.POST("/payment/:provider/mock", configHandler.SwitchToMock)
 		admin.POST("/payment/import", configHandler.ImportProviders)
 

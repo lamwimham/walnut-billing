@@ -130,6 +130,9 @@ These endpoints provide the first entitlement projection for Walnut clients. Gra
 | GET | `/api/v1/admin/grants?user_id=` | List entitlement grants |
 | POST | `/api/v1/admin/grants` | Manually grant an entitlement such as `editorial.studio` |
 | GET | `/api/v1/admin/fulfillments?out_trade_no=&user_id=&sku_code=&status=` | List commerce fulfillment executions |
+| GET | `/api/v1/admin/payment-risk-flags?user_id=&status=&severity=&provider=&out_trade_no=` | List payment-risk flags for manual review |
+| GET | `/api/v1/admin/payment-risk-flags/:id` | Inspect one payment-risk flag |
+| POST | `/api/v1/admin/payment-risk-flags/:id/resolve` | Resolve a manual-review checkout hold after operator verification |
 | PUT | `/api/v1/admin/payment/creem` | Hot-reload Creem API key, webhook secret, URLs, and SKU→product mapping |
 
 ### Infrastructure
@@ -139,6 +142,10 @@ These endpoints provide the first entitlement projection for Walnut clients. Gra
 | GET | `/ping` | Liveness probe (returns "pong") |
 | GET | `/health` | Readiness probe (checks DB connection) |
 | GET | `/metrics` | Prometheus metrics (Go runtime + business metrics) |
+
+## Runbooks
+
+- `docs/RUNBOOK_COMMERCE_FLOW.md`: executable local/test checklist for checkout, webhook inbox, fulfillment, dispute hold, and admin risk resolution.
 
 ## Configuration
 

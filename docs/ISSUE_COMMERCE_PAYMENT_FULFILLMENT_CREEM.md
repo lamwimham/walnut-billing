@@ -628,6 +628,25 @@ go test ./...
 git diff --check
 ```
 
+### M6-J P0 已完成：Commerce flow runbook closure
+
+本轮把已跑通的海外商业化主链路和风险链路固化为可执行运行手册，避免生产前验收只停留在测试代码中。运行手册仍保持 Walnut 边界：PC/mobile 只调用 Walnut checkout facade 和 snapshot，不接触 Creem、webhook inbox 或 risk internals。
+
+已完成：
+
+- 新增 `docs/RUNBOOK_COMMERCE_FLOW.md`，覆盖 mock provider happy path、Creem 测试流程、paid webhook、duplicate webhook 幂等、dispute/chargeback、checkout hold、admin resolve 和 reprocess。
+- 文档明确 `CheckoutService`、`PaymentEventService`、`FulfillmentService`、`PaymentAdjustmentService`、`PaymentRiskService` 的依赖方向和边界。
+- 补齐 `PUT /api/v1/admin/payment/creem` 路由注册，使 README 已存在的 Creem hot-reload API 可实际访问。
+- README 增加 runbook 入口，并补齐 payment-risk admin API 索引。
+
+验证：
+
+```bash
+go test ./internal/api/handler -run 'TestConfigHandler_UpdateCreemConfig|TestPaymentRiskHandler' -v
+go test ./...
+git diff --check
+```
+
 ## 测试策略
 
 - Unit tests：catalog rule 解析、provider adapter、event mapper、fulfillment rule executor。
