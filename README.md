@@ -161,6 +161,8 @@ All settings via environment variables (see `.env.example`):
 | `PAYMENT_CREEM_CANCEL_URL` | (empty) | Default hosted checkout cancel URL stored in Walnut metadata |
 | `PAYMENT_CREEM_PRODUCT_MAP_JSON` | (empty) | SKU to Creem product ID map, e.g. `{"editorial_studio_monthly":"prod_xxx"}` |
 | `FULFILLMENT_RULES_JSON` | (empty) | Optional JSON fulfillment rules; empty uses dev defaults |
+| `CHECKOUT_RISK_POLICY_ENABLED` | true | Enable pre-checkout risk policy based on Walnut `PaymentRiskFlag` |
+| `CHECKOUT_RISK_BLOCK_SEVERITIES` | critical,high | Comma-separated risk severities that require manual review before checkout |
 
 **Note**: If payment credentials are not configured, the service uses mock adapters (suitable for development).
 

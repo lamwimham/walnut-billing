@@ -261,6 +261,7 @@ GET  /api/v1/admin/fulfillments?order_id=&user_id=
 | Entitlement duration policy | FulfillmentRule | one-time、固定天数、subscription period |
 | Credit grant amount | FulfillmentRule | 点数包和订阅赠点均配置化 |
 | Refund policy | Policy config | 退款后 revoke grant、扣回未用 credits 或仅停止续费 |
+| Checkout risk policy | Policy config / DB | open high/critical 风险标记是否阻断 checkout、转人工审核 action |
 | Retry policy | config | webhook 处理失败后的最大重试次数和退避策略 |
 
 ## 推荐里程碑
@@ -550,11 +551,30 @@ go test ./...
 git diff --check
 ```
 
+### M6-G 第三切片已完成：Checkout risk policy / purchase hold
+
+本轮把第二切片产生的 `PaymentRiskFlag` 接入 checkout 前置策略，形成“支付事实 -> Walnut 风险标记 -> 购买控制”的闭环。该策略只阻断新的 checkout session，不直接改写 PC/mobile 的 access snapshot，也不让 Creem 或未来海外渠道进入门禁判断。
+
+已完成：
+
+- 新增 `CheckoutPolicy` 策略接口与 `CheckoutPolicyDecision`，`CheckoutService` 通过 composition 执行前置策略，保持 checkout facade 的扩展点清晰。
+- 新增 `PaymentRiskCheckoutPolicy`：当用户存在 open / high 或 open / critical `PaymentRiskFlag` 时，阻断 `/commerce/checkout-sessions`。
+- 风险阻断发生在 Walnut order 创建和 provider checkout 调用之前，避免高风险用户生成新订单或触达海外支付渠道。
+- API 对风险阻断返回稳定的 `403`、`code=checkout_blocked_by_payment_risk`、`action=manual_review`，方便后续接入用户登记、人工审核和 admin 风险处理台。
+- 支持 `CHECKOUT_RISK_POLICY_ENABLED` 和 `CHECKOUT_RISK_BLOCK_SEVERITIES`，默认阻断 open / critical 与 open / high 风险标记；后续可平滑迁移到 DB policy。
+- `cmd/server` 只注入 Walnut 自有 `PaymentRiskFlagRepository`，Creem adapter / webhook handler 仍只做支付事实归一化。
+
+验证：
+
+```bash
+go test ./...
+git diff --check
+```
+
 M6-G 后续仍需补齐：
 
 - 7 天退款窗口、低使用条件、人工审核策略还未落 DB policy。
 - 订阅赠点 bucket / expiry 尚未实现，当前通过 ledger source/idempotency 区分。
-- checkout 前置风控策略：根据 open / critical risk flag 阻止自动购买或转人工审核。
 - admin 风险处理视图：列出、备注、解决 `PaymentRiskFlag`。
 - 续费失败 3 天 grace period 需要结合 provider subscription renewal event 单独处理。
 

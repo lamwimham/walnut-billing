@@ -27,6 +27,17 @@ import (
 	"gorm.io/gorm"
 )
 
+func buildCheckoutPolicies(cfg *config.Config, paymentRiskFlagRepo repository.PaymentRiskFlagRepository) []service.CheckoutPolicy {
+	if cfg == nil || !cfg.Checkout.RiskPolicyEnabled {
+		return nil
+	}
+	riskConfig := service.DefaultCheckoutRiskPolicyConfig()
+	riskConfig.BlockSeverities = cfg.Checkout.RiskBlockSeverities
+	return []service.CheckoutPolicy{
+		service.NewPaymentRiskCheckoutPolicy(paymentRiskFlagRepo, riskConfig),
+	}
+}
+
 func main() {
 	// 0. Init Logger
 	cfg, err := config.Load()
@@ -192,7 +203,8 @@ func main() {
 	}
 
 	paymentSvc := payment.NewPaymentService(orderRepo, licRepo, registry)
-	checkoutSvc := service.NewCheckoutService(orderRepo, productRepo, userRepo, paymentSvc)
+	checkoutPolicies := buildCheckoutPolicies(cfg, paymentRiskFlagRepo)
+	checkoutSvc := service.NewCheckoutServiceWithPolicies(orderRepo, productRepo, userRepo, paymentSvc, checkoutPolicies...)
 	fulfillmentSvc := service.NewFulfillmentService(service.FulfillmentDependencies{
 		Repositories: service.FulfillmentRepositories{
 			Orders:                orderRepo,

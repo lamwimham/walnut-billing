@@ -88,13 +88,28 @@ func TestCheckoutHandler_CreateCheckoutSession(t *testing.T) {
 
 func TestCheckoutHandler_MapsServiceErrors(t *testing.T) {
 	cases := []struct {
-		name string
-		err  error
-		want int
+		name     string
+		err      error
+		want     int
+		wantCode string
 	}{
 		{name: "invalid", err: service.ErrInvalidCheckoutRequest, want: http.StatusBadRequest},
 		{name: "missing user", err: service.ErrUserNotFound, want: http.StatusNotFound},
 		{name: "provider", err: service.ErrCheckoutProviderFailed, want: http.StatusBadGateway},
+		{
+			name: "risk blocked",
+			err: &service.CheckoutPolicyRejection{
+				Cause: service.ErrCheckoutBlockedByRisk,
+				Decision: service.CheckoutPolicyDecision{
+					Reason:  service.CheckoutPolicyReasonOpenPaymentRisk,
+					Action:  service.CheckoutPolicyActionManualReview,
+					Message: "checkout requires manual review",
+				},
+			},
+			want:     http.StatusForbidden,
+			wantCode: "checkout_blocked_by_payment_risk",
+		},
+		{name: "policy unavailable", err: service.ErrCheckoutPolicyUnavailable, want: http.StatusServiceUnavailable, wantCode: "checkout_policy_unavailable"},
 		{name: "unknown", err: errors.New("unknown"), want: http.StatusBadRequest},
 	}
 	for _, tc := range cases {
@@ -107,6 +122,15 @@ func TestCheckoutHandler_MapsServiceErrors(t *testing.T) {
 			router.ServeHTTP(w, req)
 			if w.Code != tc.want {
 				t.Fatalf("expected %d, got %d body=%s", tc.want, w.Code, w.Body.String())
+			}
+			if tc.wantCode != "" {
+				var response map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+					t.Fatalf("invalid json response: %v", err)
+				}
+				if response["code"] != tc.wantCode {
+					t.Fatalf("expected code %s, got %#v", tc.wantCode, response)
+				}
 			}
 		})
 	}

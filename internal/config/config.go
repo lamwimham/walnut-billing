@@ -14,6 +14,7 @@ type Config struct {
 	Database    DatabaseConfig
 	Payment     PaymentConfig
 	Fulfillment FulfillmentConfig
+	Checkout    CheckoutConfig
 	Admin       AdminConfig
 	RateLimit   RateLimitConfig
 }
@@ -89,6 +90,11 @@ type FulfillmentConfig struct {
 	RulesJSON string
 }
 
+type CheckoutConfig struct {
+	RiskPolicyEnabled   bool
+	RiskBlockSeverities []string
+}
+
 type AdminConfig struct {
 	APIKeys []string // List of allowed admin API keys
 }
@@ -130,6 +136,8 @@ func Load() (*Config, error) {
 	v.SetDefault("payment.creem_product_map_json", "")
 	v.SetDefault("payment.creem_sandbox", true)
 	v.SetDefault("fulfillment.rules_json", "")
+	v.SetDefault("checkout.risk_policy_enabled", true)
+	v.SetDefault("checkout.risk_block_severities", []string{})
 
 	// 读取环境变量或配置文件
 	v.AutomaticEnv()
@@ -144,15 +152,10 @@ func Load() (*Config, error) {
 
 	// Post-process: parse comma-separated env vars that Viper can't handle
 	if val := os.Getenv("ADMIN_API_KEYS"); val != "" {
-		parts := strings.Split(val, ",")
-		var keys []string
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p != "" {
-				keys = append(keys, p)
-			}
-		}
-		cfg.Admin.APIKeys = keys
+		cfg.Admin.APIKeys = splitCSV(val)
+	}
+	if val := os.Getenv("CHECKOUT_RISK_BLOCK_SEVERITIES"); val != "" {
+		cfg.Checkout.RiskBlockSeverities = splitCSV(val)
 	}
 
 	// Boolean env var overrides (Viper can't parse bools from env reliably)
@@ -160,6 +163,11 @@ func Load() (*Config, error) {
 		cfg.RateLimit.Enabled = true
 	} else if val == "false" {
 		cfg.RateLimit.Enabled = false
+	}
+	if val := os.Getenv("CHECKOUT_RISK_POLICY_ENABLED"); val == "true" {
+		cfg.Checkout.RiskPolicyEnabled = true
+	} else if val == "false" {
+		cfg.Checkout.RiskPolicyEnabled = false
 	}
 	if val := os.Getenv("SERVER_ENV"); val != "" {
 		cfg.Server.Env = val
@@ -192,4 +200,16 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, item := range parts {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			items = append(items, item)
+		}
+	}
+	return items
 }

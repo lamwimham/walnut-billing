@@ -53,6 +53,7 @@ type checkoutServiceImpl struct {
 	products repository.ProductRepository
 	users    repository.UserRepository
 	gateway  CheckoutPaymentGateway
+	policies []CheckoutPolicy
 }
 
 func NewCheckoutService(
@@ -61,11 +62,22 @@ func NewCheckoutService(
 	users repository.UserRepository,
 	gateway CheckoutPaymentGateway,
 ) CheckoutService {
+	return NewCheckoutServiceWithPolicies(orders, products, users, gateway)
+}
+
+func NewCheckoutServiceWithPolicies(
+	orders repository.OrderRepository,
+	products repository.ProductRepository,
+	users repository.UserRepository,
+	gateway CheckoutPaymentGateway,
+	policies ...CheckoutPolicy,
+) CheckoutService {
 	return &checkoutServiceImpl{
 		orders:   orders,
 		products: products,
 		users:    users,
 		gateway:  gateway,
+		policies: compactCheckoutPolicies(policies),
 	}
 }
 
@@ -82,9 +94,6 @@ func (s *checkoutServiceImpl) CreateCheckoutSession(ctx context.Context, input C
 	if existing, err := s.orders.GetByIdempotencyKey(ctx, input.IdempotencyKey); err == nil {
 		if existing.UserID != input.UserID || existing.SKUCode != input.SKUCode || existing.Provider != input.Provider {
 			return nil, ErrInvalidCheckoutRequest
-		}
-		if checkoutOrderHasSession(existing) {
-			return checkoutResultFromOrder(existing), nil
 		}
 		order = existing
 	} else if !errors.Is(err, repository.ErrNotFound) {
@@ -108,6 +117,18 @@ func (s *checkoutServiceImpl) CreateCheckoutSession(ctx context.Context, input C
 	}
 	if !product.IsVisible {
 		return nil, fmt.Errorf("product %q is not available for purchase", input.SKUCode)
+	}
+
+	if err := s.evaluatePolicies(ctx, CheckoutPolicyInput{
+		Checkout:      input,
+		User:          user,
+		Product:       product,
+		ExistingOrder: order,
+	}); err != nil {
+		return nil, err
+	}
+	if checkoutOrderHasSession(order) {
+		return checkoutResultFromOrder(order), nil
 	}
 
 	if order == nil {
@@ -162,6 +183,36 @@ func (s *checkoutServiceImpl) CreateCheckoutSession(ctx context.Context, input C
 		Provider:    order.Provider,
 		Session:     session,
 	}, nil
+}
+
+func (s *checkoutServiceImpl) evaluatePolicies(ctx context.Context, input CheckoutPolicyInput) error {
+	for _, policy := range s.policies {
+		decision, err := policy.Evaluate(ctx, input)
+		if err != nil {
+			return err
+		}
+		if !decision.Allowed {
+			cause := decision.Cause
+			if cause == nil {
+				cause = ErrInvalidCheckoutRequest
+			}
+			return &CheckoutPolicyRejection{Cause: cause, Decision: decision}
+		}
+	}
+	return nil
+}
+
+func compactCheckoutPolicies(policies []CheckoutPolicy) []CheckoutPolicy {
+	if len(policies) == 0 {
+		return nil
+	}
+	compacted := make([]CheckoutPolicy, 0, len(policies))
+	for _, policy := range policies {
+		if policy != nil {
+			compacted = append(compacted, policy)
+		}
+	}
+	return compacted
 }
 
 func checkoutOrderHasSession(order *domain.Order) bool {

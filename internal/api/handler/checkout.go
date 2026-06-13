@@ -51,7 +51,7 @@ func (h *CheckoutHandler) CreateCheckoutSession(c *gin.Context) {
 	})
 	if err != nil {
 		status := checkoutErrorStatus(err)
-		c.JSON(status, gin.H{"error": err.Error()})
+		c.JSON(status, checkoutErrorResponse(err))
 		return
 	}
 
@@ -68,11 +68,31 @@ func checkoutErrorStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, service.ErrUserNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, service.ErrCheckoutBlockedByRisk):
+		return http.StatusForbidden
+	case errors.Is(err, service.ErrCheckoutPolicyUnavailable):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, service.ErrCheckoutProviderFailed):
 		return http.StatusBadGateway
 	default:
 		return http.StatusBadRequest
 	}
+}
+
+func checkoutErrorResponse(err error) gin.H {
+	if errors.Is(err, service.ErrCheckoutBlockedByRisk) {
+		decision, _ := service.CheckoutPolicyDecisionFromError(err)
+		return gin.H{
+			"error":  defaultStringForHandler(decision.Message, "checkout requires manual review"),
+			"code":   "checkout_blocked_by_payment_risk",
+			"reason": defaultStringForHandler(decision.Reason, service.CheckoutPolicyReasonOpenPaymentRisk),
+			"action": defaultStringForHandler(decision.Action, service.CheckoutPolicyActionManualReview),
+		}
+	}
+	if errors.Is(err, service.ErrCheckoutPolicyUnavailable) {
+		return gin.H{"error": "checkout policy unavailable", "code": "checkout_policy_unavailable"}
+	}
+	return gin.H{"error": err.Error()}
 }
 
 func checkoutOrderResponse(order *domain.Order) gin.H {
