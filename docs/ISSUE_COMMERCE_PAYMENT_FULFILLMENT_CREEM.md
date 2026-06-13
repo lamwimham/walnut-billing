@@ -571,12 +571,39 @@ go test ./...
 git diff --check
 ```
 
-M6-G 后续仍需补齐：
+### M6-H 收敛切片已完成：End-to-end commerce flow guard
 
-- 7 天退款窗口、低使用条件、人工审核策略还未落 DB policy。
-- 订阅赠点 bucket / expiry 尚未实现，当前通过 ledger source/idempotency 区分。
-- admin 风险处理视图：列出、备注、解决 `PaymentRiskFlag`。
-- 续费失败 3 天 grace period 需要结合 provider subscription renewal event 单独处理。
+本轮没有继续扩散新业务能力，而是优先补齐生产闭环的端到端验收，验证当前设计不是局部最优堆叠，而是能从海外 checkout 一路收敛到 Walnut 自有门禁事实。
+
+已完成：
+
+- 新增 service-level commerce flow harness，覆盖 Creem hosted checkout、签名 webhook、`PaymentEventInbox` 幂等、`FulfillmentService` 履约、`EntitlementSnapshot` 可见、dispute 补偿和 checkout risk hold。
+- 新增 GORM real repository flow test，覆盖真实 repository、AutoMigrate、UnitOfWork、唯一键和事务路径，避免只在 mock 层验证成功。
+- 验证重复 paid webhook 不重复发放 grant / credits / fulfillment execution。
+- 验证 dispute 后撤销 `editorial.studio`、扣回可扣 credits、创建 open / critical `PaymentRiskFlag`。
+- 验证 open critical 风险标记会阻断新的 checkout，且阻断发生在 provider 调用前。
+
+当前 M6 收敛判断：
+
+- 主链路 `checkout_created -> paid -> fulfilled -> snapshot` 已跑通。
+- 风险链路 `disputed -> revoke/clawback -> risk flag -> checkout hold` 已跑通。
+- Provider 边界仍然清晰：Creem 只在 payment adapter / webhook verification 层，PC/mobile 仍只看 Walnut checkout facade 和 access snapshot。
+- 生产闭环剩余项应优先做“运营处理与可观测性”，而不是继续增加支付渠道或复杂订阅能力。
+
+验证：
+
+```bash
+go test ./...
+git diff --check
+```
+
+M6 后续收敛优先级：
+
+1. P0：admin 风险处理视图/API：列出、备注、解决 `PaymentRiskFlag`，让 `manual_review` 能闭环解除 checkout hold。
+2. P0：端到端运行手册：本地/测试环境如何配置 Creem、创建 SKU、触发 webhook、检查 snapshot、验证 dispute hold。
+3. P1：7 天退款窗口、低使用条件、人工审核策略落为 DB policy；当前 refund/dispute 补偿策略已可用，但策略参数仍在代码/config 层。
+4. P1：订阅续费失败 3 天 grace period，需要结合 provider subscription renewal event 单独处理。
+5. P2：订阅赠点 bucket / expiry；当前通过 ledger source/idempotency 区分，满足第一阶段账务可追踪。
 
 ## 测试策略
 
