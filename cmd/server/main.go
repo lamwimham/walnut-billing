@@ -38,6 +38,22 @@ func buildCheckoutPolicies(cfg *config.Config, paymentRiskFlagRepo repository.Pa
 	}
 }
 
+func buildPaymentAdjustmentPolicy(cfg *config.Config) service.PaymentAdjustmentPolicy {
+	policyConfig := service.DefaultPaymentAdjustmentPolicyConfig()
+	if cfg != nil {
+		policyConfig.RefundWindowDays = cfg.Adjustment.RefundWindowDays
+		policyConfig.RefundInWindowAction = cfg.Adjustment.RefundInWindowAction
+		policyConfig.RefundOutOfWindowAction = cfg.Adjustment.RefundOutOfWindowAction
+		policyConfig.LowUsagePolicyEnabled = cfg.Adjustment.LowUsagePolicyEnabled
+		policyConfig.LowUsageMaxCreditsUsed = cfg.Adjustment.LowUsageMaxCreditsUsed
+		policyConfig.LowUsageAction = cfg.Adjustment.LowUsageAction
+		policyConfig.HighUsageAction = cfg.Adjustment.HighUsageAction
+		policyConfig.DisputeAction = cfg.Adjustment.DisputeAction
+		policyConfig.CancelAction = cfg.Adjustment.CancelAction
+	}
+	return service.NewConfigurablePaymentAdjustmentPolicy(policyConfig)
+}
+
 func main() {
 	// 0. Init Logger
 	cfg, err := config.Load()
@@ -228,6 +244,7 @@ func main() {
 			FulfillmentExecutions: fulfillmentExecutionRepo,
 			PaymentRiskFlags:      paymentRiskFlagRepo,
 		},
+		Policy:            buildPaymentAdjustmentPolicy(cfg),
 		UnitOfWorkFactory: uowFactory,
 	})
 	paymentOrderProcessor := service.NewPaymentOrderEventProcessor(orderRepo)

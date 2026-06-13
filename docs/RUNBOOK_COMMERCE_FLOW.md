@@ -456,10 +456,13 @@ curl -sS -X POST "$BASE_URL/api/v1/commerce/checkout-sessions" \
 
 ## Admin Reprocess 流程
 
-当 webhook 已进入 inbox，但处理失败，可通过 admin reprocess 修复可恢复故障。
+当 webhook 已进入 inbox，但处理失败或被退款策略转入人工处理，可通过 admin reprocess 修复可恢复故障。
 
 ```bash
 curl -sS "$BASE_URL/api/v1/admin/payment-events?status=failed" \
+  -H "$AUTH_HEADER"
+
+curl -sS "$BASE_URL/api/v1/admin/payment-events?status=review_required" \
   -H "$AUTH_HEADER"
 
 curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/reprocess" \
@@ -470,13 +473,19 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 
 - 履约依赖短暂失败。
 - 未来多数据库拓扑下，订单短暂不可见。
-- 配置修复后可重新处理的事件。
+- 退款策略或低使用阈值调整后，原 `review_required` 事件需要继续执行补偿。
 
 通常不能直接重试，需要先调查：
 
 - 签名无效：事件会在入 inbox 前被拒绝。
 - 金额或币种不匹配：必须先确认 provider/product/order 映射。
 - 未知 `out_trade_no`：无法映射到 Walnut order。
+- `policy_rejected`：这是策略终态，除非业务确认并调整 `ADJUSTMENT_*` 策略，否则不要反复 reprocess。
+
+策略说明：
+
+- `review_required` / `policy_rejected` 是 Walnut policy decision，不是 provider 处理失败；webhook 响应会保持 accepted，避免 Creem 因业务人工审核反复重投。
+- `PaymentAdjustmentPolicy` 只根据 Walnut 订单、履约记录和 credits ledger 做决策；Creem adapter 只归一化支付事实，不承载退款业务规则。
 
 ## 排障矩阵
 
@@ -502,6 +511,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 - [ ] `PAYMENT_CREEM_PRODUCT_MAP_JSON` 覆盖所有可见海外 SKU。
 - [ ] `FULFILLMENT_RULES_JSON` 已评审，或明确接受内置默认规则。
 - [ ] `CHECKOUT_RISK_POLICY_ENABLED=true`。
+- [ ] `ADJUSTMENT_REFUND_WINDOW_DAYS`、`ADJUSTMENT_*_ACTION` 和低使用阈值已按业务策略评审。
 - [ ] 公网 webhook endpoint 使用 TLS，并保持 raw request body 不被代理改写。
 - [ ] Creem dashboard webhook URL 指向 `/api/v1/webhooks/creem`。
 - [ ] 目标环境 happy path 与 dispute path 均通过。

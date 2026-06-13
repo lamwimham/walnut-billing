@@ -50,6 +50,31 @@ type PaymentEventProcessor interface {
 	ProcessPaymentEvent(ctx context.Context, event *domain.PaymentEventInbox) error
 }
 
+// PaymentEventPolicyError lets processors return a stable terminal inbox status
+// without coupling PaymentEventService to processor-specific error types.
+type PaymentEventPolicyError struct {
+	Status string
+	Cause  error
+}
+
+func newPaymentEventPolicyError(status string, cause error) error {
+	return &PaymentEventPolicyError{Status: status, Cause: cause}
+}
+
+func (e *PaymentEventPolicyError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "payment event policy decision"
+	}
+	return e.Cause.Error()
+}
+
+func (e *PaymentEventPolicyError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 type paymentEventServiceImpl struct {
 	events    repository.PaymentEventRepository
 	gateway   PaymentWebhookGateway
@@ -90,7 +115,7 @@ func (s *paymentEventServiceImpl) ReceiveWebhook(ctx context.Context, input Paym
 		if existing.Status == domain.PaymentEventStatusProcessing {
 			return &PaymentEventProcessResult{Event: existing, Duplicate: true, Processed: false, ProcessNote: "processing"}, nil
 		}
-		result, processErr := s.processEvent(ctx, existing)
+		result, processErr := s.processEvent(ctx, existing, false)
 		if result != nil {
 			result.Duplicate = true
 		}
@@ -107,7 +132,7 @@ func (s *paymentEventServiceImpl) ReceiveWebhook(ctx context.Context, input Paym
 			if existing.Status == domain.PaymentEventStatusProcessing {
 				return &PaymentEventProcessResult{Event: existing, Duplicate: true, Processed: false, ProcessNote: "processing"}, nil
 			}
-			result, processErr := s.processEvent(ctx, existing)
+			result, processErr := s.processEvent(ctx, existing, false)
 			if result != nil {
 				result.Duplicate = true
 			}
@@ -115,7 +140,7 @@ func (s *paymentEventServiceImpl) ReceiveWebhook(ctx context.Context, input Paym
 		}
 		return nil, err
 	}
-	return s.processEvent(ctx, event)
+	return s.processEvent(ctx, event, false)
 }
 
 func (s *paymentEventServiceImpl) Process(ctx context.Context, eventID string) (*PaymentEventProcessResult, error) {
@@ -129,7 +154,7 @@ func (s *paymentEventServiceImpl) Process(ctx context.Context, eventID string) (
 		}
 		return nil, err
 	}
-	return s.processEvent(ctx, event)
+	return s.processEvent(ctx, event, true)
 }
 
 func (s *paymentEventServiceImpl) ListEvents(ctx context.Context, query repository.PaymentEventQuery) ([]domain.PaymentEventInbox, error) {
@@ -153,11 +178,11 @@ func (s *paymentEventServiceImpl) GetEvent(ctx context.Context, eventID string) 
 	return event, nil
 }
 
-func (s *paymentEventServiceImpl) processEvent(ctx context.Context, event *domain.PaymentEventInbox) (*PaymentEventProcessResult, error) {
+func (s *paymentEventServiceImpl) processEvent(ctx context.Context, event *domain.PaymentEventInbox, forceReviewReprocess bool) (*PaymentEventProcessResult, error) {
 	if event == nil {
 		return nil, ErrPaymentEventNotFound
 	}
-	if isPaymentEventTerminal(event.Status) {
+	if isPaymentEventTerminal(event.Status) && !(forceReviewReprocess && isPaymentEventReviewStatus(event.Status)) {
 		return &PaymentEventProcessResult{Event: event, Processed: event.Status == domain.PaymentEventStatusProcessed}, nil
 	}
 	if !isProcessablePaymentEventType(event.EventType) {
@@ -189,6 +214,9 @@ func (s *paymentEventServiceImpl) processEvent(ctx context.Context, event *domai
 	}
 
 	if err := s.processor.ProcessPaymentEvent(ctx, event); err != nil {
+		if result, handled, handleErr := s.recordPolicyDecision(ctx, event, err); handled {
+			return result, handleErr
+		}
 		now = time.Now().UTC()
 		event.Status = domain.PaymentEventStatusFailed
 		event.LastError = err.Error()
@@ -208,6 +236,37 @@ func (s *paymentEventServiceImpl) processEvent(ctx context.Context, event *domai
 		return nil, err
 	}
 	return &PaymentEventProcessResult{Event: event, Processed: true}, nil
+}
+
+func (s *paymentEventServiceImpl) recordPolicyDecision(ctx context.Context, event *domain.PaymentEventInbox, err error) (*PaymentEventProcessResult, bool, error) {
+	status, ok := paymentEventPolicyStatus(err)
+	if !ok {
+		return nil, false, nil
+	}
+	now := time.Now().UTC()
+	event.Status = status
+	event.LastError = err.Error()
+	event.UpdatedAt = now
+	if updateErr := s.events.Update(ctx, event); updateErr != nil {
+		return nil, true, updateErr
+	}
+	return &PaymentEventProcessResult{Event: event, Processed: false, ProcessNote: err.Error()}, true, nil
+}
+
+func paymentEventPolicyStatus(err error) (string, bool) {
+	policyErr, ok := paymentEventPolicyErrorFrom(err)
+	if !ok || !isPaymentEventReviewStatus(policyErr.Status) {
+		return "", false
+	}
+	return policyErr.Status, true
+}
+
+func paymentEventPolicyErrorFrom(err error) (*PaymentEventPolicyError, bool) {
+	var policyErr *PaymentEventPolicyError
+	if !errors.As(err, &policyErr) || policyErr == nil {
+		return nil, false
+	}
+	return policyErr, true
 }
 
 func (s *paymentEventServiceImpl) eventFromVerified(provider string, rawPayload []byte, verified *payment.VerifiedWebhookEvent) (*domain.PaymentEventInbox, error) {
@@ -262,7 +321,16 @@ func isProcessablePaymentEventType(eventType string) bool {
 
 func isPaymentEventTerminal(status string) bool {
 	switch status {
-	case domain.PaymentEventStatusProcessed, domain.PaymentEventStatusIgnored:
+	case domain.PaymentEventStatusProcessed, domain.PaymentEventStatusIgnored, domain.PaymentEventStatusReviewRequired, domain.PaymentEventStatusPolicyRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+func isPaymentEventReviewStatus(status string) bool {
+	switch status {
+	case domain.PaymentEventStatusReviewRequired, domain.PaymentEventStatusPolicyRejected:
 		return true
 	default:
 		return false

@@ -170,6 +170,15 @@ All settings via environment variables (see `.env.example`):
 | `FULFILLMENT_RULES_JSON` | (empty) | Optional JSON fulfillment rules; empty uses dev defaults |
 | `CHECKOUT_RISK_POLICY_ENABLED` | true | Enable pre-checkout risk policy based on Walnut `PaymentRiskFlag` |
 | `CHECKOUT_RISK_BLOCK_SEVERITIES` | critical,high | Comma-separated risk severities that require manual review before checkout |
+| `ADJUSTMENT_REFUND_WINDOW_DAYS` | 7 | Refund auto-compensation window, counted from Walnut `Order.PaidAt` |
+| `ADJUSTMENT_REFUND_IN_WINDOW_ACTION` | auto_refund | Action for in-window refund events: `auto_refund`, `manual_review`, or `reject` |
+| `ADJUSTMENT_REFUND_OUT_OF_WINDOW_ACTION` | manual_review | Action for out-of-window refund events |
+| `ADJUSTMENT_LOW_USAGE_POLICY_ENABLED` | false | Enable credit-usage based refund decision override |
+| `ADJUSTMENT_LOW_USAGE_MAX_CREDITS_USED` | 0 | Max used credits considered low usage when the low-usage policy is enabled |
+| `ADJUSTMENT_LOW_USAGE_ACTION` | auto_refund | Action for low-usage in-window refunds |
+| `ADJUSTMENT_HIGH_USAGE_ACTION` | manual_review | Action for high-usage in-window refunds |
+| `ADJUSTMENT_DISPUTE_ACTION` | auto_refund | Action for dispute/chargeback events; risk flag creation stays enabled |
+| `ADJUSTMENT_CANCEL_ACTION` | keep_current_period | Action for cancellation events; default keeps the current paid period |
 
 **Note**: If payment credentials are not configured, the service uses mock adapters (suitable for development).
 

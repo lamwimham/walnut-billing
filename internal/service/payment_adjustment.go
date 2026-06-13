@@ -10,7 +10,11 @@ import (
 	"walnut-billing/internal/repository"
 )
 
-var ErrInvalidPaymentAdjustment = errors.New("invalid payment adjustment")
+var (
+	ErrInvalidPaymentAdjustment      = errors.New("invalid payment adjustment")
+	ErrPaymentAdjustmentManualReview = errors.New("payment adjustment requires manual review")
+	ErrPaymentAdjustmentRejected     = errors.New("payment adjustment rejected by policy")
+)
 
 // PaymentAdjustmentService applies Walnut-owned compensation policy for payment
 // events such as refunds and subscription cancellations. Provider webhooks only
@@ -20,13 +24,14 @@ type PaymentAdjustmentService interface {
 }
 
 type PaymentAdjustmentResult struct {
-	Order              *domain.Order                 `json:"order"`
-	RiskFlag           *domain.PaymentRiskFlag       `json:"risk_flag,omitempty"`
-	RevokedGrantIDs    []string                      `json:"revoked_grant_ids,omitempty"`
-	ClawbackCredits    int64                         `json:"clawback_credits,omitempty"`
-	ClawbackTx         *domain.CreditTransaction     `json:"clawback_transaction,omitempty"`
-	AffectedExecutions []domain.FulfillmentExecution `json:"affected_executions,omitempty"`
-	Note               string                        `json:"note,omitempty"`
+	Order              *domain.Order                   `json:"order"`
+	PolicyDecision     PaymentAdjustmentPolicyDecision `json:"policy_decision"`
+	RiskFlag           *domain.PaymentRiskFlag         `json:"risk_flag,omitempty"`
+	RevokedGrantIDs    []string                        `json:"revoked_grant_ids,omitempty"`
+	ClawbackCredits    int64                           `json:"clawback_credits,omitempty"`
+	ClawbackTx         *domain.CreditTransaction       `json:"clawback_transaction,omitempty"`
+	AffectedExecutions []domain.FulfillmentExecution   `json:"affected_executions,omitempty"`
+	Note               string                          `json:"note,omitempty"`
 }
 
 type PaymentAdjustmentRepositories struct {
@@ -40,42 +45,37 @@ type PaymentAdjustmentRepositories struct {
 
 type PaymentAdjustmentDependencies struct {
 	Repositories      PaymentAdjustmentRepositories
+	Policy            PaymentAdjustmentPolicy
 	UnitOfWorkFactory func() repository.UnitOfWork
 }
 
 type paymentAdjustmentServiceImpl struct {
 	repos      PaymentAdjustmentRepositories
+	policy     PaymentAdjustmentPolicy
 	uowFactory func() repository.UnitOfWork
 }
 
 func NewPaymentAdjustmentService(deps PaymentAdjustmentDependencies) PaymentAdjustmentService {
-	return &paymentAdjustmentServiceImpl{repos: deps.Repositories, uowFactory: deps.UnitOfWorkFactory}
+	policy := deps.Policy
+	if policy == nil {
+		policy = NewConfigurablePaymentAdjustmentPolicy(DefaultPaymentAdjustmentPolicyConfig())
+	}
+	return &paymentAdjustmentServiceImpl{repos: deps.Repositories, policy: policy, uowFactory: deps.UnitOfWorkFactory}
 }
 
 func (s *paymentAdjustmentServiceImpl) Apply(ctx context.Context, event *domain.PaymentEventInbox) (*PaymentAdjustmentResult, error) {
 	if s == nil || event == nil || strings.TrimSpace(event.OutTradeNo) == "" || !s.hasRequiredRepos(s.repos) {
 		return nil, ErrInvalidPaymentAdjustment
 	}
-	if event.EventType == domain.PaymentEventTypeCancelled {
-		return s.cancelWithoutRevocation(ctx, event)
-	}
-	if event.EventType != domain.PaymentEventTypeRefunded && event.EventType != domain.PaymentEventTypeDisputed {
+	if event.EventType != domain.PaymentEventTypeRefunded && event.EventType != domain.PaymentEventTypeDisputed && event.EventType != domain.PaymentEventTypeCancelled {
 		return nil, ErrInvalidPaymentAdjustment
 	}
 	return s.withAdjustmentTransaction(ctx, func(repos PaymentAdjustmentRepositories) (*PaymentAdjustmentResult, error) {
-		return s.applyRefundWithRepos(ctx, repos, event)
+		return s.applyWithRepos(ctx, repos, event)
 	})
 }
 
-func (s *paymentAdjustmentServiceImpl) cancelWithoutRevocation(ctx context.Context, event *domain.PaymentEventInbox) (*PaymentAdjustmentResult, error) {
-	order, err := s.repos.Orders.GetByOutTradeNo(ctx, event.OutTradeNo)
-	if err != nil {
-		return nil, err
-	}
-	return &PaymentAdjustmentResult{Order: order, Note: "cancel_keeps_current_paid_period"}, nil
-}
-
-func (s *paymentAdjustmentServiceImpl) applyRefundWithRepos(ctx context.Context, repos PaymentAdjustmentRepositories, event *domain.PaymentEventInbox) (*PaymentAdjustmentResult, error) {
+func (s *paymentAdjustmentServiceImpl) applyWithRepos(ctx context.Context, repos PaymentAdjustmentRepositories, event *domain.PaymentEventInbox) (*PaymentAdjustmentResult, error) {
 	order, err := repos.Orders.GetByOutTradeNo(ctx, event.OutTradeNo)
 	if err != nil {
 		return nil, err
@@ -91,17 +91,40 @@ func (s *paymentAdjustmentServiceImpl) applyRefundWithRepos(ctx context.Context,
 		return nil, err
 	}
 
-	result := &PaymentAdjustmentResult{Order: order, AffectedExecutions: executions}
-	if event.EventType == domain.PaymentEventTypeDisputed {
+	usage, err := paymentAdjustmentUsageSnapshot(ctx, repos, order, executions)
+	if err != nil {
+		return nil, err
+	}
+	decision := s.policy.Decide(ctx, PaymentAdjustmentPolicyInput{Event: event, Order: order, Usage: usage})
+	result := &PaymentAdjustmentResult{Order: order, PolicyDecision: decision, AffectedExecutions: executions, Note: decision.Note}
+	if decision.CreateRiskFlag {
 		flag, err := createPaymentRiskFlag(ctx, repos.PaymentRiskFlags, order, event)
 		if err != nil {
 			return result, err
 		}
 		result.RiskFlag = flag
 	}
+	if !decision.ApplyCompensation {
+		if decision.ManualReview {
+			return result, newPaymentEventPolicyError(
+				domain.PaymentEventStatusReviewRequired,
+				fmt.Errorf("%w: %s", ErrPaymentAdjustmentManualReview, decision.Reason),
+			)
+		}
+		if decision.Rejected {
+			return result, newPaymentEventPolicyError(
+				domain.PaymentEventStatusPolicyRejected,
+				fmt.Errorf("%w: %s", ErrPaymentAdjustmentRejected, decision.Reason),
+			)
+		}
+		return result, nil
+	}
 	for _, execution := range executions {
 		switch execution.TargetType {
 		case domain.FulfillmentTargetEntitlement:
+			if !decision.RevokeEntitlements {
+				continue
+			}
 			grantID, err := revokeFulfilledGrant(ctx, repos.EntitlementGrants, execution.ResultRef)
 			if err != nil {
 				return result, err
@@ -110,6 +133,9 @@ func (s *paymentAdjustmentServiceImpl) applyRefundWithRepos(ctx context.Context,
 				result.RevokedGrantIDs = append(result.RevokedGrantIDs, grantID)
 			}
 		case domain.FulfillmentTargetCredits:
+			if !decision.ClawbackCredits {
+				continue
+			}
 			amount, tx, err := clawbackFulfilledCredits(ctx, repos, order, execution)
 			if err != nil {
 				return result, err
@@ -121,6 +147,48 @@ func (s *paymentAdjustmentServiceImpl) applyRefundWithRepos(ctx context.Context,
 		}
 	}
 	return result, nil
+}
+
+func paymentAdjustmentUsageSnapshot(ctx context.Context, repos PaymentAdjustmentRepositories, order *domain.Order, executions []domain.FulfillmentExecution) (PaymentAdjustmentUsageSnapshot, error) {
+	usage := PaymentAdjustmentUsageSnapshot{Known: true}
+	if order == nil {
+		return usage, nil
+	}
+	remainingByAccount := map[string]int64{}
+	for _, execution := range executions {
+		if execution.TargetType != domain.FulfillmentTargetCredits || strings.TrimSpace(execution.ResultRef) == "" {
+			continue
+		}
+		original, err := repos.CreditTransactions.GetByID(ctx, execution.ResultRef)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				continue
+			}
+			return usage, err
+		}
+		if original.Amount <= 0 || original.UserID != order.UserID {
+			continue
+		}
+		usage.CreditsGranted += original.Amount
+		remaining, ok := remainingByAccount[original.AccountID]
+		if !ok {
+			account, err := repos.CreditAccounts.GetByID(ctx, original.AccountID)
+			if err != nil {
+				return usage, err
+			}
+			remaining = account.Balance
+		}
+		available := minInt64(original.Amount, remaining)
+		if available < 0 {
+			available = 0
+		}
+		usage.CreditsAvailableForClawback += available
+		remainingByAccount[original.AccountID] = remaining - available
+	}
+	if usage.CreditsGranted > usage.CreditsAvailableForClawback {
+		usage.CreditsUsed = usage.CreditsGranted - usage.CreditsAvailableForClawback
+	}
+	return usage, nil
 }
 
 func revokeFulfilledGrant(ctx context.Context, grants repository.EntitlementGrantRepository, grantID string) (string, error) {
@@ -225,6 +293,12 @@ func (s *paymentAdjustmentServiceImpl) withAdjustmentTransaction(
 	repos := adjustmentReposFromUOW(uow.Repos(), s.repos)
 	result, err := fn(repos)
 	if err != nil {
+		if _, ok := paymentEventPolicyErrorFrom(err); ok {
+			if commitErr := uow.Commit(); commitErr != nil {
+				return result, commitErr
+			}
+			committed = true
+		}
 		return result, err
 	}
 	if err := uow.Commit(); err != nil {

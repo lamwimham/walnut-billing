@@ -171,6 +171,63 @@ func TestPaymentEventService_InvalidSignatureIsRejectedBeforeInbox(t *testing.T)
 	}
 }
 
+func TestPaymentEventService_AdjustmentManualReviewIsAcceptedAndAdminReprocessable(t *testing.T) {
+	repo := newMockPaymentEventRepo()
+	gateway := &mockWebhookGateway{event: &payment.VerifiedWebhookEvent{
+		ProviderEventID:   "evt_manual_review",
+		EventType:         domain.PaymentEventTypeRefunded,
+		OutTradeNo:        "CHK-REVIEW",
+		SignatureVerified: true,
+	}}
+	processor := &mockPaymentProcessor{err: newPaymentEventPolicyError(domain.PaymentEventStatusReviewRequired, ErrPaymentAdjustmentManualReview)}
+	svc := NewPaymentEventService(repo, gateway, processor)
+
+	first, err := svc.ReceiveWebhook(context.Background(), PaymentWebhookInput{Provider: "mock"})
+	if err != nil {
+		t.Fatalf("expected manual review to be accepted without provider error, got %v", err)
+	}
+	if first.Processed || first.Event.Status != domain.PaymentEventStatusReviewRequired || first.ProcessNote == "" {
+		t.Fatalf("expected review-required event, got %#v", first)
+	}
+
+	duplicate, err := svc.ReceiveWebhook(context.Background(), PaymentWebhookInput{Provider: "mock"})
+	if err != nil {
+		t.Fatalf("expected duplicate manual-review webhook to be accepted, got %v", err)
+	}
+	if !duplicate.Duplicate || duplicate.Processed || processor.calls != 1 {
+		t.Fatalf("expected terminal duplicate without reprocessing, duplicate=%#v calls=%d", duplicate, processor.calls)
+	}
+
+	processor.err = nil
+	reprocessed, err := svc.Process(context.Background(), first.Event.ID)
+	if err != nil {
+		t.Fatalf("expected admin reprocess to retry review-required event, got %v", err)
+	}
+	if !reprocessed.Processed || reprocessed.Event.Status != domain.PaymentEventStatusProcessed || reprocessed.Event.Attempts != 2 {
+		t.Fatalf("expected processed manual-review retry, got %#v", reprocessed.Event)
+	}
+}
+
+func TestPaymentEventService_AdjustmentRejectionIsAcceptedWithoutProviderRetry(t *testing.T) {
+	repo := newMockPaymentEventRepo()
+	gateway := &mockWebhookGateway{event: &payment.VerifiedWebhookEvent{
+		ProviderEventID:   "evt_policy_rejected",
+		EventType:         domain.PaymentEventTypeRefunded,
+		OutTradeNo:        "CHK-REJECT",
+		SignatureVerified: true,
+	}}
+	processor := &mockPaymentProcessor{err: newPaymentEventPolicyError(domain.PaymentEventStatusPolicyRejected, ErrPaymentAdjustmentRejected)}
+	svc := NewPaymentEventService(repo, gateway, processor)
+
+	result, err := svc.ReceiveWebhook(context.Background(), PaymentWebhookInput{Provider: "mock"})
+	if err != nil {
+		t.Fatalf("expected policy rejection to be accepted without provider error, got %v", err)
+	}
+	if result.Processed || result.Event.Status != domain.PaymentEventStatusPolicyRejected || result.ProcessNote == "" {
+		t.Fatalf("expected policy-rejected event, got %#v", result)
+	}
+}
+
 func TestPaymentEventService_ProcessorFailureCanBeReprocessed(t *testing.T) {
 	repo := newMockPaymentEventRepo()
 	gateway := &mockWebhookGateway{event: &payment.VerifiedWebhookEvent{

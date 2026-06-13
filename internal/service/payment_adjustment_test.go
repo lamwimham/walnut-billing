@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 	"walnut-billing/internal/domain"
@@ -10,6 +11,18 @@ import (
 
 type mockPaymentRiskFlagRepo struct {
 	flags map[string]*domain.PaymentRiskFlag
+}
+
+type mockPaymentAdjustmentUnitOfWork struct {
+	orders       *mockTxOrderRepo
+	grants       *mockGrantRepo
+	accounts     *mockCreditAccountRepo
+	transactions *mockCreditTransactionRepo
+	executions   *mockFulfillmentExecutionRepo
+	risks        *mockPaymentRiskFlagRepo
+	begins       int
+	commits      int
+	rollbacks    int
 }
 
 func newMockPaymentRiskFlagRepo() *mockPaymentRiskFlagRepo {
@@ -69,7 +82,37 @@ func (m *mockPaymentRiskFlagRepo) Update(ctx context.Context, flag *domain.Payme
 	return nil
 }
 
+func (m *mockPaymentAdjustmentUnitOfWork) Begin(ctx context.Context) error {
+	m.begins++
+	return nil
+}
+
+func (m *mockPaymentAdjustmentUnitOfWork) Repos() repository.TransactionalRepositories {
+	return repository.TransactionalRepositories{
+		OrderRepo:                m.orders,
+		EntitlementGrantRepo:     m.grants,
+		CreditAccountRepo:        m.accounts,
+		CreditTransactionRepo:    m.transactions,
+		FulfillmentExecutionRepo: m.executions,
+		PaymentRiskFlagRepo:      m.risks,
+	}
+}
+
+func (m *mockPaymentAdjustmentUnitOfWork) Commit() error {
+	m.commits++
+	return nil
+}
+
+func (m *mockPaymentAdjustmentUnitOfWork) Rollback() error {
+	m.rollbacks++
+	return nil
+}
+
 func newPaymentAdjustmentTestService() (PaymentAdjustmentService, *mockTxOrderRepo, *mockGrantRepo, *mockCreditAccountRepo, *mockCreditTransactionRepo, *mockFulfillmentExecutionRepo, *mockPaymentRiskFlagRepo) {
+	return newPaymentAdjustmentTestServiceWithPolicy(paymentAdjustmentTestAutoRefundPolicy())
+}
+
+func newPaymentAdjustmentTestServiceWithPolicy(policy PaymentAdjustmentPolicy) (PaymentAdjustmentService, *mockTxOrderRepo, *mockGrantRepo, *mockCreditAccountRepo, *mockCreditTransactionRepo, *mockFulfillmentExecutionRepo, *mockPaymentRiskFlagRepo) {
 	orders := newMockTxOrderRepo()
 	grants := newMockGrantRepo()
 	accounts := newMockCreditAccountRepo()
@@ -85,8 +128,20 @@ func newPaymentAdjustmentTestService() (PaymentAdjustmentService, *mockTxOrderRe
 			FulfillmentExecutions: executions,
 			PaymentRiskFlags:      risks,
 		},
+		Policy: policy,
 	})
 	return svc, orders, grants, accounts, transactions, executions, risks
+}
+
+func paymentAdjustmentTestAutoRefundPolicy() PaymentAdjustmentPolicy {
+	return NewConfigurablePaymentAdjustmentPolicy(PaymentAdjustmentPolicyConfig{
+		RefundWindowDays:        7,
+		RefundInWindowAction:    PaymentAdjustmentActionAutoRefund,
+		RefundOutOfWindowAction: PaymentAdjustmentActionManualReview,
+		DisputeAction:           PaymentAdjustmentActionAutoRefund,
+		CancelAction:            PaymentAdjustmentActionKeepCurrentPeriod,
+		Now:                     func() time.Time { return time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC) },
+	})
 }
 
 func fulfilledOrderForAdjustment() *domain.Order {
@@ -182,6 +237,9 @@ func TestPaymentAdjustmentService_RefundRevokesGrantAndClawsBackAvailableCredits
 	if err != nil {
 		t.Fatalf("expected refund adjustment, got %v", err)
 	}
+	if result.PolicyDecision.Action != PaymentAdjustmentActionAutoRefund || result.PolicyDecision.Reason != PaymentAdjustmentReasonRefundInWindow {
+		t.Fatalf("expected in-window auto refund decision, got %#v", result.PolicyDecision)
+	}
 	if len(result.RevokedGrantIDs) != 1 || result.RevokedGrantIDs[0] != "grt_1" {
 		t.Fatalf("expected grant revoked, got %#v", result.RevokedGrantIDs)
 	}
@@ -201,6 +259,136 @@ func TestPaymentAdjustmentService_RefundRevokesGrantAndClawsBackAvailableCredits
 	}
 	if clawback.Type != domain.CreditTransactionTypeClawback || clawback.Amount != -400 || clawback.BalanceAfter != 0 {
 		t.Fatalf("unexpected clawback tx: %#v", clawback)
+	}
+}
+
+func TestPaymentAdjustmentService_RefundOutsideWindowRequiresManualReview(t *testing.T) {
+	policy := NewConfigurablePaymentAdjustmentPolicy(PaymentAdjustmentPolicyConfig{
+		RefundWindowDays:        7,
+		RefundInWindowAction:    PaymentAdjustmentActionAutoRefund,
+		RefundOutOfWindowAction: PaymentAdjustmentActionManualReview,
+		Now:                     func() time.Time { return time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC) },
+	})
+	svc, orders, grants, accounts, transactions, executions, _ := newPaymentAdjustmentTestServiceWithPolicy(policy)
+	seedRefundableFulfillment(orders, grants, accounts, transactions, executions, 600)
+
+	result, err := svc.Apply(context.Background(), &domain.PaymentEventInbox{
+		EventType:  domain.PaymentEventTypeRefunded,
+		OutTradeNo: "CHK-ADJ-1",
+	})
+	if !errors.Is(err, ErrPaymentAdjustmentManualReview) {
+		t.Fatalf("expected manual review error, result=%#v err=%v", result, err)
+	}
+	if result == nil || !result.PolicyDecision.ManualReview || result.PolicyDecision.Reason != PaymentAdjustmentReasonRefundOutOfWindow {
+		t.Fatalf("expected out-of-window manual review decision, got %#v", result)
+	}
+	if grants.grants["grt_1"].Status != domain.GrantStatusActive {
+		t.Fatalf("manual review should not revoke grant")
+	}
+	account, err := accounts.GetByUserID(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	if account.Balance != 600 {
+		t.Fatalf("manual review should not claw back credits, balance=%d", account.Balance)
+	}
+	if _, err := transactions.GetByIdempotencyKey(context.Background(), "refund:clawback:CHK-ADJ-1:studio:credits"); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("manual review should not create clawback marker, err=%v", err)
+	}
+}
+
+func TestPaymentAdjustmentService_RefundHighUsageRequiresManualReview(t *testing.T) {
+	policy := NewConfigurablePaymentAdjustmentPolicy(PaymentAdjustmentPolicyConfig{
+		RefundWindowDays:        7,
+		RefundInWindowAction:    PaymentAdjustmentActionAutoRefund,
+		RefundOutOfWindowAction: PaymentAdjustmentActionManualReview,
+		LowUsagePolicyEnabled:   true,
+		LowUsageMaxCreditsUsed:  100,
+		LowUsageAction:          PaymentAdjustmentActionAutoRefund,
+		HighUsageAction:         PaymentAdjustmentActionManualReview,
+		Now:                     func() time.Time { return time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC) },
+	})
+	svc, orders, grants, accounts, transactions, executions, _ := newPaymentAdjustmentTestServiceWithPolicy(policy)
+	seedRefundableFulfillment(orders, grants, accounts, transactions, executions, 400)
+
+	result, err := svc.Apply(context.Background(), &domain.PaymentEventInbox{
+		EventType:  domain.PaymentEventTypeRefunded,
+		OutTradeNo: "CHK-ADJ-1",
+	})
+	if !errors.Is(err, ErrPaymentAdjustmentManualReview) {
+		t.Fatalf("expected manual review for high usage, result=%#v err=%v", result, err)
+	}
+	if result == nil || result.PolicyDecision.Reason != PaymentAdjustmentReasonRefundHighUsage {
+		t.Fatalf("expected high-usage decision, got %#v", result)
+	}
+	if grants.grants["grt_1"].Status != domain.GrantStatusActive {
+		t.Fatalf("high usage manual review should not revoke grant")
+	}
+	account, err := accounts.GetByUserID(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	if account.Balance != 400 {
+		t.Fatalf("high usage manual review should not claw back credits, balance=%d", account.Balance)
+	}
+}
+
+func TestPaymentAdjustmentService_ManualReviewPolicyCommitsRiskFlagWithUnitOfWork(t *testing.T) {
+	orders := newMockTxOrderRepo()
+	grants := newMockGrantRepo()
+	accounts := newMockCreditAccountRepo()
+	transactions := newMockCreditTransactionRepo()
+	executions := newMockFulfillmentExecutionRepo()
+	risks := newMockPaymentRiskFlagRepo()
+	seedRefundableFulfillment(orders, grants, accounts, transactions, executions, 600)
+	uow := &mockPaymentAdjustmentUnitOfWork{
+		orders:       orders,
+		grants:       grants,
+		accounts:     accounts,
+		transactions: transactions,
+		executions:   executions,
+		risks:        risks,
+	}
+	policy := NewConfigurablePaymentAdjustmentPolicy(PaymentAdjustmentPolicyConfig{
+		DisputeAction: PaymentAdjustmentActionManualReview,
+	})
+	svc := NewPaymentAdjustmentService(PaymentAdjustmentDependencies{
+		Repositories: PaymentAdjustmentRepositories{
+			Orders:                orders,
+			EntitlementGrants:     grants,
+			CreditAccounts:        accounts,
+			CreditTransactions:    transactions,
+			FulfillmentExecutions: executions,
+			PaymentRiskFlags:      risks,
+		},
+		Policy:            policy,
+		UnitOfWorkFactory: func() repository.UnitOfWork { return uow },
+	})
+
+	result, err := svc.Apply(context.Background(), &domain.PaymentEventInbox{
+		Provider:        "creem",
+		ProviderEventID: "evt_dispute_manual_review",
+		EventType:       domain.PaymentEventTypeDisputed,
+		OutTradeNo:      "CHK-ADJ-1",
+	})
+	if !errors.Is(err, ErrPaymentAdjustmentManualReview) {
+		t.Fatalf("expected dispute manual review error, result=%#v err=%v", result, err)
+	}
+	if uow.begins != 1 || uow.commits != 1 || uow.rollbacks != 0 {
+		t.Fatalf("expected policy decision to commit risk flag without rollback, uow=%#v", uow)
+	}
+	if result == nil || result.RiskFlag == nil || len(risks.flags) != 1 {
+		t.Fatalf("expected risk flag committed for manual-review dispute, result=%#v count=%d", result, len(risks.flags))
+	}
+	if grants.grants["grt_1"].Status != domain.GrantStatusActive {
+		t.Fatalf("manual-review dispute should not revoke grants before operator decision")
+	}
+	account, err := accounts.GetByUserID(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	if account.Balance != 600 {
+		t.Fatalf("manual-review dispute should not claw back credits before operator decision, balance=%d", account.Balance)
 	}
 }
 

@@ -72,11 +72,13 @@ const (
 )
 
 const (
-	PaymentEventStatusReceived   = "received"
-	PaymentEventStatusProcessing = "processing"
-	PaymentEventStatusProcessed  = "processed"
-	PaymentEventStatusIgnored    = "ignored"
-	PaymentEventStatusFailed     = "failed"
+	PaymentEventStatusReceived       = "received"
+	PaymentEventStatusProcessing     = "processing"
+	PaymentEventStatusProcessed      = "processed"
+	PaymentEventStatusIgnored        = "ignored"
+	PaymentEventStatusFailed         = "failed"
+	PaymentEventStatusReviewRequired = "review_required"
+	PaymentEventStatusPolicyRejected = "policy_rejected"
 )
 
 const (

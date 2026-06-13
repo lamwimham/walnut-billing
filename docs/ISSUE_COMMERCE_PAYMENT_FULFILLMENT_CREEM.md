@@ -647,6 +647,29 @@ go test ./...
 git diff --check
 ```
 
+### M6-K P1 已完成：Refund policy config baseline
+
+本轮将 refund/dispute compensation 从固定代码常量提升为可配置策略模型。Webhook handler 与 Creem adapter 仍只提供支付事实；`PaymentAdjustmentPolicy` 负责业务决策，`PaymentAdjustmentService` 只执行策略决策。
+
+已完成：
+
+- 新增 `PaymentAdjustmentPolicy` 策略接口与 `PaymentAdjustmentPolicyDecision`，把 `auto_refund`、`manual_review`、`reject`、`keep_current_period` 收敛为稳定 action。
+- 新增 configurable policy：支持 7 天退款窗口、窗口内/窗口外 action、低使用 credits 阈值、低/高使用 action、dispute action、cancel action。
+- `PaymentAdjustmentService` 通过依赖注入接收 policy，执行 revoke/clawback/risk flag，不再硬编码所有退款业务判断。
+- `PaymentEventInbox` 新增 `review_required` / `policy_rejected` 策略终态，人工审核不再表现为 provider webhook 500；运营确认后仍可通过 admin reprocess 推进。
+- 新增 `ADJUSTMENT_*` 环境变量和 config 测试，默认策略保持当前业务：7 天内自动补偿，7 天外转人工；cancel 保留当前周期；dispute 自动补偿并创建风险标记。
+- 增加 service-level 测试，覆盖窗口内/窗口外/低使用/高使用/重复 webhook/余额不足/dispute 风险标记和策略终态重处理。
+
+验证：
+
+```bash
+go test ./internal/service -run 'TestPaymentAdjustment' -v
+go test ./internal/config -run 'TestLoadReads.*Adjustment|TestLoadReadsCheckoutRiskPolicyEnvConfig' -v
+go test ./...
+git diff --check
+rg -n "creem|Creem|PaymentRiskFlag|payment\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy|PaymentAdjustmentPolicy|policy_rejected" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true
+```
+
 ## 测试策略
 
 - Unit tests：catalog rule 解析、provider adapter、event mapper、fulfillment rule executor。

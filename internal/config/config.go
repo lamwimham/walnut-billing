@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 
 	"walnut-billing/internal/payment"
@@ -15,6 +16,7 @@ type Config struct {
 	Payment     PaymentConfig
 	Fulfillment FulfillmentConfig
 	Checkout    CheckoutConfig
+	Adjustment  AdjustmentConfig
 	Admin       AdminConfig
 	RateLimit   RateLimitConfig
 }
@@ -95,6 +97,18 @@ type CheckoutConfig struct {
 	RiskBlockSeverities []string
 }
 
+type AdjustmentConfig struct {
+	RefundWindowDays        int
+	RefundInWindowAction    string
+	RefundOutOfWindowAction string
+	LowUsagePolicyEnabled   bool
+	LowUsageMaxCreditsUsed  int64
+	LowUsageAction          string
+	HighUsageAction         string
+	DisputeAction           string
+	CancelAction            string
+}
+
 type AdminConfig struct {
 	APIKeys []string // List of allowed admin API keys
 }
@@ -138,6 +152,15 @@ func Load() (*Config, error) {
 	v.SetDefault("fulfillment.rules_json", "")
 	v.SetDefault("checkout.risk_policy_enabled", true)
 	v.SetDefault("checkout.risk_block_severities", []string{})
+	v.SetDefault("adjustment.refund_window_days", 7)
+	v.SetDefault("adjustment.refund_in_window_action", "auto_refund")
+	v.SetDefault("adjustment.refund_out_of_window_action", "manual_review")
+	v.SetDefault("adjustment.low_usage_policy_enabled", false)
+	v.SetDefault("adjustment.low_usage_max_credits_used", int64(0))
+	v.SetDefault("adjustment.low_usage_action", "auto_refund")
+	v.SetDefault("adjustment.high_usage_action", "manual_review")
+	v.SetDefault("adjustment.dispute_action", "auto_refund")
+	v.SetDefault("adjustment.cancel_action", "keep_current_period")
 
 	// 读取环境变量或配置文件
 	v.AutomaticEnv()
@@ -169,8 +192,37 @@ func Load() (*Config, error) {
 	} else if val == "false" {
 		cfg.Checkout.RiskPolicyEnabled = false
 	}
+	if val := os.Getenv("ADJUSTMENT_LOW_USAGE_POLICY_ENABLED"); val == "true" {
+		cfg.Adjustment.LowUsagePolicyEnabled = true
+	} else if val == "false" {
+		cfg.Adjustment.LowUsagePolicyEnabled = false
+	}
 	if val := os.Getenv("SERVER_ENV"); val != "" {
 		cfg.Server.Env = val
+	}
+	if val := os.Getenv("ADJUSTMENT_REFUND_WINDOW_DAYS"); val != "" {
+		cfg.Adjustment.RefundWindowDays = parseIntEnv(val, cfg.Adjustment.RefundWindowDays)
+	}
+	if val := os.Getenv("ADJUSTMENT_LOW_USAGE_MAX_CREDITS_USED"); val != "" {
+		cfg.Adjustment.LowUsageMaxCreditsUsed = int64(parseIntEnv(val, int(cfg.Adjustment.LowUsageMaxCreditsUsed)))
+	}
+	if val := os.Getenv("ADJUSTMENT_REFUND_IN_WINDOW_ACTION"); val != "" {
+		cfg.Adjustment.RefundInWindowAction = val
+	}
+	if val := os.Getenv("ADJUSTMENT_REFUND_OUT_OF_WINDOW_ACTION"); val != "" {
+		cfg.Adjustment.RefundOutOfWindowAction = val
+	}
+	if val := os.Getenv("ADJUSTMENT_LOW_USAGE_ACTION"); val != "" {
+		cfg.Adjustment.LowUsageAction = val
+	}
+	if val := os.Getenv("ADJUSTMENT_HIGH_USAGE_ACTION"); val != "" {
+		cfg.Adjustment.HighUsageAction = val
+	}
+	if val := os.Getenv("ADJUSTMENT_DISPUTE_ACTION"); val != "" {
+		cfg.Adjustment.DisputeAction = val
+	}
+	if val := os.Getenv("ADJUSTMENT_CANCEL_ACTION"); val != "" {
+		cfg.Adjustment.CancelAction = val
 	}
 	if val := os.Getenv("FULFILLMENT_RULES_JSON"); val != "" {
 		cfg.Fulfillment.RulesJSON = val
@@ -212,4 +264,12 @@ func splitCSV(value string) []string {
 		}
 	}
 	return items
+}
+
+func parseIntEnv(value string, fallback int) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
