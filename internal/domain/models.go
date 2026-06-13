@@ -167,6 +167,7 @@ type PaymentRiskFlag struct {
 	Severity        string     `json:"severity" gorm:"size:16;index"`
 	Status          string     `json:"status" gorm:"size:16;index"`
 	Note            string     `json:"note" gorm:"type:text"`
+	ResolvedBy      string     `json:"resolved_by" gorm:"size:64"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	ResolvedAt      *time.Time `json:"resolved_at"`

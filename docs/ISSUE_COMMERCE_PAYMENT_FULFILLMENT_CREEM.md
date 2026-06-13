@@ -605,6 +605,29 @@ M6 后续收敛优先级：
 4. P1：订阅续费失败 3 天 grace period，需要结合 provider subscription renewal event 单独处理。
 5. P2：订阅赠点 bucket / expiry；当前通过 ledger source/idempotency 区分，满足第一阶段账务可追踪。
 
+
+### M6-I P0 已完成：Admin payment-risk review closure
+
+本轮补齐 `manual_review` 的运营解除路径，让 checkout risk hold 不再是单向阻断。实现仍保持分层清晰：`PaymentRiskHandler -> PaymentRiskService -> PaymentRiskFlagRepository`，checkout policy 继续只读取风险事实，不依赖 admin handler 或运营流程。
+
+已完成：
+
+- 新增 `PaymentRiskService`，负责风险标记查询、详情和 resolve 用例。
+- 新增 admin API：
+  - `GET /api/v1/admin/payment-risk-flags`
+  - `GET /api/v1/admin/payment-risk-flags/:id`
+  - `POST /api/v1/admin/payment-risk-flags/:id/resolve`
+- `PaymentRiskFlag` 增加 `resolved_by`，配合既有 `resolved_at` 和 `note` 支持运营备注。
+- resolve 后风险标记状态变为 `resolved`，checkout policy 不再阻断该用户新 checkout。
+- 增加 service / handler / GORM repository 测试，覆盖 open -> resolved -> checkout allowed。
+
+验证：
+
+```bash
+go test ./...
+git diff --check
+```
+
 ## 测试策略
 
 - Unit tests：catalog rule 解析、provider adapter、event mapper、fulfillment rule executor。

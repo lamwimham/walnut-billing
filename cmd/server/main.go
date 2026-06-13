@@ -218,6 +218,7 @@ func main() {
 		EntitlementCatalog: service.DefaultEntitlementCatalog(),
 		UnitOfWorkFactory:  uowFactory,
 	})
+	paymentRiskSvc := service.NewPaymentRiskService(paymentRiskFlagRepo)
 	paymentAdjustmentSvc := service.NewPaymentAdjustmentService(service.PaymentAdjustmentDependencies{
 		Repositories: service.PaymentAdjustmentRepositories{
 			Orders:                orderRepo,
@@ -246,6 +247,7 @@ func main() {
 	creditHandler := handler.NewCreditHandler(creditSvc, auditSvc)
 	checkoutHandler := handler.NewCheckoutHandler(checkoutSvc)
 	paymentEventHandler := handler.NewPaymentEventHandler(paymentEventSvc)
+	paymentRiskHandler := handler.NewPaymentRiskHandler(paymentRiskSvc, auditSvc)
 	fulfillmentHandler := handler.NewFulfillmentHandler(fulfillmentSvc)
 
 	// 9. Setup Router
@@ -342,6 +344,9 @@ func main() {
 		admin.GET("/payment-events", paymentEventHandler.ListEvents)
 		admin.GET("/payment-events/:id", paymentEventHandler.GetEvent)
 		admin.POST("/payment-events/:id/reprocess", paymentEventHandler.ReprocessEvent)
+		admin.GET("/payment-risk-flags", paymentRiskHandler.ListFlags)
+		admin.GET("/payment-risk-flags/:id", paymentRiskHandler.GetFlag)
+		admin.POST("/payment-risk-flags/:id/resolve", paymentRiskHandler.ResolveFlag)
 		admin.GET("/fulfillments", fulfillmentHandler.ListExecutions)
 
 		// Entitlement registration, manual grants, and credits ledger

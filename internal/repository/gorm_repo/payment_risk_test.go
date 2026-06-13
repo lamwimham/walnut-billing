@@ -61,6 +61,7 @@ func TestPaymentRiskFlagRepo_CRUDAndFilters(t *testing.T) {
 	resolvedAt := now.Add(time.Hour)
 	flag.Status = domain.PaymentRiskStatusResolved
 	flag.ResolvedAt = &resolvedAt
+	flag.ResolvedBy = "ops"
 	if err := repo.Update(ctx, flag); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestPaymentRiskFlagRepo_CRUDAndFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get by id: %v", err)
 	}
-	if updated.Status != domain.PaymentRiskStatusResolved || updated.ResolvedAt == nil {
+	if updated.Status != domain.PaymentRiskStatusResolved || updated.ResolvedAt == nil || updated.ResolvedBy != "ops" {
 		t.Fatalf("expected resolved flag, got %#v", updated)
 	}
 }
