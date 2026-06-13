@@ -297,6 +297,7 @@ func TestPaymentFulfillmentEventProcessor_AppliesRefundAdjustment(t *testing.T) 
 			CreditAccounts:        accounts,
 			CreditTransactions:    transactions,
 			FulfillmentExecutions: executions,
+			PaymentRiskFlags:      newMockPaymentRiskFlagRepo(),
 		},
 	})
 	processor := NewPaymentFulfillmentEventProcessorWithAdjustments(orders, NewPaymentOrderEventProcessor(orders), fulfillmentSvc, adjustments)

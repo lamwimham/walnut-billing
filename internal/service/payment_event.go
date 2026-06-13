@@ -253,7 +253,7 @@ func payloadHash(payload string) string {
 
 func isProcessablePaymentEventType(eventType string) bool {
 	switch eventType {
-	case domain.PaymentEventTypePaid, domain.PaymentEventTypeCancelled, domain.PaymentEventTypeRefunded:
+	case domain.PaymentEventTypePaid, domain.PaymentEventTypeCancelled, domain.PaymentEventTypeRefunded, domain.PaymentEventTypeDisputed:
 		return true
 	default:
 		return false

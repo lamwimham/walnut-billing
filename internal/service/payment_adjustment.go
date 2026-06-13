@@ -21,6 +21,7 @@ type PaymentAdjustmentService interface {
 
 type PaymentAdjustmentResult struct {
 	Order              *domain.Order                 `json:"order"`
+	RiskFlag           *domain.PaymentRiskFlag       `json:"risk_flag,omitempty"`
 	RevokedGrantIDs    []string                      `json:"revoked_grant_ids,omitempty"`
 	ClawbackCredits    int64                         `json:"clawback_credits,omitempty"`
 	ClawbackTx         *domain.CreditTransaction     `json:"clawback_transaction,omitempty"`
@@ -34,6 +35,7 @@ type PaymentAdjustmentRepositories struct {
 	CreditAccounts        repository.CreditAccountRepository
 	CreditTransactions    repository.CreditTransactionRepository
 	FulfillmentExecutions repository.FulfillmentExecutionRepository
+	PaymentRiskFlags      repository.PaymentRiskFlagRepository
 }
 
 type PaymentAdjustmentDependencies struct {
@@ -57,7 +59,7 @@ func (s *paymentAdjustmentServiceImpl) Apply(ctx context.Context, event *domain.
 	if event.EventType == domain.PaymentEventTypeCancelled {
 		return s.cancelWithoutRevocation(ctx, event)
 	}
-	if event.EventType != domain.PaymentEventTypeRefunded {
+	if event.EventType != domain.PaymentEventTypeRefunded && event.EventType != domain.PaymentEventTypeDisputed {
 		return nil, ErrInvalidPaymentAdjustment
 	}
 	return s.withAdjustmentTransaction(ctx, func(repos PaymentAdjustmentRepositories) (*PaymentAdjustmentResult, error) {
@@ -90,6 +92,13 @@ func (s *paymentAdjustmentServiceImpl) applyRefundWithRepos(ctx context.Context,
 	}
 
 	result := &PaymentAdjustmentResult{Order: order, AffectedExecutions: executions}
+	if event.EventType == domain.PaymentEventTypeDisputed {
+		flag, err := createPaymentRiskFlag(ctx, repos.PaymentRiskFlags, order, event)
+		if err != nil {
+			return result, err
+		}
+		result.RiskFlag = flag
+	}
 	for _, execution := range executions {
 		switch execution.TargetType {
 		case domain.FulfillmentTargetEntitlement:
@@ -240,7 +249,55 @@ func adjustmentReposFromUOW(repos repository.TransactionalRepositories, fallback
 		CreditAccounts:        firstCreditAccountRepo(repos.CreditAccountRepo, fallback.CreditAccounts),
 		CreditTransactions:    firstCreditTransactionRepo(repos.CreditTransactionRepo, fallback.CreditTransactions),
 		FulfillmentExecutions: firstFulfillmentExecutionRepo(repos.FulfillmentExecutionRepo, fallback.FulfillmentExecutions),
+		PaymentRiskFlags:      firstPaymentRiskFlagRepo(repos.PaymentRiskFlagRepo, fallback.PaymentRiskFlags),
 	}
+}
+
+func createPaymentRiskFlag(ctx context.Context, flags repository.PaymentRiskFlagRepository, order *domain.Order, event *domain.PaymentEventInbox) (*domain.PaymentRiskFlag, error) {
+	if flags == nil || order == nil || event == nil {
+		return nil, ErrInvalidPaymentAdjustment
+	}
+	providerEventID := strings.TrimSpace(event.ProviderEventID)
+	if providerEventID == "" {
+		providerEventID = "risk:" + strings.TrimSpace(event.Provider) + ":" + strings.TrimSpace(event.OutTradeNo) + ":" + strings.TrimSpace(event.EventType)
+	}
+	provider := strings.TrimSpace(event.Provider)
+	existing, err := flags.GetByProviderEventID(ctx, provider, providerEventID)
+	if err == nil {
+		return existing, nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+	flagID, err := generateEntityID("prf_")
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	flag := &domain.PaymentRiskFlag{
+		ID:              flagID,
+		UserID:          strings.TrimSpace(order.UserID),
+		OutTradeNo:      strings.TrimSpace(order.OutTradeNo),
+		Provider:        provider,
+		ProviderEventID: providerEventID,
+		Reason:          domain.PaymentRiskReasonDispute,
+		Severity:        domain.PaymentRiskSeverityCritical,
+		Status:          domain.PaymentRiskStatusOpen,
+		Note:            "provider dispute/chargeback event",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := flags.Create(ctx, flag); err != nil {
+		return nil, err
+	}
+	return flag, nil
+}
+
+func firstPaymentRiskFlagRepo(primary repository.PaymentRiskFlagRepository, fallback repository.PaymentRiskFlagRepository) repository.PaymentRiskFlagRepository {
+	if primary != nil {
+		return primary
+	}
+	return fallback
 }
 
 func refundClawbackKey(outTradeNo string, ruleID string) string {

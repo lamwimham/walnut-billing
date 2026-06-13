@@ -342,6 +342,10 @@ func mapCreemEventType(eventType string, payload map[string]any) string {
 		if creemOutTradeNo(payload) != "" {
 			return domain.PaymentEventTypeRefunded
 		}
+	case "dispute.created", "chargeback.created":
+		if creemOutTradeNo(payload) != "" {
+			return domain.PaymentEventTypeDisputed
+		}
 	case "subscription.paid":
 		if creemOutTradeNo(payload) != "" {
 			return domain.PaymentEventTypePaid
@@ -357,6 +361,8 @@ func creemOutTradeNo(payload map[string]any) string {
 		stringAt(payload, "object", "metadata", "walnut_out_trade_no"),
 		stringAt(payload, "object", "checkout", "metadata", "walnut_out_trade_no"),
 		stringAt(payload, "object", "subscription", "metadata", "walnut_out_trade_no"),
+		stringAt(payload, "object", "dispute", "metadata", "walnut_out_trade_no"),
+		stringAt(payload, "object", "chargeback", "metadata", "walnut_out_trade_no"),
 		stringAt(payload, "object", "metadata", "request_id"),
 		stringAt(payload, "object", "metadata", "order_id"),
 	)
@@ -366,6 +372,8 @@ func creemProviderTradeNo(payload map[string]any) string {
 	return firstNonEmpty(
 		stringAt(payload, "object", "order", "id"),
 		stringAt(payload, "object", "transaction", "id"),
+		stringAt(payload, "object", "dispute", "id"),
+		stringAt(payload, "object", "chargeback", "id"),
 		stringAt(payload, "object", "order"),
 		stringAt(payload, "object", "last_transaction_id"),
 		stringAt(payload, "object", "id"),
@@ -377,6 +385,8 @@ func creemAmount(payload map[string]any) int64 {
 		intAt(payload, "object", "order", "amount"),
 		intAt(payload, "object", "transaction", "amount"),
 		intAt(payload, "object", "refund_amount"),
+		intAt(payload, "object", "dispute", "amount"),
+		intAt(payload, "object", "chargeback", "amount"),
 		intAt(payload, "object", "amount"),
 		intAt(payload, "object", "product", "price"),
 	)
@@ -387,6 +397,8 @@ func creemCurrency(payload map[string]any) string {
 		stringAt(payload, "object", "order", "currency"),
 		stringAt(payload, "object", "transaction", "currency"),
 		stringAt(payload, "object", "refund_currency"),
+		stringAt(payload, "object", "dispute", "currency"),
+		stringAt(payload, "object", "chargeback", "currency"),
 		stringAt(payload, "object", "currency"),
 		stringAt(payload, "object", "product", "currency"),
 	)

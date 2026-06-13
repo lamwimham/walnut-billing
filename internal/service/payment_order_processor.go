@@ -52,7 +52,7 @@ func (p *PaymentOrderEventProcessor) ProcessPaymentEvent(ctx context.Context, ev
 			return nil
 		}
 		order.Status = domain.OrderStatusCancelled
-	case domain.PaymentEventTypeRefunded:
+	case domain.PaymentEventTypeRefunded, domain.PaymentEventTypeDisputed:
 		order.Status = domain.OrderStatusRefunded
 	default:
 		return ErrPaymentEventNotProcessable

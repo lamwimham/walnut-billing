@@ -96,6 +96,30 @@ func TestCreemAdapter_VerifyCheckoutCompletedWebhook(t *testing.T) {
 	}
 }
 
+func TestCreemAdapter_VerifyDisputeWebhookMapsToPaymentDisputed(t *testing.T) {
+	adapter, err := NewCreemAdapter(CreemConfig{
+		APIKey:        "creem_test_key",
+		WebhookSecret: "whsec_test",
+		ProductIDs:    map[string]string{"editorial_studio_monthly": "prod_studio"},
+	})
+	if err != nil {
+		t.Fatalf("create adapter: %v", err)
+	}
+	payload := []byte(`{"id":"evt_dispute_1","eventType":"dispute.created","object":{"id":"disp_1","dispute":{"id":"disp_1","amount":1900,"currency":"USD","metadata":{"walnut_out_trade_no":"CHK-1"}}}}`)
+	signature := testCreemSignature(payload, "whsec_test")
+
+	event, err := adapter.VerifyWebhookEvent(context.Background(), WebhookVerificationRequest{
+		Headers:    map[string]string{"creem-signature": signature},
+		RawPayload: payload,
+	})
+	if err != nil {
+		t.Fatalf("verify webhook: %v", err)
+	}
+	if event.EventType != domain.PaymentEventTypeDisputed || event.ProviderEventID != "evt_dispute_1" || event.OutTradeNo != "CHK-1" || event.ProviderTradeNo != "disp_1" || event.Amount != 1900 || event.Currency != "USD" {
+		t.Fatalf("unexpected dispute event: %#v", event)
+	}
+}
+
 func TestCreemAdapter_RejectsBadWebhookSignature(t *testing.T) {
 	adapter, err := NewCreemAdapter(CreemConfig{
 		APIKey:        "creem_test_key",

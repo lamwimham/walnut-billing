@@ -63,6 +63,7 @@ type TransactionalRepositories struct {
 	CreditReservationRepo    CreditReservationRepository
 	CreditTransactionRepo    CreditTransactionRepository
 	FulfillmentExecutionRepo FulfillmentExecutionRepository
+	PaymentRiskFlagRepo      PaymentRiskFlagRepository
 }
 
 // UnitOfWork manages a database transaction and provides transactional repositories.
@@ -198,4 +199,24 @@ type FulfillmentExecutionRepository interface {
 	GetByIdempotencyKey(ctx context.Context, key string) (*domain.FulfillmentExecution, error)
 	List(ctx context.Context, query FulfillmentExecutionQuery) ([]domain.FulfillmentExecution, error)
 	Update(ctx context.Context, execution *domain.FulfillmentExecution) error
+}
+
+type PaymentRiskFlagQuery struct {
+	UserID     string
+	OutTradeNo string
+	Provider   string
+	Reason     string
+	Severity   string
+	Status     string
+	Limit      int
+	Offset     int
+}
+
+// PaymentRiskFlagRepository defines data access for payment-risk audit flags.
+type PaymentRiskFlagRepository interface {
+	Create(ctx context.Context, flag *domain.PaymentRiskFlag) error
+	GetByID(ctx context.Context, id string) (*domain.PaymentRiskFlag, error)
+	GetByProviderEventID(ctx context.Context, provider string, providerEventID string) (*domain.PaymentRiskFlag, error)
+	List(ctx context.Context, query PaymentRiskFlagQuery) ([]domain.PaymentRiskFlag, error)
+	Update(ctx context.Context, flag *domain.PaymentRiskFlag) error
 }

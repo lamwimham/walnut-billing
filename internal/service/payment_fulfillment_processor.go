@@ -43,7 +43,7 @@ func (p *PaymentFulfillmentEventProcessor) ProcessPaymentEvent(ctx context.Conte
 	if event == nil {
 		return nil
 	}
-	if event.EventType == domain.PaymentEventTypeRefunded || event.EventType == domain.PaymentEventTypeCancelled {
+	if event.EventType == domain.PaymentEventTypeRefunded || event.EventType == domain.PaymentEventTypeCancelled || event.EventType == domain.PaymentEventTypeDisputed {
 		if p.adjustment == nil {
 			return nil
 		}

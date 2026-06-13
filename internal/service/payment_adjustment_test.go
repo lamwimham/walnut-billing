@@ -8,12 +8,74 @@ import (
 	"walnut-billing/internal/repository"
 )
 
-func newPaymentAdjustmentTestService() (PaymentAdjustmentService, *mockTxOrderRepo, *mockGrantRepo, *mockCreditAccountRepo, *mockCreditTransactionRepo, *mockFulfillmentExecutionRepo) {
+type mockPaymentRiskFlagRepo struct {
+	flags map[string]*domain.PaymentRiskFlag
+}
+
+func newMockPaymentRiskFlagRepo() *mockPaymentRiskFlagRepo {
+	return &mockPaymentRiskFlagRepo{flags: make(map[string]*domain.PaymentRiskFlag)}
+}
+
+func (m *mockPaymentRiskFlagRepo) Create(ctx context.Context, flag *domain.PaymentRiskFlag) error {
+	m.flags[flag.ID] = flag
+	return nil
+}
+
+func (m *mockPaymentRiskFlagRepo) GetByID(ctx context.Context, id string) (*domain.PaymentRiskFlag, error) {
+	flag, ok := m.flags[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return flag, nil
+}
+
+func (m *mockPaymentRiskFlagRepo) GetByProviderEventID(ctx context.Context, provider string, providerEventID string) (*domain.PaymentRiskFlag, error) {
+	for _, flag := range m.flags {
+		if flag.Provider == provider && flag.ProviderEventID == providerEventID {
+			return flag, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (m *mockPaymentRiskFlagRepo) List(ctx context.Context, query repository.PaymentRiskFlagQuery) ([]domain.PaymentRiskFlag, error) {
+	var result []domain.PaymentRiskFlag
+	for _, flag := range m.flags {
+		if query.UserID != "" && flag.UserID != query.UserID {
+			continue
+		}
+		if query.OutTradeNo != "" && flag.OutTradeNo != query.OutTradeNo {
+			continue
+		}
+		if query.Provider != "" && flag.Provider != query.Provider {
+			continue
+		}
+		if query.Reason != "" && flag.Reason != query.Reason {
+			continue
+		}
+		if query.Severity != "" && flag.Severity != query.Severity {
+			continue
+		}
+		if query.Status != "" && flag.Status != query.Status {
+			continue
+		}
+		result = append(result, *flag)
+	}
+	return result, nil
+}
+
+func (m *mockPaymentRiskFlagRepo) Update(ctx context.Context, flag *domain.PaymentRiskFlag) error {
+	m.flags[flag.ID] = flag
+	return nil
+}
+
+func newPaymentAdjustmentTestService() (PaymentAdjustmentService, *mockTxOrderRepo, *mockGrantRepo, *mockCreditAccountRepo, *mockCreditTransactionRepo, *mockFulfillmentExecutionRepo, *mockPaymentRiskFlagRepo) {
 	orders := newMockTxOrderRepo()
 	grants := newMockGrantRepo()
 	accounts := newMockCreditAccountRepo()
 	transactions := newMockCreditTransactionRepo()
 	executions := newMockFulfillmentExecutionRepo()
+	risks := newMockPaymentRiskFlagRepo()
 	svc := NewPaymentAdjustmentService(PaymentAdjustmentDependencies{
 		Repositories: PaymentAdjustmentRepositories{
 			Orders:                orders,
@@ -21,9 +83,10 @@ func newPaymentAdjustmentTestService() (PaymentAdjustmentService, *mockTxOrderRe
 			CreditAccounts:        accounts,
 			CreditTransactions:    transactions,
 			FulfillmentExecutions: executions,
+			PaymentRiskFlags:      risks,
 		},
 	})
-	return svc, orders, grants, accounts, transactions, executions
+	return svc, orders, grants, accounts, transactions, executions, risks
 }
 
 func fulfilledOrderForAdjustment() *domain.Order {
@@ -109,7 +172,7 @@ func seedRefundableFulfillment(
 }
 
 func TestPaymentAdjustmentService_RefundRevokesGrantAndClawsBackAvailableCredits(t *testing.T) {
-	svc, orders, grants, accounts, transactions, executions := newPaymentAdjustmentTestService()
+	svc, orders, grants, accounts, transactions, executions, _ := newPaymentAdjustmentTestService()
 	seedRefundableFulfillment(orders, grants, accounts, transactions, executions, 400)
 
 	result, err := svc.Apply(context.Background(), &domain.PaymentEventInbox{
@@ -142,7 +205,7 @@ func TestPaymentAdjustmentService_RefundRevokesGrantAndClawsBackAvailableCredits
 }
 
 func TestPaymentAdjustmentService_RefundNeverCreatesNegativeCreditBalance(t *testing.T) {
-	svc, orders, grants, accounts, transactions, executions := newPaymentAdjustmentTestService()
+	svc, orders, grants, accounts, transactions, executions, _ := newPaymentAdjustmentTestService()
 	seedRefundableFulfillment(orders, grants, accounts, transactions, executions, 0)
 
 	result, err := svc.Apply(context.Background(), &domain.PaymentEventInbox{
@@ -169,7 +232,7 @@ func TestPaymentAdjustmentService_RefundNeverCreatesNegativeCreditBalance(t *tes
 }
 
 func TestPaymentAdjustmentService_RefundIsIdempotentAcrossRetries(t *testing.T) {
-	svc, orders, grants, accounts, transactions, executions := newPaymentAdjustmentTestService()
+	svc, orders, grants, accounts, transactions, executions, _ := newPaymentAdjustmentTestService()
 	seedRefundableFulfillment(orders, grants, accounts, transactions, executions, 600)
 	event := &domain.PaymentEventInbox{EventType: domain.PaymentEventTypeRefunded, OutTradeNo: "CHK-ADJ-1"}
 
@@ -202,7 +265,7 @@ func TestPaymentAdjustmentService_RefundIsIdempotentAcrossRetries(t *testing.T) 
 }
 
 func TestPaymentAdjustmentService_CancelKeepsCurrentPaidPeriod(t *testing.T) {
-	svc, orders, grants, accounts, transactions, executions := newPaymentAdjustmentTestService()
+	svc, orders, grants, accounts, transactions, executions, _ := newPaymentAdjustmentTestService()
 	seedRefundableFulfillment(orders, grants, accounts, transactions, executions, 600)
 
 	result, err := svc.Apply(context.Background(), &domain.PaymentEventInbox{
@@ -227,5 +290,55 @@ func TestPaymentAdjustmentService_CancelKeepsCurrentPaidPeriod(t *testing.T) {
 	}
 	if _, err := transactions.GetByIdempotencyKey(context.Background(), "refund:clawback:CHK-ADJ-1:studio:credits"); err != repository.ErrNotFound {
 		t.Fatalf("cancel should not create clawback tx, err=%v", err)
+	}
+}
+
+func TestPaymentAdjustmentService_DisputeCreatesRiskFlagAndAppliesRefundPolicy(t *testing.T) {
+	svc, orders, grants, accounts, transactions, executions, risks := newPaymentAdjustmentTestService()
+	seedRefundableFulfillment(orders, grants, accounts, transactions, executions, 600)
+
+	result, err := svc.Apply(context.Background(), &domain.PaymentEventInbox{
+		Provider:        "creem",
+		ProviderEventID: "evt_dispute_1",
+		EventType:       domain.PaymentEventTypeDisputed,
+		OutTradeNo:      "CHK-ADJ-1",
+	})
+	if err != nil {
+		t.Fatalf("expected dispute adjustment, got %v", err)
+	}
+	if result.RiskFlag == nil || result.RiskFlag.Status != domain.PaymentRiskStatusOpen || result.RiskFlag.Severity != domain.PaymentRiskSeverityCritical {
+		t.Fatalf("expected open critical risk flag, got %#v", result.RiskFlag)
+	}
+	if result.RiskFlag.Reason != domain.PaymentRiskReasonDispute || result.RiskFlag.Provider != "creem" || result.RiskFlag.ProviderEventID != "evt_dispute_1" {
+		t.Fatalf("unexpected risk flag: %#v", result.RiskFlag)
+	}
+	if len(risks.flags) != 1 {
+		t.Fatalf("expected one risk flag, got %d", len(risks.flags))
+	}
+	if grants.grants["grt_1"].Status != domain.GrantStatusRevoked {
+		t.Fatalf("expected dispute to revoke grant")
+	}
+	account, err := accounts.GetByUserID(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	if account.Balance != 0 {
+		t.Fatalf("expected dispute to claw back credits, balance=%d", account.Balance)
+	}
+	if _, err := transactions.GetByIdempotencyKey(context.Background(), "refund:clawback:CHK-ADJ-1:studio:credits"); err != nil {
+		t.Fatalf("expected dispute clawback tx: %v", err)
+	}
+
+	second, err := svc.Apply(context.Background(), &domain.PaymentEventInbox{
+		Provider:        "creem",
+		ProviderEventID: "evt_dispute_1",
+		EventType:       domain.PaymentEventTypeDisputed,
+		OutTradeNo:      "CHK-ADJ-1",
+	})
+	if err != nil {
+		t.Fatalf("expected idempotent dispute adjustment, got %v", err)
+	}
+	if second.RiskFlag == nil || second.RiskFlag.ID != result.RiskFlag.ID || len(risks.flags) != 1 {
+		t.Fatalf("expected same risk flag on retry, first=%#v second=%#v count=%d", result.RiskFlag, second.RiskFlag, len(risks.flags))
 	}
 }

@@ -69,6 +69,7 @@ func main() {
 		&domain.CreditTransaction{},
 		&domain.PaymentEventInbox{},
 		&domain.FulfillmentExecution{},
+		&domain.PaymentRiskFlag{},
 	); err != nil {
 		l.Error("Failed to migrate database", "error", err)
 		os.Exit(1)
@@ -90,6 +91,7 @@ func main() {
 	creditTransactionRepo := &gorm_repo.CreditTransactionRepo{DB: db}
 	paymentEventRepo := &gorm_repo.PaymentEventRepo{DB: db}
 	fulfillmentExecutionRepo := &gorm_repo.FulfillmentExecutionRepo{DB: db}
+	paymentRiskFlagRepo := &gorm_repo.PaymentRiskFlagRepo{DB: db}
 
 	// 5. Init Key Generator Factory
 	keyFactory := generator.DefaultFactory()
@@ -211,6 +213,7 @@ func main() {
 			CreditAccounts:        creditAccountRepo,
 			CreditTransactions:    creditTransactionRepo,
 			FulfillmentExecutions: fulfillmentExecutionRepo,
+			PaymentRiskFlags:      paymentRiskFlagRepo,
 		},
 		UnitOfWorkFactory: uowFactory,
 	})

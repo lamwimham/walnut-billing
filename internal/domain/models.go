@@ -83,6 +83,7 @@ const (
 	PaymentEventTypePaid      = "payment.paid"
 	PaymentEventTypeCancelled = "payment.cancelled"
 	PaymentEventTypeRefunded  = "payment.refunded"
+	PaymentEventTypeDisputed  = "payment.disputed"
 )
 
 const (
@@ -138,6 +139,37 @@ type FulfillmentExecution struct {
 	LastError      string    `json:"last_error" gorm:"type:text"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+const (
+	PaymentRiskStatusOpen     = "open"
+	PaymentRiskStatusResolved = "resolved"
+
+	PaymentRiskSeverityLow      = "low"
+	PaymentRiskSeverityMedium   = "medium"
+	PaymentRiskSeverityHigh     = "high"
+	PaymentRiskSeverityCritical = "critical"
+
+	PaymentRiskReasonChargeback = "chargeback"
+	PaymentRiskReasonDispute    = "dispute"
+)
+
+// PaymentRiskFlag records payment-risk facts derived from Walnut-verified
+// payment events. It is an audit/control signal for future checkout policy, not
+// a direct app access gate.
+type PaymentRiskFlag struct {
+	ID              string     `json:"id" gorm:"primaryKey;size:40"`
+	UserID          string     `json:"user_id" gorm:"size:40;index"`
+	OutTradeNo      string     `json:"out_trade_no" gorm:"size:64;index"`
+	ProviderEventID string     `json:"provider_event_id" gorm:"size:128;uniqueIndex:idx_payment_risk_provider_event"`
+	Provider        string     `json:"provider" gorm:"size:32;uniqueIndex:idx_payment_risk_provider_event;index"`
+	Reason          string     `json:"reason" gorm:"size:32;index"`
+	Severity        string     `json:"severity" gorm:"size:16;index"`
+	Status          string     `json:"status" gorm:"size:16;index"`
+	Note            string     `json:"note" gorm:"type:text"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	ResolvedAt      *time.Time `json:"resolved_at"`
 }
 
 const (

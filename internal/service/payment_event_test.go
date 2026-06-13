@@ -218,6 +218,26 @@ func TestPaymentEventService_IgnoresUnknownEventType(t *testing.T) {
 	}
 }
 
+func TestPaymentEventService_ProcessesDisputedEventType(t *testing.T) {
+	repo := newMockPaymentEventRepo()
+	gateway := &mockWebhookGateway{event: &payment.VerifiedWebhookEvent{
+		ProviderEventID:   "evt_dispute",
+		EventType:         domain.PaymentEventTypeDisputed,
+		OutTradeNo:        "CHK-DISPUTE",
+		SignatureVerified: true,
+	}}
+	processor := &mockPaymentProcessor{}
+	svc := NewPaymentEventService(repo, gateway, processor)
+
+	result, err := svc.ReceiveWebhook(context.Background(), PaymentWebhookInput{Provider: "creem"})
+	if err != nil {
+		t.Fatalf("expected disputed event to process, got %v", err)
+	}
+	if !result.Processed || result.Event.EventType != domain.PaymentEventTypeDisputed || processor.calls != 1 {
+		t.Fatalf("expected processed disputed event, result=%#v calls=%d", result, processor.calls)
+	}
+}
+
 func TestPaymentOrderEventProcessor_MarksOrderPaid(t *testing.T) {
 	orders := newMockTxOrderRepo()
 	orders.orders["CHK-1"] = &domain.Order{OutTradeNo: "CHK-1", Amount: 1900, Status: domain.OrderStatusCheckoutCreated}
@@ -235,6 +255,23 @@ func TestPaymentOrderEventProcessor_MarksOrderPaid(t *testing.T) {
 	order := orders.orders["CHK-1"]
 	if order.Status != domain.OrderStatusPaid || order.TradeNo != "txn_1" || order.PaidAt == nil {
 		t.Fatalf("expected paid order, got %#v", order)
+	}
+}
+
+func TestPaymentOrderEventProcessor_MarksDisputedOrderRefunded(t *testing.T) {
+	orders := newMockTxOrderRepo()
+	orders.orders["CHK-1"] = &domain.Order{OutTradeNo: "CHK-1", Amount: 1900, Status: domain.OrderStatusFulfilled}
+	processor := NewPaymentOrderEventProcessor(orders)
+	err := processor.ProcessPaymentEvent(context.Background(), &domain.PaymentEventInbox{
+		Provider:   "creem",
+		EventType:  domain.PaymentEventTypeDisputed,
+		OutTradeNo: "CHK-1",
+	})
+	if err != nil {
+		t.Fatalf("expected disputed order to be marked refunded, got %v", err)
+	}
+	if orders.orders["CHK-1"].Status != domain.OrderStatusRefunded {
+		t.Fatalf("expected refunded status, got %s", orders.orders["CHK-1"].Status)
 	}
 }
 

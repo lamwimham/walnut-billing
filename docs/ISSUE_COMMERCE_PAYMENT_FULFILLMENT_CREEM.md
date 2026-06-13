@@ -359,7 +359,7 @@ GET  /api/v1/admin/fulfillments?order_id=&user_id=
 - 退款扣回 credits 时只扣当前可扣余额，不制造负余额。
 - 订阅赠点按周期额度建模，长期不承诺永久累积；第一阶段先用 ledger source/idempotency 区分，后续升级为 credit bucket / expiry。
 - 续费失败进入 3 天 grace period；grace period 内保留高级权益，但不发新周期点数。
-- chargeback / dispute 作为高风险退款处理：立即撤销订单相关权益、扣回可扣 credits，并标记用户支付风险（风险标记后续单独落表）。
+- chargeback / dispute 作为高风险退款处理：立即撤销订单相关权益、扣回可扣 credits，并通过 `PaymentRiskFlag` 标记支付风险；用户级购买限制后续由 checkout policy 接入。
 
 实现原则：
 
@@ -527,11 +527,35 @@ go test ./...
 git diff --check
 ```
 
+### M6-G 第二切片已完成：Payment risk flag / dispute baseline
+
+本轮补齐 chargeback / dispute 的生产级基础设施：高风险支付事件先进入 Walnut 自己的风险标记模型，再通过既有 adjustment policy 执行撤销和 credits 扣回。风险标记只作为审计和后续 checkout policy 输入，不直接成为 PC/mobile 门禁条件。
+
+已完成：
+
+- 新增 provider-agnostic 事件类型 `payment.disputed`。
+- 新增 `PaymentRiskFlag` 模型和 `PaymentRiskFlagRepository` / GORM 实现。
+- `PaymentRiskFlag` 通过 `(provider, provider_event_id)` 幂等，支持多海外渠道并存。
+- `PaymentAdjustmentService` 处理 `payment.disputed` 时：
+  - 创建 open / critical 风险标记。
+  - 复用退款补偿策略撤销本订单 grant。
+  - 扣回可扣 credits，仍不制造负余额。
+- Creem adapter 只做事件归一化：`dispute.created` / `chargeback.created` -> `payment.disputed`，不包含风控业务分支。
+- `PaymentFulfillmentEventProcessor` 通过 composition 接入 disputed 处理，webhook handler 仍保持 provider-agnostic。
+
+验证：
+
+```bash
+go test ./...
+git diff --check
+```
+
 M6-G 后续仍需补齐：
 
 - 7 天退款窗口、低使用条件、人工审核策略还未落 DB policy。
 - 订阅赠点 bucket / expiry 尚未实现，当前通过 ledger source/idempotency 区分。
-- chargeback / dispute 风险标记需要新增用户支付风险模型。
+- checkout 前置风控策略：根据 open / critical risk flag 阻止自动购买或转人工审核。
+- admin 风险处理视图：列出、备注、解决 `PaymentRiskFlag`。
 - 续费失败 3 天 grace period 需要结合 provider subscription renewal event 单独处理。
 
 ## 测试策略
