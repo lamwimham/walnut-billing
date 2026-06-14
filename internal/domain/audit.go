@@ -36,5 +36,6 @@ const (
 	AuditActionCreditReserve      = "credit.reserve"
 	AuditActionCreditCommit       = "credit.commit"
 	AuditActionCreditRelease      = "credit.release"
+	AuditActionCreditExpire       = "credit.expire"
 	AuditActionPaymentRiskResolve = "payment_risk.resolve"
 )

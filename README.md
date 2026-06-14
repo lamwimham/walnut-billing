@@ -84,11 +84,14 @@ Development builds register a `mock` checkout provider. Creem can be enabled as 
 
 Paid commerce orders are fulfilled through Walnut-owned rules, not through provider state. `FulfillmentService` reads the paid order SKU, executes configured rules, writes `FulfillmentExecution` rows for idempotency/audit, and grants only stable Walnut targets such as `EntitlementGrant` and `CreditTransaction`.
 
+`editorial_studio_monthly` now grants a subscription-period credit bucket that expires at the paid period end; `credits_600` grants a top-up bucket that does not expire with subscription. Clients still read only the aggregate credit snapshot, while Walnut keeps bucket-level expiry and refund isolation internally.
+
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/v1/admin/fulfillments?out_trade_no=&user_id=&sku_code=&status=` | List fulfillment executions for audit/reprocess diagnostics |
+| POST | `/api/v1/admin/credits/buckets/expire` | Expire due credit buckets in Walnut-owned storage |
 
-Fulfillment rules can be supplied through `FULFILLMENT_RULES_JSON`; the dev defaults include `editorial_studio_monthly` and `credits_600`. The production path uses UnitOfWork so order status, entitlement grants, credit ledger rows, and fulfillment executions converge safely under retries.
+Fulfillment rules can be supplied through `FULFILLMENT_RULES_JSON`; the dev defaults include `editorial_studio_monthly` and `credits_600`. The production path uses UnitOfWork so order status, entitlement grants, credit ledger rows, buckets, and fulfillment executions converge safely under retries.
 
 ### Subscription Renewal
 
@@ -188,6 +191,8 @@ All settings via environment variables (see `.env.example`):
 | `RENEWAL_GRACE_PERIOD_DAYS` | 3 | Grace window after renewal payment failure; grants access only, no period credits |
 | `RENEWAL_EXPIRED_ACTION` | expire_grace | Expiry handling: `expire_grace` or `natural_expiry` |
 
+Bucket expiry is exposed through `POST /api/v1/admin/credits/buckets/expire` for operator or scheduled jobs.
+
 **Note**: If payment credentials are not configured, the service uses mock adapters (suitable for development).
 
 ## Prometheus Metrics
@@ -236,6 +241,7 @@ All settings via environment variables (see `.env.example`):
 | SubscriptionRenewalService | Provider-agnostic renewal/grace policy executor |
 | Strategy | Fulfillment rule executors, payment adjustment policy, and subscription renewal policy |
 | Catalog | Validates stable entitlement IDs and configurable fulfillment rules independently from provider copy |
+| Bucket FEFO | Credit bucket allocation and expiry prioritize earliest expiring credits first |
 
 ## License
 

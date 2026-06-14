@@ -46,6 +46,7 @@ func (u *GormUnitOfWork) Repos() repository.TransactionalRepositories {
 			CreditAccountRepo:        &CreditAccountRepo{DB: u.db},
 			CreditReservationRepo:    &CreditReservationRepo{DB: u.db},
 			CreditTransactionRepo:    &CreditTransactionRepo{DB: u.db},
+			CreditBucketRepo:         &CreditBucketRepo{DB: u.db},
 			FulfillmentExecutionRepo: &FulfillmentExecutionRepo{DB: u.db},
 			PaymentRiskFlagRepo:      &PaymentRiskFlagRepo{DB: u.db},
 		}
@@ -58,6 +59,7 @@ func (u *GormUnitOfWork) Repos() repository.TransactionalRepositories {
 		CreditAccountRepo:        (&CreditAccountRepo{DB: u.db}).WithTx(u.tx),
 		CreditReservationRepo:    (&CreditReservationRepo{DB: u.db}).WithTx(u.tx),
 		CreditTransactionRepo:    (&CreditTransactionRepo{DB: u.db}).WithTx(u.tx),
+		CreditBucketRepo:         (&CreditBucketRepo{DB: u.db}).WithTx(u.tx),
 		FulfillmentExecutionRepo: (&FulfillmentExecutionRepo{DB: u.db}).WithTx(u.tx),
 		PaymentRiskFlagRepo:      (&PaymentRiskFlagRepo{DB: u.db}).WithTx(u.tx),
 	}

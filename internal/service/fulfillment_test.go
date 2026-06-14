@@ -76,6 +76,11 @@ func (m *mockFulfillmentExecutionRepo) Update(ctx context.Context, execution *do
 }
 
 func newFulfillmentTestService(rules ...FulfillmentRule) (FulfillmentService, *mockTxOrderRepo, *mockEntitlementUserRepo, *mockGrantRepo, *mockCreditAccountRepo, *mockCreditTransactionRepo, *mockFulfillmentExecutionRepo) {
+	svc, orders, users, grants, accounts, transactions, executions, _ := newFulfillmentTestServiceWithBuckets(rules...)
+	return svc, orders, users, grants, accounts, transactions, executions
+}
+
+func newFulfillmentTestServiceWithBuckets(rules ...FulfillmentRule) (FulfillmentService, *mockTxOrderRepo, *mockEntitlementUserRepo, *mockGrantRepo, *mockCreditAccountRepo, *mockCreditTransactionRepo, *mockFulfillmentExecutionRepo, *mockCreditBucketRepo) {
 	orders := newMockTxOrderRepo()
 	users := newMockEntitlementUserRepo()
 	registrations := newMockRegistrationRepo()
@@ -83,9 +88,10 @@ func newFulfillmentTestService(rules ...FulfillmentRule) (FulfillmentService, *m
 	accounts := newMockCreditAccountRepo()
 	reservations := newMockCreditReservationRepo()
 	transactions := newMockCreditTransactionRepo()
+	buckets := newMockCreditBucketRepo()
 	executions := newMockFulfillmentExecutionRepo()
 	entitlementSvc := NewEntitlementService(users, registrations, grants, DefaultEntitlementCatalog())
-	creditSvc := NewCreditService(users, accounts, reservations, transactions, nil)
+	creditSvc := NewCreditServiceWithBuckets(users, accounts, reservations, transactions, buckets, nil)
 	catalog, err := NewStaticFulfillmentCatalog(rules...)
 	if err != nil {
 		panic(err)
@@ -99,17 +105,18 @@ func newFulfillmentTestService(rules ...FulfillmentRule) (FulfillmentService, *m
 			EntitlementGrants:     grants,
 			CreditAccounts:        accounts,
 			CreditTransactions:    transactions,
+			CreditBuckets:         buckets,
 			FulfillmentExecutions: executions,
 		},
 		Catalog:            catalog,
 		EntitlementCatalog: DefaultEntitlementCatalog(),
-	}), orders, users, grants, accounts, transactions, executions
+	}), orders, users, grants, accounts, transactions, executions, buckets
 }
 
 func editorialStudioFulfillmentRules() []FulfillmentRule {
 	return []FulfillmentRule{
 		{ID: "studio:entitlement", SKUCode: "editorial_studio_monthly", Type: FulfillmentRuleGrantEntitlement, EntitlementID: domain.EntitlementEditorialStudio, Duration: "monthly"},
-		{ID: "studio:credits", SKUCode: "editorial_studio_monthly", Type: FulfillmentRuleGrantCredits, CreditsAmount: 600},
+		{ID: "studio:credits", SKUCode: "editorial_studio_monthly", Type: FulfillmentRuleGrantCredits, CreditsAmount: 600, CreditsBucketType: domain.CreditBucketTypeSubscriptionPeriod, Duration: "monthly"},
 	}
 }
 
@@ -165,6 +172,58 @@ func TestFulfillmentService_FulfillPaidOrderGrantsEntitlementAndCredits(t *testi
 	account, err := accounts.GetByUserID(context.Background(), "usr_1")
 	if err != nil || account.Balance != 600 {
 		t.Fatalf("expected 600 credit balance, account=%#v err=%v", account, err)
+	}
+}
+
+func TestFulfillmentService_PeriodCreditsCreateSubscriptionBucket(t *testing.T) {
+	svc, orders, users, _, accounts, transactions, _, buckets := newFulfillmentTestServiceWithBuckets(editorialStudioFulfillmentRules()...)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	order := paidCheckoutOrder()
+	order.Currency = "USD"
+	orders.orders[order.OutTradeNo] = order
+
+	if _, err := svc.FulfillOrder(context.Background(), order); err != nil {
+		t.Fatalf("expected fulfillment success, got %v", err)
+	}
+	account, err := accounts.GetByUserID(context.Background(), "usr_1")
+	if err != nil || account.Balance != 600 || len(transactions.transactions) != 1 {
+		t.Fatalf("expected 600 period credits, account=%#v txs=%d err=%v", account, len(transactions.transactions), err)
+	}
+	if len(buckets.buckets) != 1 {
+		t.Fatalf("expected one credit bucket, got %d", len(buckets.buckets))
+	}
+	for _, bucket := range buckets.buckets {
+		expectedEnd := order.PaidAt.UTC().AddDate(0, 1, 0)
+		if bucket.Type != domain.CreditBucketTypeSubscriptionPeriod || bucket.SourceOrderNo != order.OutTradeNo || bucket.ExpiresAt == nil || !bucket.ExpiresAt.Equal(expectedEnd) {
+			t.Fatalf("expected subscription-period bucket expiring at %s, got %#v", expectedEnd, bucket)
+		}
+		if bucket.PeriodStartAt == nil || !bucket.PeriodStartAt.Equal(order.PaidAt.UTC()) || bucket.PeriodEndAt == nil || !bucket.PeriodEndAt.Equal(expectedEnd) {
+			t.Fatalf("expected bucket period to follow paid order period, got %#v", bucket)
+		}
+	}
+}
+
+func TestFulfillmentService_TopupCreditsCreateNonExpiringBucket(t *testing.T) {
+	rules := []FulfillmentRule{{ID: "credits_600:credits", SKUCode: "credits_600", Type: FulfillmentRuleGrantCredits, CreditsAmount: 600, CreditsBucketType: domain.CreditBucketTypeTopup}}
+	svc, orders, users, _, _, _, _, buckets := newFulfillmentTestServiceWithBuckets(rules...)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	order := paidCheckoutOrder()
+	order.ID = 44
+	order.OutTradeNo = "CHK-TOPUP-1"
+	order.SKUCode = "credits_600"
+	order.Currency = "USD"
+	orders.orders[order.OutTradeNo] = order
+
+	if _, err := svc.FulfillOrder(context.Background(), order); err != nil {
+		t.Fatalf("expected top-up fulfillment success, got %v", err)
+	}
+	if len(buckets.buckets) != 1 {
+		t.Fatalf("expected one top-up bucket, got %d", len(buckets.buckets))
+	}
+	for _, bucket := range buckets.buckets {
+		if bucket.Type != domain.CreditBucketTypeTopup || bucket.ExpiresAt != nil || bucket.PeriodStartAt != nil || bucket.PeriodEndAt != nil {
+			t.Fatalf("top-up credits must be non-expiring and outside subscription periods, got %#v", bucket)
+		}
 	}
 }
 

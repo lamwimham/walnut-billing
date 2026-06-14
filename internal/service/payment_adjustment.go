@@ -39,6 +39,7 @@ type PaymentAdjustmentRepositories struct {
 	EntitlementGrants     repository.EntitlementGrantRepository
 	CreditAccounts        repository.CreditAccountRepository
 	CreditTransactions    repository.CreditTransactionRepository
+	CreditBuckets         repository.CreditBucketRepository
 	FulfillmentExecutions repository.FulfillmentExecutionRepository
 	PaymentRiskFlags      repository.PaymentRiskFlagRepository
 }
@@ -179,6 +180,18 @@ func paymentAdjustmentUsageSnapshot(ctx context.Context, repos PaymentAdjustment
 			remaining = account.Balance
 		}
 		available := minInt64(original.Amount, remaining)
+		if repos.CreditBuckets != nil && strings.TrimSpace(original.BucketID) != "" {
+			bucket, bucketErr := repos.CreditBuckets.GetByID(ctx, original.BucketID)
+			if bucketErr != nil && !errors.Is(bucketErr, repository.ErrNotFound) {
+				return usage, bucketErr
+			}
+			if bucketErr != nil {
+				// Missing source bucket means we cannot safely attribute future top-ups to this refund.
+				available = 0
+			} else {
+				available = minInt64(available, bucket.Remaining)
+			}
+		}
 		if available < 0 {
 			available = 0
 		}
@@ -249,6 +262,19 @@ func clawbackFulfilledCredits(ctx context.Context, repos PaymentAdjustmentReposi
 		return 0, nil, err
 	}
 	clawbackAmount := minInt64(original.Amount, account.Balance)
+	var bucket *domain.CreditBucket
+	if repos.CreditBuckets != nil && strings.TrimSpace(original.BucketID) != "" {
+		bucket, err = repos.CreditBuckets.GetByID(ctx, original.BucketID)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				clawbackAmount = 0
+			} else {
+				return 0, nil, err
+			}
+		} else {
+			clawbackAmount = minInt64(clawbackAmount, bucket.Remaining)
+		}
+	}
 	now := time.Now().UTC()
 	if clawbackAmount > 0 {
 		account.Balance -= clawbackAmount
@@ -256,9 +282,20 @@ func clawbackFulfilledCredits(ctx context.Context, repos PaymentAdjustmentReposi
 		if err := repos.CreditAccounts.Update(ctx, account); err != nil {
 			return 0, nil, err
 		}
+		if bucket != nil {
+			bucket.Remaining -= clawbackAmount
+			if bucket.Remaining == 0 && bucket.Reserved == 0 {
+				bucket.Status = domain.CreditBucketStatusDepleted
+			}
+			bucket.UpdatedAt = now
+			if err := repos.CreditBuckets.Update(ctx, bucket); err != nil {
+				return 0, nil, err
+			}
+		}
 	}
 	transaction, err := newCreditTransaction(ctx, repos.CreditTransactions, creditTransactionInput{
 		Account:         account,
+		BucketID:        original.BucketID,
 		TransactionType: domain.CreditTransactionTypeClawback,
 		Amount:          -clawbackAmount,
 		IdempotencyKey:  key,
@@ -322,6 +359,7 @@ func adjustmentReposFromUOW(repos repository.TransactionalRepositories, fallback
 		EntitlementGrants:     firstEntitlementGrantRepo(repos.EntitlementGrantRepo, fallback.EntitlementGrants),
 		CreditAccounts:        firstCreditAccountRepo(repos.CreditAccountRepo, fallback.CreditAccounts),
 		CreditTransactions:    firstCreditTransactionRepo(repos.CreditTransactionRepo, fallback.CreditTransactions),
+		CreditBuckets:         firstCreditBucketRepo(repos.CreditBucketRepo, fallback.CreditBuckets),
 		FulfillmentExecutions: firstFulfillmentExecutionRepo(repos.FulfillmentExecutionRepo, fallback.FulfillmentExecutions),
 		PaymentRiskFlags:      firstPaymentRiskFlagRepo(repos.PaymentRiskFlagRepo, fallback.PaymentRiskFlags),
 	}
@@ -376,11 +414,4 @@ func firstPaymentRiskFlagRepo(primary repository.PaymentRiskFlagRepository, fall
 
 func refundClawbackKey(outTradeNo string, ruleID string) string {
 	return "refund:clawback:" + strings.TrimSpace(outTradeNo) + ":" + strings.TrimSpace(ruleID)
-}
-
-func minInt64(a int64, b int64) int64 {
-	if a < b {
-		return a
-	}
-	return b
 }

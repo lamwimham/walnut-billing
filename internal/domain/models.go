@@ -276,6 +276,16 @@ const (
 	CreditTransactionTypeCommit   = "commit"
 	CreditTransactionTypeRelease  = "release"
 	CreditTransactionTypeClawback = "clawback"
+	CreditTransactionTypeExpire   = "expire"
+
+	CreditBucketStatusActive   = "active"
+	CreditBucketStatusExpired  = "expired"
+	CreditBucketStatusDepleted = "depleted"
+
+	CreditBucketTypeAdmin              = "admin"
+	CreditBucketTypeLegacy             = "legacy"
+	CreditBucketTypeTopup              = "topup"
+	CreditBucketTypeSubscriptionPeriod = "subscription_period"
 
 	CreditMetricBalance  = "credits.balance"
 	CreditMetricReserved = "credits.reserved"
@@ -291,23 +301,47 @@ type CreditAccount struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// CreditBucket tracks one source of credits so subscription period grants can
+// expire independently from prepaid top-ups while CreditAccount remains the
+// aggregate balance projection consumed by existing clients.
+type CreditBucket struct {
+	ID                  string     `json:"id" gorm:"primaryKey;size:40"`
+	AccountID           string     `json:"account_id" gorm:"size:40;index"`
+	UserID              string     `json:"user_id" gorm:"size:40;index"`
+	Type                string     `json:"type" gorm:"size:32;index"`
+	Source              string     `json:"source" gorm:"size:32;index"`
+	SourceOrderNo       string     `json:"source_order_no" gorm:"size:64;index"`
+	SourceTransactionID string     `json:"source_transaction_id" gorm:"size:40;index"`
+	PeriodStartAt       *time.Time `json:"period_start_at,omitempty" gorm:"index"`
+	PeriodEndAt         *time.Time `json:"period_end_at,omitempty" gorm:"index"`
+	ExpiresAt           *time.Time `json:"expires_at,omitempty" gorm:"index"`
+	Granted             int64      `json:"granted"`
+	Remaining           int64      `json:"remaining" gorm:"index"`
+	Reserved            int64      `json:"reserved" gorm:"default:0"`
+	Status              string     `json:"status" gorm:"size:16;index"`
+	IdempotencyKey      string     `json:"idempotency_key" gorm:"uniqueIndex;size:160"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
 // CreditReservation represents an idempotent pre-deduction for one operation.
 type CreditReservation struct {
-	ID             string     `json:"id" gorm:"primaryKey;size:40"`
-	AccountID      string     `json:"account_id" gorm:"size:40;index"`
-	UserID         string     `json:"user_id" gorm:"size:40;index"`
-	Operation      string     `json:"operation" gorm:"size:64;index"`
-	Amount         int64      `json:"amount"`
-	Status         string     `json:"status" gorm:"size:16;index"`
-	IdempotencyKey string     `json:"idempotency_key" gorm:"uniqueIndex;size:128"`
-	FeatureID      string     `json:"feature_id" gorm:"size:64;index"`
-	ExecutionID    string     `json:"execution_id" gorm:"size:128;index"`
-	Metadata       string     `json:"metadata" gorm:"type:text"`
-	ExpiresAt      *time.Time `json:"expires_at" gorm:"index"`
-	CommittedAt    *time.Time `json:"committed_at"`
-	ReleasedAt     *time.Time `json:"released_at"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID                string     `json:"id" gorm:"primaryKey;size:40"`
+	AccountID         string     `json:"account_id" gorm:"size:40;index"`
+	UserID            string     `json:"user_id" gorm:"size:40;index"`
+	Operation         string     `json:"operation" gorm:"size:64;index"`
+	Amount            int64      `json:"amount"`
+	Status            string     `json:"status" gorm:"size:16;index"`
+	IdempotencyKey    string     `json:"idempotency_key" gorm:"uniqueIndex;size:128"`
+	FeatureID         string     `json:"feature_id" gorm:"size:64;index"`
+	ExecutionID       string     `json:"execution_id" gorm:"size:128;index"`
+	Metadata          string     `json:"metadata" gorm:"type:text"`
+	BucketAllocations string     `json:"bucket_allocations,omitempty" gorm:"type:text"`
+	ExpiresAt         *time.Time `json:"expires_at" gorm:"index"`
+	CommittedAt       *time.Time `json:"committed_at"`
+	ReleasedAt        *time.Time `json:"released_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 // CreditTransaction is the immutable ledger for all credit mutations.
@@ -316,6 +350,7 @@ type CreditTransaction struct {
 	AccountID      string    `json:"account_id" gorm:"size:40;index"`
 	UserID         string    `json:"user_id" gorm:"size:40;index"`
 	ReservationID  string    `json:"reservation_id" gorm:"size:40;index"`
+	BucketID       string    `json:"bucket_id" gorm:"size:40;index"`
 	Type           string    `json:"type" gorm:"size:16;index"`
 	Amount         int64     `json:"amount"`
 	BalanceAfter   int64     `json:"balance_after"`

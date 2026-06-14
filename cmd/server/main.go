@@ -102,6 +102,7 @@ func main() {
 		&domain.RegistrationRequest{},
 		&domain.EntitlementGrant{},
 		&domain.CreditAccount{},
+		&domain.CreditBucket{},
 		&domain.CreditReservation{},
 		&domain.CreditTransaction{},
 		&domain.PaymentEventInbox{},
@@ -124,6 +125,7 @@ func main() {
 	registrationRepo := &gorm_repo.RegistrationRepo{DB: db}
 	grantRepo := &gorm_repo.EntitlementGrantRepo{DB: db}
 	creditAccountRepo := &gorm_repo.CreditAccountRepo{DB: db}
+	creditBucketRepo := &gorm_repo.CreditBucketRepo{DB: db}
 	creditReservationRepo := &gorm_repo.CreditReservationRepo{DB: db}
 	creditTransactionRepo := &gorm_repo.CreditTransactionRepo{DB: db}
 	paymentEventRepo := &gorm_repo.PaymentEventRepo{DB: db}
@@ -140,7 +142,7 @@ func main() {
 		return gorm_repo.NewUnitOfWork(db)
 	}
 	orderSvc := service.NewOrderService(orderRepo, productRepo, licRepo, keyFactory, uowFactory)
-	creditSvc := service.NewCreditService(userRepo, creditAccountRepo, creditReservationRepo, creditTransactionRepo, uowFactory)
+	creditSvc := service.NewCreditServiceWithBuckets(userRepo, creditAccountRepo, creditReservationRepo, creditTransactionRepo, creditBucketRepo, uowFactory)
 	entitlementSvc := service.NewEntitlementServiceWithCredits(userRepo, registrationRepo, grantRepo, creditAccountRepo, service.DefaultEntitlementCatalog())
 	fulfillmentCatalog, err := service.NewFulfillmentCatalogFromJSON(cfg.Fulfillment.RulesJSON, service.DefaultFulfillmentRules())
 	if err != nil {
@@ -240,6 +242,7 @@ func main() {
 			EntitlementGrants:     grantRepo,
 			CreditAccounts:        creditAccountRepo,
 			CreditTransactions:    creditTransactionRepo,
+			CreditBuckets:         creditBucketRepo,
 			FulfillmentExecutions: fulfillmentExecutionRepo,
 		},
 		Catalog:            fulfillmentCatalog,
@@ -254,6 +257,7 @@ func main() {
 			EntitlementGrants:     grantRepo,
 			CreditAccounts:        creditAccountRepo,
 			CreditTransactions:    creditTransactionRepo,
+			CreditBuckets:         creditBucketRepo,
 			FulfillmentExecutions: fulfillmentExecutionRepo,
 			PaymentRiskFlags:      paymentRiskFlagRepo,
 		},
@@ -399,6 +403,7 @@ func main() {
 		admin.GET("/grants", entitlementHandler.ListGrants)
 		admin.POST("/grants", entitlementHandler.CreateGrant)
 		admin.POST("/credits/grants", creditHandler.Grant)
+		admin.POST("/credits/buckets/expire", creditHandler.ExpireBuckets)
 		admin.GET("/users/:user_id/credits/transactions", creditHandler.ListTransactions)
 		admin.GET("/users/:user_id/credits/usage-records", creditHandler.ListUsageRecords)
 	}

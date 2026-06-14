@@ -11,6 +11,7 @@ import (
 var _ repository.CreditAccountRepository = (*CreditAccountRepo)(nil)
 var _ repository.CreditReservationRepository = (*CreditReservationRepo)(nil)
 var _ repository.CreditTransactionRepository = (*CreditTransactionRepo)(nil)
+var _ repository.CreditBucketRepository = (*CreditBucketRepo)(nil)
 
 type CreditAccountRepo struct {
 	DB *gorm.DB
@@ -42,6 +43,84 @@ func (r *CreditAccountRepo) Update(ctx context.Context, account *domain.CreditAc
 
 func (r *CreditAccountRepo) WithTx(tx *gorm.DB) *CreditAccountRepo {
 	return &CreditAccountRepo{DB: tx}
+}
+
+type CreditBucketRepo struct {
+	DB *gorm.DB
+}
+
+func (r *CreditBucketRepo) Create(ctx context.Context, bucket *domain.CreditBucket) error {
+	return r.DB.WithContext(ctx).Create(bucket).Error
+}
+
+func (r *CreditBucketRepo) GetByID(ctx context.Context, id string) (*domain.CreditBucket, error) {
+	var bucket domain.CreditBucket
+	if err := r.DB.WithContext(ctx).Where("id = ?", id).First(&bucket).Error; err != nil {
+		return nil, mapGormNotFound(err)
+	}
+	return &bucket, nil
+}
+
+func (r *CreditBucketRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.CreditBucket, error) {
+	var bucket domain.CreditBucket
+	if err := r.DB.WithContext(ctx).Where("idempotency_key = ?", key).First(&bucket).Error; err != nil {
+		return nil, mapGormNotFound(err)
+	}
+	return &bucket, nil
+}
+
+func (r *CreditBucketRepo) List(ctx context.Context, query repository.CreditBucketQuery) ([]domain.CreditBucket, error) {
+	var buckets []domain.CreditBucket
+	q := r.DB.WithContext(ctx).Model(&domain.CreditBucket{})
+	if query.AccountID != "" {
+		q = q.Where("account_id = ?", query.AccountID)
+	}
+	if query.UserID != "" {
+		q = q.Where("user_id = ?", query.UserID)
+	}
+	if query.Type != "" {
+		q = q.Where("type = ?", query.Type)
+	}
+	if query.Status != "" {
+		q = q.Where("status = ?", query.Status)
+	}
+	if query.SourceOrderNo != "" {
+		q = q.Where("source_order_no = ?", query.SourceOrderNo)
+	}
+	if query.SourceTransactionID != "" {
+		q = q.Where("source_transaction_id = ?", query.SourceTransactionID)
+	}
+	if query.ActiveAt != nil {
+		q = q.Where("(expires_at IS NULL OR expires_at > ?)", *query.ActiveAt)
+	}
+	if query.ExpiresAtOrBefore != nil {
+		q = q.Where("expires_at IS NOT NULL AND expires_at <= ?", *query.ExpiresAtOrBefore)
+	}
+	if query.PositiveRemaining {
+		q = q.Where("remaining > 0")
+	}
+	q = q.Order("CASE WHEN expires_at IS NULL THEN 1 ELSE 0 END ASC").
+		Order("expires_at ASC").
+		Order("created_at ASC").
+		Order("id ASC")
+	if query.Limit > 0 {
+		q = q.Limit(query.Limit)
+	}
+	if query.Offset > 0 {
+		q = q.Offset(query.Offset)
+	}
+	if err := q.Find(&buckets).Error; err != nil {
+		return nil, err
+	}
+	return buckets, nil
+}
+
+func (r *CreditBucketRepo) Update(ctx context.Context, bucket *domain.CreditBucket) error {
+	return r.DB.WithContext(ctx).Save(bucket).Error
+}
+
+func (r *CreditBucketRepo) WithTx(tx *gorm.DB) *CreditBucketRepo {
+	return &CreditBucketRepo{DB: tx}
 }
 
 type CreditReservationRepo struct {

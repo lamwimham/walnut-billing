@@ -29,12 +29,13 @@ const (
 // FulfillmentRule maps one Walnut SKU to one delivery effect. The rule is
 // intentionally provider-agnostic: checkout providers only produce paid orders.
 type FulfillmentRule struct {
-	ID            string              `json:"id"`
-	SKUCode       string              `json:"sku_code"`
-	Type          FulfillmentRuleType `json:"type"`
-	EntitlementID string              `json:"entitlement_id,omitempty"`
-	CreditsAmount int64               `json:"credits_amount,omitempty"`
-	Duration      string              `json:"duration,omitempty"`
+	ID                string              `json:"id"`
+	SKUCode           string              `json:"sku_code"`
+	Type              FulfillmentRuleType `json:"type"`
+	EntitlementID     string              `json:"entitlement_id,omitempty"`
+	CreditsAmount     int64               `json:"credits_amount,omitempty"`
+	CreditsBucketType string              `json:"credits_bucket_type,omitempty"`
+	Duration          string              `json:"duration,omitempty"`
 }
 
 type FulfillmentCatalog interface {
@@ -79,16 +80,19 @@ func DefaultFulfillmentRules() []FulfillmentRule {
 			Duration:      "monthly",
 		},
 		{
-			ID:            "editorial_studio_monthly:credits_600",
-			SKUCode:       "editorial_studio_monthly",
-			Type:          FulfillmentRuleGrantCredits,
-			CreditsAmount: 600,
+			ID:                "editorial_studio_monthly:credits_600",
+			SKUCode:           "editorial_studio_monthly",
+			Type:              FulfillmentRuleGrantCredits,
+			CreditsAmount:     600,
+			CreditsBucketType: domain.CreditBucketTypeSubscriptionPeriod,
+			Duration:          "monthly",
 		},
 		{
-			ID:            "credits_600:credits",
-			SKUCode:       "credits_600",
-			Type:          FulfillmentRuleGrantCredits,
-			CreditsAmount: 600,
+			ID:                "credits_600:credits",
+			SKUCode:           "credits_600",
+			Type:              FulfillmentRuleGrantCredits,
+			CreditsAmount:     600,
+			CreditsBucketType: domain.CreditBucketTypeTopup,
 		},
 	}
 }
@@ -119,6 +123,7 @@ type FulfillmentRepositories struct {
 	EntitlementGrants     repository.EntitlementGrantRepository
 	CreditAccounts        repository.CreditAccountRepository
 	CreditTransactions    repository.CreditTransactionRepository
+	CreditBuckets         repository.CreditBucketRepository
 	FulfillmentExecutions repository.FulfillmentExecutionRepository
 }
 
@@ -376,6 +381,7 @@ func fulfillmentReposFromUOW(repos repository.TransactionalRepositories, fallbac
 		EntitlementGrants:     firstEntitlementGrantRepo(repos.EntitlementGrantRepo, fallback.EntitlementGrants),
 		CreditAccounts:        firstCreditAccountRepo(repos.CreditAccountRepo, fallback.CreditAccounts),
 		CreditTransactions:    firstCreditTransactionRepo(repos.CreditTransactionRepo, fallback.CreditTransactions),
+		CreditBuckets:         firstCreditBucketRepo(repos.CreditBucketRepo, fallback.CreditBuckets),
 		FulfillmentExecutions: firstFulfillmentExecutionRepo(repos.FulfillmentExecutionRepo, fallback.FulfillmentExecutions),
 	}
 }
@@ -432,12 +438,18 @@ func (e *creditFulfillmentExecutor) Execute(ctx context.Context, repos Fulfillme
 	mutation, err := grantCreditsWithRepos(ctx, creditRepos{
 		accounts:     repos.CreditAccounts,
 		transactions: repos.CreditTransactions,
+		buckets:      repos.CreditBuckets,
 	}, CreditGrantInput{
 		UserID:         order.UserID,
 		Amount:         rule.CreditsAmount,
 		IdempotencyKey: fulfillmentRuleTargetKey(order.OutTradeNo, rule.ID, "credits"),
 		Source:         domain.GrantSourceFulfillment,
 		Description:    fmt.Sprintf("fulfillment for %s (%s)", order.SKUCode, order.OutTradeNo),
+		BucketType:     creditBucketTypeForFulfillment(order, rule),
+		SourceOrderNo:  order.OutTradeNo,
+		PeriodStartAt:  creditFulfillmentPeriodStart(order, rule),
+		PeriodEndAt:    creditFulfillmentPeriodEnd(order, rule),
+		ExpiresAt:      creditFulfillmentPeriodEnd(order, rule),
 	})
 	if err != nil {
 		return nil, err
@@ -468,6 +480,7 @@ func normalizeFulfillmentRule(rule FulfillmentRule) (FulfillmentRule, error) {
 	rule.SKUCode = strings.TrimSpace(rule.SKUCode)
 	rule.Type = FulfillmentRuleType(strings.TrimSpace(string(rule.Type)))
 	rule.EntitlementID = strings.TrimSpace(rule.EntitlementID)
+	rule.CreditsBucketType = strings.TrimSpace(rule.CreditsBucketType)
 	rule.Duration = strings.TrimSpace(rule.Duration)
 	if rule.ID == "" || rule.SKUCode == "" || rule.Type == "" {
 		return FulfillmentRule{}, ErrInvalidFulfillmentRule
@@ -479,6 +492,11 @@ func normalizeFulfillmentRule(rule FulfillmentRule) (FulfillmentRule, error) {
 		}
 	case FulfillmentRuleGrantCredits:
 		if rule.CreditsAmount <= 0 {
+			return FulfillmentRule{}, ErrInvalidFulfillmentRule
+		}
+		switch rule.CreditsBucketType {
+		case "", domain.CreditBucketTypeAdmin, domain.CreditBucketTypeLegacy, domain.CreditBucketTypeTopup, domain.CreditBucketTypeSubscriptionPeriod:
+		default:
 			return FulfillmentRule{}, ErrInvalidFulfillmentRule
 		}
 	default:
@@ -513,6 +531,38 @@ func fulfillmentRuleExpiresAt(rule FulfillmentRule, anchor time.Time) (*time.Tim
 	}
 	expiresAt := anchor.Add(parsed)
 	return &expiresAt, nil
+}
+
+func creditBucketTypeForFulfillment(order *domain.Order, rule FulfillmentRule) string {
+	if strings.TrimSpace(rule.CreditsBucketType) != "" {
+		return strings.TrimSpace(rule.CreditsBucketType)
+	}
+	if order != nil && order.SKUCode == "credits_600" {
+		return domain.CreditBucketTypeTopup
+	}
+	if order != nil && (order.OrderType == domain.OrderTypeCheckout || order.OrderType == domain.OrderTypeRenewal) && strings.TrimSpace(rule.Duration) != "" {
+		return domain.CreditBucketTypeSubscriptionPeriod
+	}
+	return domain.CreditBucketTypeTopup
+}
+
+func creditFulfillmentPeriodStart(order *domain.Order, rule FulfillmentRule) *time.Time {
+	if creditBucketTypeForFulfillment(order, rule) != domain.CreditBucketTypeSubscriptionPeriod {
+		return nil
+	}
+	anchor := fulfillmentAnchorTime(order)
+	return &anchor
+}
+
+func creditFulfillmentPeriodEnd(order *domain.Order, rule FulfillmentRule) *time.Time {
+	if creditBucketTypeForFulfillment(order, rule) != domain.CreditBucketTypeSubscriptionPeriod {
+		return nil
+	}
+	expiresAt, err := fulfillmentRuleExpiresAt(rule, fulfillmentAnchorTime(order))
+	if err != nil {
+		return nil
+	}
+	return expiresAt
 }
 
 func fulfillmentAnchorTime(order *domain.Order) time.Time {

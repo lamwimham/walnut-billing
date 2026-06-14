@@ -26,6 +26,11 @@ type CreditGrantInput struct {
 	IdempotencyKey string
 	Source         string
 	Description    string
+	BucketType     string
+	SourceOrderNo  string
+	PeriodStartAt  *time.Time
+	PeriodEndAt    *time.Time
+	ExpiresAt      *time.Time
 }
 
 type CreditReservationInput struct {
@@ -48,6 +53,27 @@ type CreditMutationResult struct {
 	Account     *domain.CreditAccount     `json:"account"`
 	Reservation *domain.CreditReservation `json:"reservation,omitempty"`
 	Transaction *domain.CreditTransaction `json:"transaction,omitempty"`
+	Bucket      *domain.CreditBucket      `json:"bucket,omitempty"`
+}
+
+type CreditBucketExpiryInput struct {
+	Now   time.Time
+	Limit int
+}
+
+type CreditBucketExpiryResult struct {
+	ExpiredBuckets []domain.CreditBucket      `json:"expired_buckets"`
+	Transactions   []domain.CreditTransaction `json:"transactions"`
+	ExpiredAmount  int64                      `json:"expired_amount"`
+}
+
+type CreditBucketAllocation struct {
+	BucketID string `json:"bucket_id"`
+	Amount   int64  `json:"amount"`
+}
+
+type CreditBucketAllocationStrategy interface {
+	Allocate(ctx context.Context, buckets []domain.CreditBucket, amount int64, now time.Time) ([]CreditBucketAllocation, error)
 }
 
 type UsageRecordQuery struct {
@@ -67,16 +93,19 @@ type CreditService interface {
 	Reserve(ctx context.Context, input CreditReservationInput) (*CreditMutationResult, error)
 	Commit(ctx context.Context, input CreditFinalizationInput) (*CreditMutationResult, error)
 	Release(ctx context.Context, input CreditFinalizationInput) (*CreditMutationResult, error)
+	ExpireBuckets(ctx context.Context, input CreditBucketExpiryInput) (*CreditBucketExpiryResult, error)
 	ListTransactions(ctx context.Context, userID string, limit int, offset int) ([]domain.CreditTransaction, error)
 	ListUsageRecords(ctx context.Context, query UsageRecordQuery) ([]domain.UsageRecord, error)
 }
 
 type creditServiceImpl struct {
-	users        repository.UserRepository
-	accounts     repository.CreditAccountRepository
-	reservations repository.CreditReservationRepository
-	transactions repository.CreditTransactionRepository
-	uowFactory   func() repository.UnitOfWork
+	users              repository.UserRepository
+	accounts           repository.CreditAccountRepository
+	reservations       repository.CreditReservationRepository
+	transactions       repository.CreditTransactionRepository
+	buckets            repository.CreditBucketRepository
+	uowFactory         func() repository.UnitOfWork
+	allocationStrategy CreditBucketAllocationStrategy
 }
 
 func NewCreditService(
@@ -86,12 +115,25 @@ func NewCreditService(
 	transactions repository.CreditTransactionRepository,
 	uowFactory func() repository.UnitOfWork,
 ) CreditService {
+	return NewCreditServiceWithBuckets(users, accounts, reservations, transactions, nil, uowFactory)
+}
+
+func NewCreditServiceWithBuckets(
+	users repository.UserRepository,
+	accounts repository.CreditAccountRepository,
+	reservations repository.CreditReservationRepository,
+	transactions repository.CreditTransactionRepository,
+	buckets repository.CreditBucketRepository,
+	uowFactory func() repository.UnitOfWork,
+) CreditService {
 	return &creditServiceImpl{
-		users:        users,
-		accounts:     accounts,
-		reservations: reservations,
-		transactions: transactions,
-		uowFactory:   uowFactory,
+		users:              users,
+		accounts:           accounts,
+		reservations:       reservations,
+		transactions:       transactions,
+		buckets:            buckets,
+		uowFactory:         uowFactory,
+		allocationStrategy: earliestExpiringBucketAllocationStrategy{},
 	}
 }
 
@@ -146,7 +188,15 @@ func grantCreditsWithRepos(ctx context.Context, repos creditRepos, input CreditG
 		if err != nil {
 			return nil, err
 		}
-		return &CreditMutationResult{Account: account, Transaction: existing}, nil
+		var bucket *domain.CreditBucket
+		if repos.buckets != nil && strings.TrimSpace(existing.BucketID) != "" {
+			found, getErr := repos.buckets.GetByID(ctx, existing.BucketID)
+			if getErr != nil && !errors.Is(getErr, repository.ErrNotFound) {
+				return nil, getErr
+			}
+			bucket = found
+		}
+		return &CreditMutationResult{Account: account, Transaction: existing, Bucket: bucket}, nil
 	}
 	if !errors.Is(err, repository.ErrNotFound) {
 		return nil, err
@@ -163,8 +213,18 @@ func grantCreditsWithRepos(ctx context.Context, repos creditRepos, input CreditG
 		return nil, err
 	}
 
+	var bucket *domain.CreditBucket
+	bucketID := ""
+	if repos.buckets != nil {
+		bucket, err = newCreditBucketFromGrant(account, input, key, now)
+		if err != nil {
+			return nil, err
+		}
+		bucketID = bucket.ID
+	}
 	transaction, err := newCreditTransaction(ctx, repos.transactions, creditTransactionInput{
 		Account:         account,
+		BucketID:        bucketID,
 		TransactionType: domain.CreditTransactionTypeGrant,
 		Amount:          input.Amount,
 		IdempotencyKey:  key,
@@ -175,7 +235,13 @@ func grantCreditsWithRepos(ctx context.Context, repos creditRepos, input CreditG
 	if err != nil {
 		return nil, err
 	}
-	return &CreditMutationResult{Account: account, Transaction: transaction}, nil
+	if bucket != nil {
+		bucket.SourceTransactionID = transaction.ID
+		if err := repos.buckets.Create(ctx, bucket); err != nil {
+			return nil, err
+		}
+	}
+	return &CreditMutationResult{Account: account, Transaction: transaction, Bucket: bucket}, nil
 }
 
 func (s *creditServiceImpl) Reserve(ctx context.Context, input CreditReservationInput) (*CreditMutationResult, error) {
@@ -216,10 +282,14 @@ func (s *creditServiceImpl) Reserve(ctx context.Context, input CreditReservation
 		if err != nil {
 			return err
 		}
+		now := time.Now().UTC()
+		allocations, err := s.reserveBucketCredits(ctx, repos, account, input.Amount, now)
+		if err != nil {
+			return err
+		}
 		if account.Balance < input.Amount {
 			return ErrInsufficientCredits
 		}
-		now := time.Now().UTC()
 		account.Balance -= input.Amount
 		account.Reserved += input.Amount
 		account.UpdatedAt = now
@@ -232,19 +302,20 @@ func (s *creditServiceImpl) Reserve(ctx context.Context, input CreditReservation
 			return err
 		}
 		reservation := &domain.CreditReservation{
-			ID:             reservationID,
-			AccountID:      account.ID,
-			UserID:         userID,
-			Operation:      strings.TrimSpace(input.Operation),
-			Amount:         input.Amount,
-			Status:         domain.CreditReservationStatusPending,
-			IdempotencyKey: key,
-			FeatureID:      strings.TrimSpace(input.FeatureID),
-			ExecutionID:    strings.TrimSpace(input.ExecutionID),
-			Metadata:       encodeUsageMetadata(sanitizedUsageMetadata(input.Metadata)),
-			ExpiresAt:      input.ExpiresAt,
-			CreatedAt:      now,
-			UpdatedAt:      now,
+			ID:                reservationID,
+			AccountID:         account.ID,
+			UserID:            userID,
+			Operation:         strings.TrimSpace(input.Operation),
+			Amount:            input.Amount,
+			Status:            domain.CreditReservationStatusPending,
+			IdempotencyKey:    key,
+			FeatureID:         strings.TrimSpace(input.FeatureID),
+			ExecutionID:       strings.TrimSpace(input.ExecutionID),
+			Metadata:          encodeUsageMetadata(sanitizedUsageMetadata(input.Metadata)),
+			BucketAllocations: encodeCreditBucketAllocations(allocations),
+			ExpiresAt:         input.ExpiresAt,
+			CreatedAt:         now,
+			UpdatedAt:         now,
 		}
 		if err := repos.reservations.Create(ctx, reservation); err != nil {
 			return err
@@ -253,6 +324,7 @@ func (s *creditServiceImpl) Reserve(ctx context.Context, input CreditReservation
 		transaction, err := s.newTransaction(ctx, repos.transactions, creditTransactionInput{
 			Account:         account,
 			ReservationID:   reservation.ID,
+			BucketID:        singleAllocationBucketID(allocations),
 			TransactionType: domain.CreditTransactionTypeReserve,
 			Amount:          -input.Amount,
 			IdempotencyKey:  "reserve:" + key,
@@ -275,6 +347,23 @@ func (s *creditServiceImpl) Commit(ctx context.Context, input CreditFinalization
 
 func (s *creditServiceImpl) Release(ctx context.Context, input CreditFinalizationInput) (*CreditMutationResult, error) {
 	return s.finalizeReservation(ctx, input, domain.CreditReservationStatusReleased, domain.CreditTransactionTypeRelease)
+}
+
+func (s *creditServiceImpl) ExpireBuckets(ctx context.Context, input CreditBucketExpiryInput) (*CreditBucketExpiryResult, error) {
+	now := input.Now.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	result := &CreditBucketExpiryResult{}
+	err := s.withCreditTransaction(ctx, func(repos creditRepos) error {
+		expired, err := expireCreditBucketsWithRepos(ctx, repos, now, input.Limit, "")
+		if err != nil {
+			return err
+		}
+		result = expired
+		return nil
+	})
+	return result, err
 }
 
 func (s *creditServiceImpl) ListTransactions(ctx context.Context, userID string, limit int, offset int) ([]domain.CreditTransaction, error) {
@@ -378,9 +467,23 @@ func (s *creditServiceImpl) finalizeReservation(ctx context.Context, input Credi
 		if account.Reserved < reservation.Amount {
 			return ErrReservationNotPending
 		}
+		allocations := decodeCreditBucketAllocations(reservation.BucketAllocations)
+		restoredAmount := reservation.Amount
+		if repos.buckets != nil && len(allocations) > 0 {
+			bucketRestored, err := finalizeBucketAllocations(ctx, repos.buckets, allocations, finalStatus, now)
+			if err != nil {
+				return err
+			}
+			if finalStatus == domain.CreditReservationStatusReleased {
+				restoredAmount = (reservation.Amount - totalCreditBucketAllocationAmount(allocations)) + bucketRestored
+				if restoredAmount < 0 {
+					restoredAmount = 0
+				}
+			}
+		}
 		account.Reserved -= reservation.Amount
 		if finalStatus == domain.CreditReservationStatusReleased {
-			account.Balance += reservation.Amount
+			account.Balance += restoredAmount
 		}
 		account.UpdatedAt = now
 		if err := repos.accounts.Update(ctx, account); err != nil {
@@ -401,12 +504,13 @@ func (s *creditServiceImpl) finalizeReservation(ctx context.Context, input Credi
 		amount := int64(0)
 		description := "commit reserved credits"
 		if transactionType == domain.CreditTransactionTypeRelease {
-			amount = reservation.Amount
+			amount = restoredAmount
 			description = "release reserved credits"
 		}
 		transaction, err := s.newTransaction(ctx, repos.transactions, creditTransactionInput{
 			Account:         account,
 			ReservationID:   reservation.ID,
+			BucketID:        singleAllocationBucketID(allocations),
 			TransactionType: transactionType,
 			Amount:          amount,
 			IdempotencyKey:  key,
@@ -427,11 +531,12 @@ type creditRepos struct {
 	accounts     repository.CreditAccountRepository
 	reservations repository.CreditReservationRepository
 	transactions repository.CreditTransactionRepository
+	buckets      repository.CreditBucketRepository
 }
 
 func (s *creditServiceImpl) withCreditTransaction(ctx context.Context, fn func(creditRepos) error) error {
 	if s.uowFactory == nil {
-		return fn(creditRepos{accounts: s.accounts, reservations: s.reservations, transactions: s.transactions})
+		return fn(creditRepos{accounts: s.accounts, reservations: s.reservations, transactions: s.transactions, buckets: s.buckets})
 	}
 	uow := s.uowFactory()
 	if err := uow.Begin(ctx); err != nil {
@@ -449,6 +554,7 @@ func (s *creditServiceImpl) withCreditTransaction(ctx context.Context, fn func(c
 		accounts:     firstCreditAccountRepo(repos.CreditAccountRepo, s.accounts),
 		reservations: firstCreditReservationRepo(repos.CreditReservationRepo, s.reservations),
 		transactions: firstCreditTransactionRepo(repos.CreditTransactionRepo, s.transactions),
+		buckets:      firstCreditBucketRepo(repos.CreditBucketRepo, s.buckets),
 	}
 	if err := fn(creditRepos); err != nil {
 		return err
@@ -551,6 +657,13 @@ func firstCreditTransactionRepo(primary repository.CreditTransactionRepository, 
 	return fallback
 }
 
+func firstCreditBucketRepo(primary repository.CreditBucketRepository, fallback repository.CreditBucketRepository) repository.CreditBucketRepository {
+	if primary != nil {
+		return primary
+	}
+	return fallback
+}
+
 func (s *creditServiceImpl) ensureUser(ctx context.Context, userID string) error {
 	if s.users == nil {
 		return nil
@@ -600,6 +713,7 @@ func ensureCreditAccount(ctx context.Context, accounts repository.CreditAccountR
 type creditTransactionInput struct {
 	Account         *domain.CreditAccount
 	ReservationID   string
+	BucketID        string
 	TransactionType string
 	Amount          int64
 	IdempotencyKey  string
@@ -622,6 +736,7 @@ func newCreditTransaction(ctx context.Context, transactions repository.CreditTra
 		AccountID:      input.Account.ID,
 		UserID:         input.Account.UserID,
 		ReservationID:  input.ReservationID,
+		BucketID:       input.BucketID,
 		Type:           input.TransactionType,
 		Amount:         input.Amount,
 		BalanceAfter:   input.Account.Balance,

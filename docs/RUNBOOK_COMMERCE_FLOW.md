@@ -13,12 +13,12 @@
 - 验证重复 webhook 幂等。
 - 模拟 dispute/chargeback，完成 revoke/clawback、创建 `PaymentRiskFlag`、阻断新 checkout、人工 resolve 后恢复 checkout。
 - 模拟订阅续费成功、续费失败 3 天 grace period、subscription expired 的权益变化。
+- 验证 credit bucket FEFO、订阅周期 credits 到期、top-up credits 不随订阅到期。
 
 暂不覆盖：
 
 - PC/mobile 直接集成 Creem SDK 或 Creem API。
 - 国内支付渠道新增开发；WeChat/Alipay 只保留 legacy 兼容。
-- credit bucket/expiry；当前订阅续费会按周期授予 credits，但 bucket 过期仍作为 issue #1 后续项推进。
 
 ## 依赖边界
 
@@ -58,8 +58,9 @@ PC / Mobile access gate
 边界原则：
 
 - Provider facts 到 `PaymentEventInbox` 为止，不能直接成为 app access facts。
-- `EntitlementGrant` 和 `CreditTransaction` 是 Walnut 自有权益事实。
+- `EntitlementGrant`、`CreditTransaction` 和 `CreditBucket` 是 Walnut 自有权益事实。
 - 订阅宽限期只写 `EntitlementGrant(source=subscription_grace)`，不发新周期 credits。
+- 订阅周期 credits 写入 `CreditBucket(type=subscription_period, expires_at=period_end)`；top-up credits 写入 `CreditBucket(type=topup, expires_at=nil)`。
 - `PaymentRiskFlag` 只控制新的 checkout 尝试，不直接改写 PC/mobile 的 access snapshot。
 - Admin 风险解除路径固定为 `PaymentRiskHandler -> PaymentRiskService -> PaymentRiskFlagRepository`。
 
@@ -347,6 +348,52 @@ curl -sS -X POST "$BASE_URL/api/v1/webhooks/creem" \
 - Creem adapter 将 `checkout.completed` 映射为 `payment.paid`。
 - 金额和币种必须匹配 Walnut order；不匹配会失败并进入可排障/重试路径。
 - 后续验证与 mock happy path 一致。
+
+## Credit Bucket / Expiry
+
+该流程验证 Walnut 的 credits 不再只依赖单一 aggregate balance，而是通过 bucket 维度区分订阅赠点和预存点数。客户端仍然只看聚合余额与 entitlement snapshot，bucket 只在 billing 内部用于过期、退款和可追踪性。
+
+### 1. 订阅周期 credits
+
+`editorial_studio_monthly` fulfillment 会写入：
+
+- `CreditBucket(type=subscription_period)`
+- `PeriodStartAt = paidAt`
+- `PeriodEndAt = paidAt + 1 month`
+- `ExpiresAt = PeriodEndAt`
+
+### 2. 预存 credits
+
+`credits_600` fulfillment 会写入：
+
+- `CreditBucket(type=topup)`
+- `ExpiresAt = nil`
+- 不随订阅周期自动过期
+
+### 3. 运行期过期
+
+可以由 operator 或定时任务调用：
+
+```bash
+curl -sS -X POST "$BASE_URL/api/v1/admin/credits/buckets/expire" \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{"limit":100}'
+```
+
+预期：
+
+- 只过期 `ExpiresAt <= now` 且 `Remaining > 0` 的 bucket。
+- ledger transaction type 记为 `expire`；admin audit action 记为 `credit.expire`。
+- 只扣减原始 bucket 对应余额，不影响其他未来 top-up。
+
+### 4. FEFO 消耗
+
+当用户使用 credits 时，系统按最早到期优先（FEFO）消费。订阅周期 credits 会优先被消费，top-up credits 作为后备余额保留。
+
+### 5. 退款/clawback
+
+退款或 dispute 只回收原始发放 bucket 中仍然可用的余额，不会跨 bucket 回收未来充值。
 
 ## Subscription Renewal / Grace Period
 

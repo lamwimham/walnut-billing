@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/service"
 
@@ -44,6 +45,11 @@ type CreditReserveRequest struct {
 
 type CreditFinalizeRequest struct {
 	IdempotencyKey string `json:"idempotency_key" binding:"required"`
+}
+
+type CreditBucketExpireRequest struct {
+	Now   string `json:"now"`
+	Limit int    `json:"limit"`
 }
 
 // GetAccount handles GET /api/v1/users/:user_id/credits/account.
@@ -115,6 +121,32 @@ func (h *CreditHandler) Commit(c *gin.Context) {
 // Release handles POST /api/v1/credits/reservations/:id/release.
 func (h *CreditHandler) Release(c *gin.Context) {
 	h.finalize(c, domain.AuditActionCreditRelease, h.CreditSvc.Release)
+}
+
+// ExpireBuckets handles POST /api/v1/admin/credits/buckets/expire.
+func (h *CreditHandler) ExpireBuckets(c *gin.Context) {
+	var req CreditBucketExpireRequest
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	now, ok := parseOptionalRFC3339(c, "now", req.Now)
+	if !ok {
+		return
+	}
+	input := service.CreditBucketExpiryInput{Limit: req.Limit}
+	if now != nil {
+		input.Now = *now
+	}
+	result, err := h.CreditSvc.ExpireBuckets(c.Request.Context(), input)
+	if err != nil {
+		writeCreditError(c, err)
+		return
+	}
+	h.recordAudit(c, "admin", domain.AuditActionCreditExpire, "credit_buckets", true, "expire credit buckets")
+	c.JSON(http.StatusOK, result)
 }
 
 // ListTransactions handles GET /api/v1/admin/users/:user_id/credits/transactions.
@@ -202,6 +234,20 @@ func (h *CreditHandler) recordAudit(c *gin.Context, actor, action, target string
 		Details:   details,
 		IPAddress: clientIP(c),
 	})
+}
+
+func parseOptionalRFC3339(c *gin.Context, field string, value string) (*time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, true
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": field + " must be RFC3339"})
+		return nil, false
+	}
+	parsed = parsed.UTC()
+	return &parsed, true
 }
 
 func usageMetadataFromReserveRequest(req CreditReserveRequest) map[string]any {

@@ -18,6 +18,7 @@ type mockPaymentAdjustmentUnitOfWork struct {
 	grants       *mockGrantRepo
 	accounts     *mockCreditAccountRepo
 	transactions *mockCreditTransactionRepo
+	buckets      *mockCreditBucketRepo
 	executions   *mockFulfillmentExecutionRepo
 	risks        *mockPaymentRiskFlagRepo
 	begins       int
@@ -93,6 +94,7 @@ func (m *mockPaymentAdjustmentUnitOfWork) Repos() repository.TransactionalReposi
 		EntitlementGrantRepo:     m.grants,
 		CreditAccountRepo:        m.accounts,
 		CreditTransactionRepo:    m.transactions,
+		CreditBucketRepo:         m.buckets,
 		FulfillmentExecutionRepo: m.executions,
 		PaymentRiskFlagRepo:      m.risks,
 	}
@@ -113,10 +115,16 @@ func newPaymentAdjustmentTestService() (PaymentAdjustmentService, *mockTxOrderRe
 }
 
 func newPaymentAdjustmentTestServiceWithPolicy(policy PaymentAdjustmentPolicy) (PaymentAdjustmentService, *mockTxOrderRepo, *mockGrantRepo, *mockCreditAccountRepo, *mockCreditTransactionRepo, *mockFulfillmentExecutionRepo, *mockPaymentRiskFlagRepo) {
+	svc, orders, grants, accounts, transactions, executions, risks, _ := newPaymentAdjustmentTestServiceWithPolicyAndBuckets(policy)
+	return svc, orders, grants, accounts, transactions, executions, risks
+}
+
+func newPaymentAdjustmentTestServiceWithPolicyAndBuckets(policy PaymentAdjustmentPolicy) (PaymentAdjustmentService, *mockTxOrderRepo, *mockGrantRepo, *mockCreditAccountRepo, *mockCreditTransactionRepo, *mockFulfillmentExecutionRepo, *mockPaymentRiskFlagRepo, *mockCreditBucketRepo) {
 	orders := newMockTxOrderRepo()
 	grants := newMockGrantRepo()
 	accounts := newMockCreditAccountRepo()
 	transactions := newMockCreditTransactionRepo()
+	buckets := newMockCreditBucketRepo()
 	executions := newMockFulfillmentExecutionRepo()
 	risks := newMockPaymentRiskFlagRepo()
 	svc := NewPaymentAdjustmentService(PaymentAdjustmentDependencies{
@@ -125,12 +133,13 @@ func newPaymentAdjustmentTestServiceWithPolicy(policy PaymentAdjustmentPolicy) (
 			EntitlementGrants:     grants,
 			CreditAccounts:        accounts,
 			CreditTransactions:    transactions,
+			CreditBuckets:         buckets,
 			FulfillmentExecutions: executions,
 			PaymentRiskFlags:      risks,
 		},
 		Policy: policy,
 	})
-	return svc, orders, grants, accounts, transactions, executions, risks
+	return svc, orders, grants, accounts, transactions, executions, risks, buckets
 }
 
 func paymentAdjustmentTestAutoRefundPolicy() PaymentAdjustmentPolicy {
@@ -262,6 +271,64 @@ func TestPaymentAdjustmentService_RefundRevokesGrantAndClawsBackAvailableCredits
 	}
 }
 
+func TestPaymentAdjustmentService_RefundClawsBackOnlyOriginalBucketNotFutureTopup(t *testing.T) {
+	svc, orders, grants, accounts, transactions, executions, _, buckets := newPaymentAdjustmentTestServiceWithPolicyAndBuckets(paymentAdjustmentTestAutoRefundPolicy())
+	seedRefundableFulfillment(orders, grants, accounts, transactions, executions, 700)
+	transactions.transactions["ctx_grant"].BucketID = "bucket_subscription"
+	now := time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC)
+	buckets.buckets["bucket_subscription"] = &domain.CreditBucket{
+		ID:                  "bucket_subscription",
+		AccountID:           "acct_1",
+		UserID:              "usr_1",
+		Type:                domain.CreditBucketTypeSubscriptionPeriod,
+		SourceTransactionID: "ctx_grant",
+		Granted:             600,
+		Remaining:           200,
+		Status:              domain.CreditBucketStatusActive,
+		CreatedAt:           now.Add(-time.Hour),
+		UpdatedAt:           now.Add(-time.Hour),
+	}
+	buckets.buckets["bucket_topup"] = &domain.CreditBucket{
+		ID:        "bucket_topup",
+		AccountID: "acct_1",
+		UserID:    "usr_1",
+		Type:      domain.CreditBucketTypeTopup,
+		Granted:   500,
+		Remaining: 500,
+		Status:    domain.CreditBucketStatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	result, err := svc.Apply(context.Background(), &domain.PaymentEventInbox{
+		EventType:  domain.PaymentEventTypeRefunded,
+		OutTradeNo: "CHK-ADJ-1",
+	})
+	if err != nil {
+		t.Fatalf("expected refund adjustment, got %v", err)
+	}
+	account, err := accounts.GetByUserID(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	if result.ClawbackCredits != 200 || account.Balance != 500 {
+		t.Fatalf("expected clawback capped to original bucket only, result=%#v account=%#v", result, account)
+	}
+	if buckets.buckets["bucket_subscription"].Remaining != 0 || buckets.buckets["bucket_subscription"].Status != domain.CreditBucketStatusDepleted {
+		t.Fatalf("expected original subscription bucket depleted, got %#v", buckets.buckets["bucket_subscription"])
+	}
+	if buckets.buckets["bucket_topup"].Remaining != 500 || buckets.buckets["bucket_topup"].Status != domain.CreditBucketStatusActive {
+		t.Fatalf("future top-up bucket must be untouched, got %#v", buckets.buckets["bucket_topup"])
+	}
+	clawback, err := transactions.GetByIdempotencyKey(context.Background(), "refund:clawback:CHK-ADJ-1:studio:credits")
+	if err != nil {
+		t.Fatalf("expected clawback transaction: %v", err)
+	}
+	if clawback.BucketID != "bucket_subscription" || clawback.Amount != -200 || clawback.BalanceAfter != 500 {
+		t.Fatalf("unexpected bucketed clawback tx: %#v", clawback)
+	}
+}
+
 func TestPaymentAdjustmentService_RefundOutsideWindowRequiresManualReview(t *testing.T) {
 	policy := NewConfigurablePaymentAdjustmentPolicy(PaymentAdjustmentPolicyConfig{
 		RefundWindowDays:        7,
@@ -294,6 +361,54 @@ func TestPaymentAdjustmentService_RefundOutsideWindowRequiresManualReview(t *tes
 	}
 	if _, err := transactions.GetByIdempotencyKey(context.Background(), "refund:clawback:CHK-ADJ-1:studio:credits"); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("manual review should not create clawback marker, err=%v", err)
+	}
+}
+
+func TestPaymentAdjustmentService_RefundPolicyDoesNotTreatFutureTopupAsOriginalBucketUsage(t *testing.T) {
+	policy := NewConfigurablePaymentAdjustmentPolicy(PaymentAdjustmentPolicyConfig{
+		RefundWindowDays:        7,
+		RefundInWindowAction:    PaymentAdjustmentActionAutoRefund,
+		RefundOutOfWindowAction: PaymentAdjustmentActionManualReview,
+		LowUsagePolicyEnabled:   true,
+		LowUsageMaxCreditsUsed:  100,
+		LowUsageAction:          PaymentAdjustmentActionAutoRefund,
+		HighUsageAction:         PaymentAdjustmentActionManualReview,
+		Now:                     func() time.Time { return time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC) },
+	})
+	svc, orders, grants, accounts, transactions, executions, _, buckets := newPaymentAdjustmentTestServiceWithPolicyAndBuckets(policy)
+	seedRefundableFulfillment(orders, grants, accounts, transactions, executions, 600)
+	transactions.transactions["ctx_grant"].BucketID = "missing_original_bucket"
+	buckets.buckets["future_topup"] = &domain.CreditBucket{
+		ID:        "future_topup",
+		AccountID: "acct_1",
+		UserID:    "usr_1",
+		Type:      domain.CreditBucketTypeTopup,
+		Granted:   600,
+		Remaining: 600,
+		Status:    domain.CreditBucketStatusActive,
+		CreatedAt: time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC),
+	}
+
+	result, err := svc.Apply(context.Background(), &domain.PaymentEventInbox{
+		EventType:  domain.PaymentEventTypeRefunded,
+		OutTradeNo: "CHK-ADJ-1",
+	})
+	if !errors.Is(err, ErrPaymentAdjustmentManualReview) {
+		t.Fatalf("expected manual review when original bucket is missing, result=%#v err=%v", result, err)
+	}
+	if result == nil || result.PolicyDecision.Reason != PaymentAdjustmentReasonRefundHighUsage {
+		t.Fatalf("expected high-usage policy decision, got %#v", result)
+	}
+	account, err := accounts.GetByUserID(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	if account.Balance != 600 || buckets.buckets["future_topup"].Remaining != 600 {
+		t.Fatalf("future top-up must remain untouched, account=%#v bucket=%#v", account, buckets.buckets["future_topup"])
+	}
+	if grants.grants["grt_1"].Status != domain.GrantStatusActive {
+		t.Fatalf("manual review should not revoke grant")
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 type fakeCreditService struct {
 	usageRecords []domain.UsageRecord
 	reserveInput service.CreditReservationInput
+	expireInput  service.CreditBucketExpiryInput
 }
 
 func (f *fakeCreditService) AccountForUser(ctx context.Context, userID string) (*domain.CreditAccount, error) {
@@ -49,6 +50,14 @@ func (f *fakeCreditService) Commit(ctx context.Context, input service.CreditFina
 
 func (f *fakeCreditService) Release(ctx context.Context, input service.CreditFinalizationInput) (*service.CreditMutationResult, error) {
 	return nil, nil
+}
+
+func (f *fakeCreditService) ExpireBuckets(ctx context.Context, input service.CreditBucketExpiryInput) (*service.CreditBucketExpiryResult, error) {
+	f.expireInput = input
+	return &service.CreditBucketExpiryResult{
+		ExpiredBuckets: []domain.CreditBucket{{ID: "crb_1", Remaining: 0, Status: domain.CreditBucketStatusExpired}},
+		ExpiredAmount:  100,
+	}, nil
 }
 
 func (f *fakeCreditService) ListTransactions(ctx context.Context, userID string, limit int, offset int) ([]domain.CreditTransaction, error) {
@@ -131,5 +140,68 @@ func TestCreditHandler_ListUsageRecords(t *testing.T) {
 	}
 	if resp.Total != 1 || resp.UsageRecords[0].ReservationID != "crr_1" {
 		t.Fatalf("unexpected usage records response: %+v", resp)
+	}
+}
+
+func TestCreditHandler_ExpireBuckets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fakeSvc := &fakeCreditService{}
+	h := NewCreditHandler(fakeSvc, nil)
+	r := gin.New()
+	r.POST("/admin/credits/buckets/expire", h.ExpireBuckets)
+
+	body := `{"now":"2026-06-15T10:00:00Z","limit":25}`
+	req, _ := http.NewRequest(http.MethodPost, "/admin/credits/buckets/expire", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if fakeSvc.expireInput.Limit != 25 || fakeSvc.expireInput.Now.Format(time.RFC3339) != "2026-06-15T10:00:00Z" {
+		t.Fatalf("expected expiry input from request, got %+v", fakeSvc.expireInput)
+	}
+	var resp service.CreditBucketExpiryResult
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.ExpiredAmount != 100 || len(resp.ExpiredBuckets) != 1 || resp.ExpiredBuckets[0].Status != domain.CreditBucketStatusExpired {
+		t.Fatalf("unexpected expiry response: %+v", resp)
+	}
+}
+
+func TestCreditHandler_ExpireBucketsAllowsEmptyBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fakeSvc := &fakeCreditService{}
+	h := NewCreditHandler(fakeSvc, nil)
+	r := gin.New()
+	r.POST("/admin/credits/buckets/expire", h.ExpireBuckets)
+
+	req, _ := http.NewRequest(http.MethodPost, "/admin/credits/buckets/expire", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !fakeSvc.expireInput.Now.IsZero() || fakeSvc.expireInput.Limit != 0 {
+		t.Fatalf("expected default expiry input for scheduler call, got %+v", fakeSvc.expireInput)
+	}
+}
+
+func TestCreditHandler_ExpireBucketsRejectsInvalidNow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewCreditHandler(&fakeCreditService{}, nil)
+	r := gin.New()
+	r.POST("/admin/credits/buckets/expire", h.ExpireBuckets)
+
+	req, _ := http.NewRequest(http.MethodPost, "/admin/credits/buckets/expire", strings.NewReader(`{"now":"not-a-time"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "now must be RFC3339") {
+		t.Fatalf("expected invalid now error, got %d: %s", w.Code, w.Body.String())
 	}
 }

@@ -68,6 +68,7 @@ func TestCommerceFlow_GormCheckoutWebhookSnapshotDisputeRiskHold(t *testing.T) {
 			EntitlementGrants:     repos.grants,
 			CreditAccounts:        repos.accounts,
 			CreditTransactions:    repos.transactions,
+			CreditBuckets:         repos.buckets,
 			FulfillmentExecutions: repos.executions,
 		},
 		Catalog:            fulfillmentCatalog,
@@ -80,6 +81,7 @@ func TestCommerceFlow_GormCheckoutWebhookSnapshotDisputeRiskHold(t *testing.T) {
 			EntitlementGrants:     repos.grants,
 			CreditAccounts:        repos.accounts,
 			CreditTransactions:    repos.transactions,
+			CreditBuckets:         repos.buckets,
 			FulfillmentExecutions: repos.executions,
 			PaymentRiskFlags:      repos.risks,
 		},
@@ -348,6 +350,7 @@ type commerceFlowGormRepos struct {
 	registrations *gorm_repo.RegistrationRepo
 	grants        *gorm_repo.EntitlementGrantRepo
 	accounts      *gorm_repo.CreditAccountRepo
+	buckets       *gorm_repo.CreditBucketRepo
 	transactions  *gorm_repo.CreditTransactionRepo
 	executions    *gorm_repo.FulfillmentExecutionRepo
 	events        *gorm_repo.PaymentEventRepo
@@ -367,6 +370,7 @@ func openCommerceFlowTestDB(t *testing.T) *gorm.DB {
 		&domain.Order{},
 		&domain.EntitlementGrant{},
 		&domain.CreditAccount{},
+		&domain.CreditBucket{},
 		&domain.CreditReservation{},
 		&domain.CreditTransaction{},
 		&domain.PaymentEventInbox{},
@@ -386,6 +390,7 @@ func newCommerceFlowGormRepos(db *gorm.DB) commerceFlowGormRepos {
 		registrations: &gorm_repo.RegistrationRepo{DB: db},
 		grants:        &gorm_repo.EntitlementGrantRepo{DB: db},
 		accounts:      &gorm_repo.CreditAccountRepo{DB: db},
+		buckets:       &gorm_repo.CreditBucketRepo{DB: db},
 		transactions:  &gorm_repo.CreditTransactionRepo{DB: db},
 		executions:    &gorm_repo.FulfillmentExecutionRepo{DB: db},
 		events:        &gorm_repo.PaymentEventRepo{DB: db},
@@ -428,6 +433,7 @@ func newCommerceFlowRenewalServices(
 			EntitlementGrants:     repos.grants,
 			CreditAccounts:        repos.accounts,
 			CreditTransactions:    repos.transactions,
+			CreditBuckets:         repos.buckets,
 			FulfillmentExecutions: repos.executions,
 		},
 		Catalog:            fulfillmentCatalog,

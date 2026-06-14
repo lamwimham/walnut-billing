@@ -520,6 +520,7 @@ go test ./...
   - 即使余额为 0，也写入 0 金额 `clawback` ledger marker，避免重复退款 webhook 在用户未来充值后误扣新余额。
 - 新增 `CreditTransactionTypeClawback`，保持账本不可变，不直接删除历史 grant。
 - `PaymentFulfillmentEventProcessor` 通过 composition 接入 adjustment service；provider adapter 和 webhook handler 仍只负责事实归一化。
+- `CreditBucket` 已落地为 Walnut-owned source dimension：订阅周期 credits 会过期，预存 credits 不随订阅过期，退款 clawback 只回收原始 bucket。
 
 验证：
 
@@ -588,7 +589,7 @@ git diff --check
 - 主链路 `checkout_created -> paid -> fulfilled -> snapshot` 已跑通。
 - 风险链路 `disputed -> revoke/clawback -> risk flag -> checkout hold` 已跑通。
 - Provider 边界仍然清晰：Creem 只在 payment adapter / webhook verification 层，PC/mobile 仍只看 Walnut checkout facade 和 access snapshot。
-- 生产闭环剩余项应优先做“运营处理与可观测性”，而不是继续增加支付渠道或复杂订阅能力。
+- 生产闭环已收敛到海外支付驱动的权益 MVP；后续不继续增加短期用不上的完整计费平台能力。
 
 验证：
 
@@ -597,13 +598,13 @@ go test ./...
 git diff --check
 ```
 
-M6 后续收敛优先级：
+M6 收敛结果：
 
-1. P0：admin 风险处理视图/API：列出、备注、解决 `PaymentRiskFlag`，让 `manual_review` 能闭环解除 checkout hold。
-2. P0：端到端运行手册：本地/测试环境如何配置 Creem、创建 SKU、触发 webhook、检查 snapshot、验证 dispute hold。
-3. P1：7 天退款窗口、低使用条件、人工审核策略落为 DB policy；当前 refund/dispute 补偿策略已可用，但策略参数仍在代码/config 层。
-4. P1：订阅续费失败 3 天 grace period 已落地为 provider-agnostic renewal policy；后续只需按真实生产 webhook 做沙箱回归。
-5. P2：订阅赠点 bucket / expiry；当前通过 ledger source/idempotency 区分，满足第一阶段账务可追踪。
+1. P0：admin 风险处理视图/API 已完成：列出、备注、解决 `PaymentRiskFlag`，让 `manual_review` 能闭环解除 checkout hold。
+2. P0：端到端运行手册已完成：本地/测试环境如何配置 Creem、创建 SKU、触发 webhook、检查 snapshot、验证 dispute hold。
+3. P1：7 天退款窗口、低使用条件、人工审核策略已完成为 config/strategy 层可配置能力。
+4. P1：订阅续费失败 3 天 grace period 已完成为 provider-agnostic renewal policy。
+5. P2：订阅赠点 bucket / expiry 已完成；当前 credits 通过 `CreditBucket` 区分订阅周期与预存点数，FEFO 消耗、运行期过期和退款 clawback 均保持 Walnut-owned。
 
 
 ### M6-I P0 已完成：Admin payment-risk review closure
@@ -721,6 +722,28 @@ git diff --check
 rg -n "creem|Creem|PaymentRiskFlag|payment\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy|PaymentAdjustmentPolicy|policy_rejected|renewal_failed|subscription_expired|SubscriptionRenewalPolicy|subscription_grace|payment_events_total|checkout_policy_blocks_total" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true
 ```
 
+### M6-N P2 已完成：CreditBucket / expiry / original-bucket clawback
+
+本轮把 credits 从单一 aggregate balance 收敛成 Walnut-owned bucket 维度：订阅周期 credits、预存 credits 与退款回收都不再依赖 provider 状态或客户端复制逻辑。实现保持 provider-agnostic，Creem 只负责支付事实，Walnut 负责权益和账本。
+
+已完成：
+
+- `CreditBucket` 模型与 GORM repository 已落地，`CreditTransaction` 增加 `BucketID` 以保留账本追踪。
+- `FulfillmentService` 的 credits rule 支持 `subscription_period` 与 `topup` 两类 bucket；订阅周期 credits 写入 `ExpiresAt = PeriodEndAt`，top-up credits 不随订阅到期。
+- `CreditService` 支持 FEFO bucket allocation、reservation bucket allocation 追踪，以及 `ExpireBuckets` 运行期过期。
+- `PaymentAdjustmentService` 在退款/争议回收时只回收原始 bucket 的可用余额，不会误扣后续 top-up。
+- 新增 admin API `POST /api/v1/admin/credits/buckets/expire`，便于 operator 或 scheduler 做过期批处理。
+
+验证：
+
+```bash
+go test ./internal/service -run 'TestCreditService_(GrantCreatesBucketAndIsIdempotent|ReserveAllocatesEarliestExpiringBucketFirst|ReleaseRestoresBucketAllocation|ExpireBuckets)|TestFulfillmentService_(PeriodCreditsCreateSubscriptionBucket|TopupCreditsCreateNonExpiringBucket)|TestPaymentAdjustmentService_RefundClawsBackOnlyOriginalBucketNotFutureTopup' -v
+go test ./internal/api/handler -run 'TestCreditHandler_(ExpireBuckets|ExpireBucketsRejectsInvalidNow)' -v
+go test ./...
+git diff --check
+rg -n "CreditBucket|credit_bucket|credit\.expire|subscription_period|topup" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true
+```
+
 ## 测试策略
 
 - Unit tests：catalog rule 解析、provider adapter、event mapper、fulfillment rule executor。
@@ -743,11 +766,12 @@ rg -n "creem|Creem|PaymentRiskFlag|payment\.disputed|checkout_blocked_by_payment
 ## 开放问题
 
 1. Creem 是否作为 Merchant of Record 覆盖目标销售地区、税务和发票要求？
-2. 首期商品是否只做点数包，还是同时上线编辑部工作室月度包？
-3. 订阅赠点是“每周期发放并过期”，还是进入永久余额？
-4. 退款时是否扣回未使用 credits，已使用部分是否允许负余额？
-5. 团队版 seats 和共享额度池是否进入 M6，还是延后到 M7？
+2. 团队版 seats 和共享额度池是否进入下一阶段，还是继续保持单用户权益模型？
 
 ## 当前建议
 
-先推进 M6-A 到 M6-D 的 provider-agnostic 基础，再接 M6-E Creem。这样 Creem 只是一个 adapter，不会反向污染 Walnut 的权益、点数和编辑部业务边界。
+M6 主链路、风险闭环、订阅续费、可观测性和 CreditBucket/expiry 已完成收敛。后续优先级建议转向：
+
+1. 团队版 seats / 共享额度池等更高阶权益模型。
+2. 真实生产环境的 scheduled expiry job 或后台运营任务编排。
+3. 继续保持 Creem 只是海外 provider adapter，不向客户端扩散。

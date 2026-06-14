@@ -62,6 +62,7 @@ type TransactionalRepositories struct {
 	CreditAccountRepo        CreditAccountRepository
 	CreditReservationRepo    CreditReservationRepository
 	CreditTransactionRepo    CreditTransactionRepository
+	CreditBucketRepo         CreditBucketRepository
 	FulfillmentExecutionRepo FulfillmentExecutionRepository
 	PaymentRiskFlagRepo      PaymentRiskFlagRepository
 }
@@ -129,6 +130,30 @@ type CreditAccountRepository interface {
 	GetByID(ctx context.Context, id string) (*domain.CreditAccount, error)
 	GetByUserID(ctx context.Context, userID string) (*domain.CreditAccount, error)
 	Update(ctx context.Context, account *domain.CreditAccount) error
+}
+
+// CreditBucketQuery defines filtering criteria for expirable credit sources.
+type CreditBucketQuery struct {
+	AccountID           string
+	UserID              string
+	Type                string
+	Status              string
+	SourceOrderNo       string
+	SourceTransactionID string
+	ActiveAt            *time.Time
+	ExpiresAtOrBefore   *time.Time
+	PositiveRemaining   bool
+	Limit               int
+	Offset              int
+}
+
+// CreditBucketRepository defines data access for source-level credit buckets.
+type CreditBucketRepository interface {
+	Create(ctx context.Context, bucket *domain.CreditBucket) error
+	GetByID(ctx context.Context, id string) (*domain.CreditBucket, error)
+	GetByIdempotencyKey(ctx context.Context, key string) (*domain.CreditBucket, error)
+	List(ctx context.Context, query CreditBucketQuery) ([]domain.CreditBucket, error)
+	Update(ctx context.Context, bucket *domain.CreditBucket) error
 }
 
 // CreditReservationQuery defines filtering criteria for usage reservations.

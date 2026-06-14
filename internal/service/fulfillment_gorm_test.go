@@ -23,6 +23,7 @@ func TestFulfillmentService_UnitOfWorkRollsBackPartialSideEffects(t *testing.T) 
 		&domain.Order{},
 		&domain.EntitlementGrant{},
 		&domain.CreditAccount{},
+		&domain.CreditBucket{},
 		&domain.CreditTransaction{},
 		&domain.FulfillmentExecution{},
 	); err != nil {
@@ -33,6 +34,7 @@ func TestFulfillmentService_UnitOfWorkRollsBackPartialSideEffects(t *testing.T) 
 	orderRepo := &gorm_repo.OrderRepo{DB: db}
 	grantRepo := &gorm_repo.EntitlementGrantRepo{DB: db}
 	creditAccountRepo := &gorm_repo.CreditAccountRepo{DB: db}
+	creditBucketRepo := &gorm_repo.CreditBucketRepo{DB: db}
 	creditTransactionRepo := &gorm_repo.CreditTransactionRepo{DB: db}
 	fulfillmentRepo := &gorm_repo.FulfillmentExecutionRepo{DB: db}
 
@@ -68,6 +70,7 @@ func TestFulfillmentService_UnitOfWorkRollsBackPartialSideEffects(t *testing.T) 
 			EntitlementGrants:     grantRepo,
 			CreditAccounts:        creditAccountRepo,
 			CreditTransactions:    creditTransactionRepo,
+			CreditBuckets:         creditBucketRepo,
 			FulfillmentExecutions: fulfillmentRepo,
 		},
 		Catalog:            catalog,
