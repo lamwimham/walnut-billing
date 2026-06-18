@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,5 +155,34 @@ func TestAdminHandler_GetAuditLogs_Pagination(t *testing.T) {
 	logs := resp["logs"].([]interface{})
 	if len(logs) != 3 {
 		t.Errorf("expected 3 logs in page, got %d", len(logs))
+	}
+}
+
+func TestAdminHandler_GetAuditLogs_RedactsEmailActors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockAudit := &mockAuditWithData{entries: []domain.AuditEntry{{
+		Actor:   "writer@example.com",
+		Action:  domain.AuditActionRegistrationSubmit,
+		Target:  "writer@example.com",
+		Details: "restore writer@example.com",
+		Success: true,
+	}}}
+	adminHandler := NewAdminHandler(nil, mockAudit)
+	r := gin.New()
+	r.GET("/admin/audit", adminHandler.GetAuditLogs)
+
+	req, _ := http.NewRequest("GET", "/admin/audit", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "writer@example.com") || strings.Contains(w.Body.String(), `"Actor"`) {
+		t.Fatalf("audit response leaked raw actor: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"actor"`) || !strings.Contains(w.Body.String(), `"masked"`) {
+		t.Fatalf("expected redacted actor projection, got %s", w.Body.String())
 	}
 }

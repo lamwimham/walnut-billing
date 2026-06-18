@@ -3,102 +3,200 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>walnut Admin</title>
+    <title>Walnut Billing Console</title>
     <style>
         :root {
-            --bg: #1a1a2e;
-            --card: #16213e;
-            --accent: #0f3460;
-            --text: #e94560;
-            --light: #e0e0e0;
-            --success: #2ecc71;
-            --warning: #f39c12;
-            --danger: #e74c3c;
+            --ink: #191711;
+            --muted: #6f6758;
+            --paper: #f5efe2;
+            --panel: #fffaf0;
+            --line: #ded2bd;
+            --green: #236b4d;
+            --red: #a84836;
+            --amber: #b57522;
+            --blue: #285a7f;
         }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--light); margin: 0; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        h1 { color: var(--text); margin-bottom: 20px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .card { background: var(--card); padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-        .card h3 { margin: 0 0 10px; font-size: 14px; color: #888; }
-        .card .value { font-size: 28px; font-weight: bold; }
-        .table-wrap { overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #333; }
-        th { color: #888; font-weight: normal; }
-        .status { padding: 3px 8px; border-radius: 4px; font-size: 12px; }
-        .active { background: rgba(46, 204, 113, 0.2); color: var(--success); }
-        .expired { background: rgba(231, 76, 60, 0.2); color: var(--danger); }
-        .inactive { background: rgba(243, 156, 18, 0.2); color: var(--warning); }
-        .grace { background: rgba(230, 126, 34, 0.2); color: #e67e22; }
-        #refresh { background: var(--accent); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
-        #refresh:hover { background: #1a4b8c; }
-        .loading { opacity: 0.5; pointer-events: none; }
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; color: var(--ink); background: radial-gradient(circle at top left, #fff7d8 0, transparent 32%), linear-gradient(135deg, #efe3cb 0%, #f8f4ea 52%, #e2d3ba 100%); font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif; }
+        body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .18; background-image: linear-gradient(90deg, rgba(25,23,17,.08) 1px, transparent 1px), linear-gradient(rgba(25,23,17,.06) 1px, transparent 1px); background-size: 32px 32px; }
+        .container { position: relative; max-width: 1240px; margin: 0 auto; padding: 28px; }
+        .topbar { display: grid; gap: 18px; grid-template-columns: 1fr minmax(280px, 420px); align-items: end; margin-bottom: 22px; }
+        .eyebrow { color: var(--amber); font-size: 12px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
+        h1 { margin: 6px 0 0; font-size: clamp(34px, 5vw, 64px); line-height: .88; letter-spacing: -.05em; }
+        .auth { border: 1px solid var(--line); background: rgba(255,250,240,.74); border-radius: 22px; padding: 14px; box-shadow: 0 18px 50px rgba(87,67,34,.14); }
+        .auth label { display: block; color: var(--muted); font: 700 11px/1.3 ui-sans-serif, system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 8px; }
+        .auth-row { display: flex; gap: 8px; }
+        input { width: 100%; border: 1px solid var(--line); border-radius: 999px; background: #fffdf8; color: var(--ink); padding: 10px 13px; font: 13px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; outline: none; }
+        button { border: 1px solid var(--ink); border-radius: 999px; background: var(--ink); color: var(--paper); padding: 10px 14px; cursor: pointer; font: 800 12px/1 ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; text-transform: uppercase; }
+        button.secondary { color: var(--ink); background: transparent; border-color: var(--line); }
+        .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+        .card { border: 1px solid var(--line); background: rgba(255,250,240,.82); border-radius: 24px; padding: 17px; box-shadow: 0 12px 38px rgba(87,67,34,.10); }
+        .card h3 { margin: 0 0 8px; color: var(--muted); font: 800 11px/1.3 ui-sans-serif, system-ui, sans-serif; letter-spacing: .13em; text-transform: uppercase; }
+        .value { font: 800 34px/.95 ui-serif, Georgia, serif; letter-spacing: -.04em; }
+        .section { margin-top: 16px; }
+        .section-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin: 8px 0 10px; }
+        .section h2 { margin: 0; font-size: 22px; letter-spacing: -.03em; }
+        .hint { color: var(--muted); font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; }
+        .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 22px; background: rgba(255,250,240,.72); }
+        table { width: 100%; border-collapse: collapse; min-width: 920px; }
+        th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid rgba(222,210,189,.75); vertical-align: top; }
+        th { color: var(--muted); font: 800 11px/1.2 ui-sans-serif, system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
+        td { font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
+        code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+        .pill { display: inline-flex; align-items: center; gap: 5px; margin: 2px 4px 2px 0; border-radius: 999px; border: 1px solid var(--line); padding: 3px 8px; background: rgba(255,255,255,.46); font: 700 11px/1.3 ui-sans-serif, system-ui, sans-serif; }
+        .issued, .active { color: var(--green); border-color: rgba(35,107,77,.28); background: rgba(35,107,77,.08); }
+        .expired, .revoked { color: var(--red); border-color: rgba(168,72,54,.28); background: rgba(168,72,54,.08); }
+        .legacy { color: var(--amber); border-color: rgba(181,117,34,.26); background: rgba(181,117,34,.08); }
+        .empty, .error { padding: 18px; color: var(--muted); font: 14px/1.4 ui-sans-serif, system-ui, sans-serif; }
+        .error { color: var(--red); }
+        .loading { opacity: .58; pointer-events: none; }
+        @media (max-width: 860px) { .topbar { grid-template-columns: 1fr; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .container { padding: 18px; } }
+        @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } .auth-row { flex-direction: column; } }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h1>walnut Admin Dashboard</h1>
-            <button id="refresh" onclick="loadData()">Refresh</button>
-        </div>
-        
-        <div class="grid" id="stats-grid">
-            <div class="card"><h3>Total Licenses</h3><div class="value" id="stat-total">-</div></div>
-            <div class="card"><h3>Active</h3><div class="value" id="stat-active" style="color:var(--success)">-</div></div>
-            <div class="card"><h3>Expired</h3><div class="value" id="stat-expired" style="color:var(--danger)">-</div></div>
-            <div class="card"><h3>Providers Active</h3><div class="value" id="stat-providers">-</div></div>
+    <main class="container">
+        <div class="topbar">
+            <div>
+                <div class="eyebrow">Walnut Commerce Operations</div>
+                <h1>Billing Console</h1>
+                <p class="hint">Access accounts are displayed with masked emails. Data and management APIs require an Admin API key; raw emails are not rendered in this console.</p>
+            </div>
+            <div class="auth">
+                <label for="admin-key">Admin API Key</label>
+                <div class="auth-row">
+                    <input id="admin-key" type="password" placeholder="local-admin-key" autocomplete="off" />
+                    <button onclick="saveKeyAndLoad()">Load</button>
+                    <button class="secondary" onclick="clearKey()">Clear</button>
+                </div>
+            </div>
         </div>
 
-        <div class="card">
-            <h3>Recent Licenses</h3>
+        <div class="grid">
+            <div class="card"><h3>Total Licenses</h3><div class="value" id="stat-total">-</div></div>
+            <div class="card"><h3>Active Licenses</h3><div class="value" id="stat-active">-</div></div>
+            <div class="card"><h3>Access Accounts</h3><div class="value" id="stat-access-accounts">-</div></div>
+            <div class="card"><h3>Providers</h3><div class="value" id="stat-providers">-</div></div>
+        </div>
+
+        <section class="section">
+            <div class="section-head">
+                <div><h2>Access Accounts</h2><div class="hint">Trial, device and entitlement state from `/api/v1/access/registrations`; emails are masked by the admin privacy boundary.</div></div>
+                <button class="secondary" onclick="loadData()">Refresh</button>
+            </div>
+            <div class="table-wrap">
+                <table id="access-table">
+                    <thead><tr><th>Email</th><th>User</th><th>Devices</th><th>Trial</th><th>Current Entitlements</th><th>Legacy Grants</th><th>Last Seen</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-head"><div><h2>Recent Licenses</h2><div class="hint">Legacy software license table, kept for compatibility.</div></div></div>
             <div class="table-wrap">
                 <table id="license-table">
                     <thead><tr><th>Key</th><th>Status</th><th>Created</th><th>Expires</th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
-        </div>
-    </div>
+        </section>
+    </main>
 
     <script>
+        const keyInput = document.getElementById('admin-key');
+        keyInput.value = localStorage.getItem('walnut-admin-key') || '';
+
+        function adminHeaders() {
+            const key = keyInput.value.trim();
+            return key ? { Authorization: `Bearer ${key}` } : {};
+        }
+        function saveKeyAndLoad() {
+            localStorage.setItem('walnut-admin-key', keyInput.value.trim());
+            loadData();
+        }
+        function clearKey() {
+            localStorage.removeItem('walnut-admin-key');
+            keyInput.value = '';
+        }
+        async function fetchAdmin(path) {
+            const res = await fetch(path, { headers: adminHeaders() });
+            if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+            return res.json();
+        }
+        function fmtDate(value) {
+            if (!value) return '-';
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+        }
+        function pills(values, className = '') {
+            if (!values || values.length === 0) return '<span class="hint">-</span>';
+            return values.map(v => `<span class="pill ${className}">${v}</span>`).join('');
+        }
         async function loadData() {
             document.body.classList.add('loading');
             try {
-                const res = await fetch('/api/v1/admin/dashboard');
-                const data = await res.json();
-                
-                // Update stats
-                document.getElementById('stat-total').textContent = data.license_stats.total;
-                document.getElementById('stat-active').textContent = data.license_stats.active;
-                document.getElementById('stat-expired').textContent = data.license_stats.expired;
-                
-                let providerCount = 0;
-                for (const p in data.providers) if (!data.providers[p].is_mock) providerCount++;
-                document.getElementById('stat-providers').textContent = providerCount;
-
-                // Update table
-                const tbody = document.querySelector('#license-table tbody');
-                tbody.innerHTML = '';
-                data.recent_licenses.slice().reverse().forEach(lic => {
-                    const tr = document.createElement('tr');
-                    const statusClass = lic.status || 'inactive';
-                    const expires = lic.expires_at ? new Date(lic.expires_at).toLocaleDateString() : '-';
-                    tr.innerHTML = `
-                        <td><code>${lic.key}</code></td>
-                        <td><span class="status ${statusClass}">${lic.status}</span></td>
-                        <td>${new Date(lic.created_at).toLocaleDateString()}</td>
-                        <td>${expires}</td>
-                    `;
-                    tbody.appendChild(tr);
-                });
+                const [dashboard, access] = await Promise.all([
+                    fetchAdmin('/api/v1/admin/dashboard'),
+                    fetchAdmin('/api/v1/admin/access-accounts?limit=20'),
+                ]);
+                document.getElementById('stat-total').textContent = dashboard.license_stats.total;
+                document.getElementById('stat-active').textContent = dashboard.license_stats.active;
+                document.getElementById('stat-access-accounts').textContent = access.total;
+                document.getElementById('stat-providers').textContent = Object.keys(dashboard.providers || {}).length;
+                renderAccessAccounts(access.accounts || []);
+                renderLicenses(dashboard.recent_licenses || []);
             } catch (e) {
-                console.error('Failed to load dashboard:', e);
+                renderError(e.message || String(e));
             } finally {
                 document.body.classList.remove('loading');
             }
         }
-        loadData();
+        function renderAccessAccounts(accounts) {
+            const tbody = document.querySelector('#access-table tbody');
+            tbody.innerHTML = '';
+            if (!accounts.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty">No access accounts yet.</td></tr>';
+                return;
+            }
+            accounts.forEach(account => {
+                const tr = document.createElement('tr');
+                const trialClass = account.trial_status === 'issued' ? 'issued' : account.trial_status;
+                tr.innerHTML = `
+                    <td><strong>${account.email_masked || '-'}</strong><br><code>${account.email_fingerprint || ''}</code></td>
+                    <td><code>${account.user_id}</code><br><span class="pill ${account.status}">${account.status || '-'}</span></td>
+                    <td>${account.active_device_count}/${account.device_count} active</td>
+                    <td><span class="pill ${trialClass}">${account.trial_status || '-'}</span><br><span class="hint">until ${fmtDate(account.trial_expires_at)}</span></td>
+                    <td>${pills(account.current_entitlements)}</td>
+                    <td>${pills(account.legacy_entitlements, 'legacy')}</td>
+                    <td>${fmtDate(account.last_seen_at)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+        function renderLicenses(licenses) {
+            const tbody = document.querySelector('#license-table tbody');
+            tbody.innerHTML = '';
+            if (!licenses.length) {
+                tbody.innerHTML = '<tr><td colspan="4" class="empty">No legacy licenses.</td></tr>';
+                return;
+            }
+            licenses.slice().reverse().forEach(lic => {
+                const tr = document.createElement('tr');
+                const statusClass = lic.status || 'inactive';
+                tr.innerHTML = `
+                    <td><code>${lic.key}</code></td>
+                    <td><span class="pill ${statusClass}">${lic.status}</span></td>
+                    <td>${fmtDate(lic.created_at)}</td>
+                    <td>${fmtDate(lic.expires_at)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+        function renderError(message) {
+            document.querySelector('#access-table tbody').innerHTML = `<tr><td colspan="7" class="error">${message}</td></tr>`;
+        }
+        if (keyInput.value) loadData();
     </script>
 </body>
 </html>

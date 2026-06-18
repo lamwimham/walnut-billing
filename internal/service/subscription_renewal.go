@@ -25,6 +25,7 @@ type SubscriptionRenewalResult struct {
 	PolicyDecision  SubscriptionRenewalPolicyDecision `json:"policy_decision"`
 	Fulfillment     *FulfillmentResult                `json:"fulfillment,omitempty"`
 	GraceGrant      *domain.EntitlementGrant          `json:"grace_grant,omitempty"`
+	GraceGrants     []domain.EntitlementGrant         `json:"grace_grants,omitempty"`
 	ExpiredGrantIDs []string                          `json:"expired_grant_ids,omitempty"`
 	AffectedGrants  []domain.EntitlementGrant         `json:"affected_grants,omitempty"`
 	Note            string                            `json:"note,omitempty"`
@@ -40,16 +41,18 @@ type SubscriptionRenewalDependencies struct {
 	Repositories       SubscriptionRenewalRepositories
 	Fulfillment        FulfillmentService
 	Policy             SubscriptionRenewalPolicy
+	AccessPolicy       SubscriptionAccessPolicy
 	EntitlementCatalog EntitlementCatalog
 	UnitOfWorkFactory  func() repository.UnitOfWork
 }
 
 type subscriptionRenewalServiceImpl struct {
-	repos       SubscriptionRenewalRepositories
-	fulfillment FulfillmentService
-	policy      SubscriptionRenewalPolicy
-	catalog     EntitlementCatalog
-	uowFactory  func() repository.UnitOfWork
+	repos        SubscriptionRenewalRepositories
+	fulfillment  FulfillmentService
+	policy       SubscriptionRenewalPolicy
+	accessPolicy SubscriptionAccessPolicy
+	catalog      EntitlementCatalog
+	uowFactory   func() repository.UnitOfWork
 }
 
 func NewSubscriptionRenewalService(deps SubscriptionRenewalDependencies) SubscriptionRenewalService {
@@ -57,16 +60,21 @@ func NewSubscriptionRenewalService(deps SubscriptionRenewalDependencies) Subscri
 	if policy == nil {
 		policy = NewConfigurableSubscriptionRenewalPolicy(DefaultSubscriptionRenewalPolicyConfig())
 	}
+	accessPolicy := deps.AccessPolicy
+	if accessPolicy == nil {
+		accessPolicy = DefaultSubscriptionAccessPolicy()
+	}
 	catalog := deps.EntitlementCatalog
 	if catalog == nil {
 		catalog = DefaultEntitlementCatalog()
 	}
 	return &subscriptionRenewalServiceImpl{
-		repos:       deps.Repositories,
-		fulfillment: deps.Fulfillment,
-		policy:      policy,
-		catalog:     catalog,
-		uowFactory:  deps.UnitOfWorkFactory,
+		repos:        deps.Repositories,
+		fulfillment:  deps.Fulfillment,
+		policy:       policy,
+		accessPolicy: accessPolicy,
+		catalog:      catalog,
+		uowFactory:   deps.UnitOfWorkFactory,
 	}
 }
 
@@ -126,8 +134,11 @@ func (s *subscriptionRenewalServiceImpl) applyWithRepos(ctx context.Context, rep
 		result.Fulfillment = fulfillment
 		return result, err
 	case SubscriptionRenewalActionGrantGrace:
-		grant, affected, err := s.ensureGraceGrant(ctx, repos, event, order, decision.GracePeriodDays)
-		result.GraceGrant = grant
+		grants, affected, err := s.ensureGraceGrants(ctx, repos, event, order, decision.GracePeriodDays)
+		result.GraceGrants = grants
+		if len(grants) > 0 {
+			result.GraceGrant = &grants[0]
+		}
 		result.AffectedGrants = affected
 		return result, err
 	case SubscriptionRenewalActionExpireGrace:
@@ -237,34 +248,58 @@ func (s *subscriptionRenewalServiceImpl) ensureGraceGrant(
 	order *domain.Order,
 	gracePeriodDays int,
 ) (*domain.EntitlementGrant, []domain.EntitlementGrant, error) {
+	grants, affected, err := s.ensureGraceGrants(ctx, repos, event, order, gracePeriodDays)
+	if len(grants) == 0 {
+		return nil, affected, err
+	}
+	return &grants[0], affected, err
+}
+
+func (s *subscriptionRenewalServiceImpl) ensureGraceGrants(
+	ctx context.Context,
+	repos SubscriptionRenewalRepositories,
+	event *domain.PaymentEventInbox,
+	order *domain.Order,
+	gracePeriodDays int,
+) ([]domain.EntitlementGrant, []domain.EntitlementGrant, error) {
 	if gracePeriodDays <= 0 {
 		gracePeriodDays = domain.GracePeriodDays
 	}
 	startsAt := renewalGraceStart(event)
 	graceEnd := startsAt.AddDate(0, 0, gracePeriodDays)
-	graceGrantKey := subscriptionGraceGrantKey(order.OutTradeNo, domain.EntitlementEditorialStudio)
-	grant, err := createGrantWithRepos(ctx, repos.Users, repos.EntitlementGrants, s.catalog, GrantInput{
-		UserID:         order.UserID,
-		EntitlementID:  domain.EntitlementEditorialStudio,
-		CreatedBy:      "system",
-		Source:         domain.GrantSourceSubscriptionGrace,
-		StartsAt:       startsAt,
-		ExpiresAt:      &graceEnd,
-		IdempotencyKey: graceGrantKey,
-	})
+	entitlementIDs, err := s.accessPolicy.GraceEntitlementIDs(ctx, order)
 	if err != nil {
 		return nil, nil, err
 	}
-	affected, err := repos.EntitlementGrants.List(ctx, repository.EntitlementGrantQuery{
-		UserID:         order.UserID,
-		EntitlementID:  domain.EntitlementEditorialStudio,
-		Status:         domain.GrantStatusActive,
-		IncludeExpired: true,
-	})
-	if err != nil {
-		return nil, nil, err
+	graceGrants := make([]domain.EntitlementGrant, 0, len(entitlementIDs))
+	affected := make([]domain.EntitlementGrant, 0, len(entitlementIDs))
+	for _, entitlementID := range entitlementIDs {
+		graceGrantKey := subscriptionGraceGrantKey(order.OutTradeNo, entitlementID)
+		grant, err := createGrantWithRepos(ctx, repos.Users, repos.EntitlementGrants, s.catalog, GrantInput{
+			UserID:         order.UserID,
+			EntitlementID:  entitlementID,
+			CreatedBy:      "system",
+			Source:         domain.GrantSourceSubscriptionGrace,
+			StartsAt:       startsAt,
+			ExpiresAt:      &graceEnd,
+			IdempotencyKey: graceGrantKey,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		graceGrants = append(graceGrants, *grant)
+		listed, err := repos.EntitlementGrants.List(ctx, repository.EntitlementGrantQuery{
+			UserID:         order.UserID,
+			EntitlementID:  entitlementID,
+			Status:         domain.GrantStatusActive,
+			IncludeExpired: true,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		affected = append(affected, listed...)
 	}
-	return grant, affected, nil
+	return graceGrants, affected, nil
 }
 
 func (s *subscriptionRenewalServiceImpl) expireGraceGrants(
@@ -277,13 +312,11 @@ func (s *subscriptionRenewalServiceImpl) expireGraceGrants(
 	if gracePeriodDays <= 0 {
 		gracePeriodDays = domain.GracePeriodDays
 	}
-	grants, err := repos.EntitlementGrants.List(ctx, repository.EntitlementGrantQuery{
-		UserID:         order.UserID,
-		EntitlementID:  domain.EntitlementEditorialStudio,
-		Status:         domain.GrantStatusActive,
-		IncludeExpired: true,
-	})
+	entitlementIDs, err := s.accessPolicy.GraceEntitlementIDs(ctx, order)
 	if err != nil {
+		if errors.Is(err, ErrSubscriptionGraceUnsupported) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	now := time.Now().UTC()
@@ -293,24 +326,35 @@ func (s *subscriptionRenewalServiceImpl) expireGraceGrants(
 	}
 	cutoff := anchor
 	var expired []string
-	for idx := range grants {
-		grant := grants[idx]
-		if grant.Source != domain.GrantSourceSubscriptionGrace {
-			continue
+	for _, entitlementID := range entitlementIDs {
+		grants, err := repos.EntitlementGrants.List(ctx, repository.EntitlementGrantQuery{
+			UserID:         order.UserID,
+			EntitlementID:  entitlementID,
+			Status:         domain.GrantStatusActive,
+			IncludeExpired: true,
+		})
+		if err != nil {
+			return nil, err
 		}
-		if !grant.StartsAt.IsZero() && grant.StartsAt.After(anchor) {
-			continue
+		for idx := range grants {
+			grant := grants[idx]
+			if grant.Source != domain.GrantSourceSubscriptionGrace {
+				continue
+			}
+			if !grant.StartsAt.IsZero() && grant.StartsAt.After(anchor) {
+				continue
+			}
+			if grant.ExpiresAt == nil || grant.ExpiresAt.After(anchor) {
+				continue
+			}
+			grant.Status = domain.GrantStatusExpired
+			grant.ExpiresAt = &cutoff
+			grant.UpdatedAt = now
+			if err := repos.EntitlementGrants.Update(ctx, &grant); err != nil {
+				return expired, err
+			}
+			expired = append(expired, grant.ID)
 		}
-		if grant.ExpiresAt == nil || grant.ExpiresAt.After(anchor) {
-			continue
-		}
-		grant.Status = domain.GrantStatusExpired
-		grant.ExpiresAt = &cutoff
-		grant.UpdatedAt = now
-		if err := repos.EntitlementGrants.Update(ctx, &grant); err != nil {
-			return expired, err
-		}
-		expired = append(expired, grant.ID)
 	}
 	return expired, nil
 }

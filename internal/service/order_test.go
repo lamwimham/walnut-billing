@@ -30,7 +30,7 @@ func (m *mockProductRepo) Create(ctx context.Context, p *domain.Product) error {
 func (m *mockProductRepo) GetByCode(ctx context.Context, code string) (*domain.Product, error) {
 	p, ok := m.products[code]
 	if !ok {
-		return nil, errors.New("product not found")
+		return nil, repository.ErrNotFound
 	}
 	return p, nil
 }
@@ -73,6 +73,25 @@ func (m *mockTxOrderRepo) GetByIdempotencyKey(ctx context.Context, key string) (
 		}
 	}
 	return nil, repository.ErrNotFound
+}
+
+func (m *mockTxOrderRepo) FindLatestSubscriptionOrder(ctx context.Context, query repository.SubscriptionOrderQuery) (*domain.Order, error) {
+	var selected *domain.Order
+	for _, order := range m.orders {
+		if order.UserID != query.UserID || order.SKUCode != query.SKUCode {
+			continue
+		}
+		if order.OrderType != domain.OrderTypeCheckout && order.OrderType != domain.OrderTypeRenewal {
+			continue
+		}
+		if selected == nil || order.ID > selected.ID {
+			selected = order
+		}
+	}
+	if selected == nil {
+		return nil, repository.ErrNotFound
+	}
+	return selected, nil
 }
 
 func (m *mockTxOrderRepo) Update(ctx context.Context, order *domain.Order) error {

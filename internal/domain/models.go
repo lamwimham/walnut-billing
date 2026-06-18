@@ -195,8 +195,33 @@ const (
 	GrantSourceManual            = "manual"
 	GrantSourceFulfillment       = "fulfillment"
 	GrantSourceSubscriptionGrace = "subscription_grace"
+	GrantSourceTrial             = "trial"
 
-	EntitlementEditorialStudio = "editorial.studio"
+	DeviceStatusActive   = "active"
+	DeviceStatusDisabled = "disabled"
+
+	TrialGrantStatusIssued  = "issued"
+	TrialGrantStatusRevoked = "revoked"
+	TrialGrantTypeProOwnAI  = "pro_own_ai_trial"
+
+	PlanBasicOwnAI = "basic_own_ai"
+
+	SKUProOwnAIMonthly  = "pro_own_ai_monthly"
+	SKUProOwnAILifetime = "pro_own_ai_lifetime"
+
+	// Product* aliases preserve existing call sites while the commerce catalog
+	// distinguishes free plans from purchasable SKUs.
+	ProductBasicOwnAI       = PlanBasicOwnAI
+	ProductProOwnAIMonthly  = SKUProOwnAIMonthly
+	ProductProOwnAILifetime = SKUProOwnAILifetime
+
+	EntitlementSoftwareBasic        = "software.basic"
+	EntitlementSoftwareAdvanced     = "software.advanced"
+	EntitlementEditorialStudio      = "editorial.studio"
+	EntitlementWorkflowBatchCleanup = "workflow.batch_cleanup"
+	EntitlementWorkflowAdvanced     = "workflow.advanced"
+	EntitlementCloudStorage         = "cloud.storage"
+	EntitlementAIHosted             = "ai.hosted"
 )
 
 // User is the stable identity used by entitlement snapshots.
@@ -243,6 +268,35 @@ type EntitlementGrant struct {
 	ExpiresAt      *time.Time `json:"expires_at" gorm:"index"`
 	CreatedBy      string     `json:"created_by" gorm:"size:64"`
 	IdempotencyKey *string    `json:"idempotency_key,omitempty" gorm:"uniqueIndex;size:160"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	RevokedAt      *time.Time `json:"revoked_at"`
+}
+
+// UserDevice records a server-side device binding for access restore and risk
+// control. The raw DeviceID is supplied by the desktop app and scoped per user.
+type UserDevice struct {
+	ID          string    `json:"id" gorm:"primaryKey;size:40"`
+	UserID      string    `json:"user_id" gorm:"size:40;index;uniqueIndex:idx_user_device"`
+	DeviceID    string    `json:"device_id" gorm:"size:128;index;uniqueIndex:idx_user_device"`
+	Status      string    `json:"status" gorm:"size:16;default:'active';index"`
+	FirstSeenAt time.Time `json:"first_seen_at"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// TrialGrant is the idempotent ledger for one trial allocation. It prevents
+// reinstalling or deleting local data from extending a trial for the same email.
+type TrialGrant struct {
+	ID             string     `json:"id" gorm:"primaryKey;size:40"`
+	UserID         string     `json:"user_id" gorm:"size:40;index"`
+	Email          string     `json:"email" gorm:"size:255;index"`
+	GrantType      string     `json:"grant_type" gorm:"size:64;index"`
+	Status         string     `json:"status" gorm:"size:16;default:'issued';index"`
+	StartsAt       time.Time  `json:"starts_at" gorm:"index"`
+	ExpiresAt      *time.Time `json:"expires_at" gorm:"index"`
+	IdempotencyKey string     `json:"idempotency_key" gorm:"uniqueIndex;size:160"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	RevokedAt      *time.Time `json:"revoked_at"`

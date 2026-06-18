@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/payment"
 	"walnut-billing/internal/repository"
@@ -298,6 +299,178 @@ func TestCheckoutService_AllowsCheckoutWhenCriticalRiskResolved(t *testing.T) {
 	}
 	if len(gateway.requests) != 1 {
 		t.Fatalf("expected provider call after resolved risk, got %d", len(gateway.requests))
+	}
+}
+
+func TestSoftwareAccessPlanCheckoutPolicy_BlocksDuplicateMonthlySubscription(t *testing.T) {
+	grants := newMockGrantRepo()
+	periodEnd := time.Now().UTC().AddDate(0, 1, 0)
+	grants.grants["monthly"] = &domain.EntitlementGrant{
+		ID:            "monthly",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceFulfillment,
+		StartsAt:      time.Now().UTC().Add(-time.Hour),
+		ExpiresAt:     &periodEnd,
+	}
+	policy := NewSoftwareAccessPlanCheckoutPolicy(grants, nil, func() time.Time { return time.Now().UTC() })
+	svc, orders, products, users, gateway := newCheckoutTestServiceWithPolicies(policy)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	products.products[domain.SKUProOwnAIMonthly] = &domain.Product{
+		Code:      domain.SKUProOwnAIMonthly,
+		Name:      "Walnut Pro Own AI Monthly",
+		Price:     500,
+		Currency:  "USD",
+		Validity:  "monthly",
+		IsVisible: true,
+	}
+
+	_, err := svc.CreateCheckoutSession(context.Background(), CheckoutInput{
+		UserID:         "usr_1",
+		SKUCode:        domain.SKUProOwnAIMonthly,
+		Provider:       "mock",
+		IdempotencyKey: "checkout:duplicate-monthly",
+	})
+	if !errors.Is(err, ErrCheckoutBlockedByPlan) {
+		t.Fatalf("expected plan policy block, got %v", err)
+	}
+	decision, ok := CheckoutPolicyDecisionFromError(err)
+	if !ok || decision.Reason != CheckoutPolicyReasonDuplicateActiveSubscription {
+		t.Fatalf("expected duplicate subscription decision, got %#v ok=%v", decision, ok)
+	}
+	if len(orders.orders) != 0 || len(gateway.requests) != 0 {
+		t.Fatalf("blocked checkout must not create order or provider session")
+	}
+}
+
+func TestSoftwareAccessPlanCheckoutPolicy_BlocksLifetimeFromActiveSubscriptionBeforeCancellation(t *testing.T) {
+	grants := newMockGrantRepo()
+	periodEnd := time.Now().UTC().AddDate(0, 1, 0)
+	grants.grants["monthly"] = &domain.EntitlementGrant{
+		ID:            "monthly",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceFulfillment,
+		StartsAt:      time.Now().UTC().Add(-time.Hour),
+		ExpiresAt:     &periodEnd,
+	}
+	policy := NewSoftwareAccessPlanCheckoutPolicy(grants, nil, func() time.Time { return time.Now().UTC() })
+	svc, orders, products, users, gateway := newCheckoutTestServiceWithPolicies(policy)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	products.products[domain.SKUProOwnAILifetime] = &domain.Product{
+		Code:      domain.SKUProOwnAILifetime,
+		Name:      "Walnut Pro Own AI Lifetime",
+		Price:     9900,
+		Currency:  "USD",
+		Validity:  "lifetime",
+		IsVisible: true,
+	}
+
+	_, err := svc.CreateCheckoutSession(context.Background(), CheckoutInput{
+		UserID:         "usr_1",
+		SKUCode:        domain.SKUProOwnAILifetime,
+		Provider:       "mock",
+		IdempotencyKey: "checkout:lifetime-from-monthly",
+	})
+	if !errors.Is(err, ErrCheckoutBlockedByPlan) {
+		t.Fatalf("expected plan policy block, got %v", err)
+	}
+	decision, ok := CheckoutPolicyDecisionFromError(err)
+	if !ok || decision.Reason != CheckoutPolicyReasonActiveSubscriptionRequiresCancellation {
+		t.Fatalf("expected active subscription decision, got %#v ok=%v", decision, ok)
+	}
+	if len(orders.orders) != 0 || len(gateway.requests) != 0 {
+		t.Fatalf("blocked checkout must not create order or provider session")
+	}
+}
+
+func TestSoftwareAccessPlanCheckoutPolicy_AllowsLifetimeAfterCancelAtPeriodEnd(t *testing.T) {
+	grants := newMockGrantRepo()
+	cancellations := newMockSubscriptionCancellationRepo()
+	periodEnd := time.Now().UTC().AddDate(0, 1, 0)
+	grants.grants["monthly"] = &domain.EntitlementGrant{
+		ID:            "monthly",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceFulfillment,
+		StartsAt:      time.Now().UTC().Add(-time.Hour),
+		ExpiresAt:     &periodEnd,
+	}
+	cancellations.cancellations["cancel-1"] = &domain.SubscriptionCancellation{
+		ID:                  "sub_cancel_1",
+		UserID:              "usr_1",
+		SKUCode:             domain.SKUProOwnAIMonthly,
+		Status:              SubscriptionCancellationStatusCancelAtPeriodEnd,
+		CancelAtPeriodEnd:   true,
+		CurrentPeriodEndsAt: periodEnd,
+		IdempotencyKey:      "cancel-1",
+	}
+	policy := NewSoftwareAccessPlanCheckoutPolicy(grants, cancellations, func() time.Time { return time.Now().UTC() })
+	svc, _, products, users, gateway := newCheckoutTestServiceWithPolicies(policy)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	products.products[domain.SKUProOwnAILifetime] = &domain.Product{
+		Code:      domain.SKUProOwnAILifetime,
+		Name:      "Walnut Pro Own AI Lifetime",
+		Price:     9900,
+		Currency:  "USD",
+		Validity:  "lifetime",
+		IsVisible: true,
+	}
+
+	_, err := svc.CreateCheckoutSession(context.Background(), CheckoutInput{
+		UserID:         "usr_1",
+		SKUCode:        domain.SKUProOwnAILifetime,
+		Provider:       "mock",
+		IdempotencyKey: "checkout:lifetime-after-cancel",
+	})
+	if err != nil {
+		t.Fatalf("expected lifetime checkout after cancellation, got %v", err)
+	}
+	if len(gateway.requests) != 1 {
+		t.Fatalf("expected provider call for lifetime after cancellation, got %d", len(gateway.requests))
+	}
+}
+
+func TestSoftwareAccessPlanCheckoutPolicy_BlocksCheckoutWhenLifetimeAlreadyActive(t *testing.T) {
+	grants := newMockGrantRepo()
+	grants.grants["lifetime"] = &domain.EntitlementGrant{
+		ID:            "lifetime",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceFulfillment,
+		StartsAt:      time.Now().UTC().Add(-time.Hour),
+	}
+	policy := NewSoftwareAccessPlanCheckoutPolicy(grants, nil, nil)
+	svc, orders, products, users, gateway := newCheckoutTestServiceWithPolicies(policy)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	products.products[domain.SKUProOwnAILifetime] = &domain.Product{
+		Code:      domain.SKUProOwnAILifetime,
+		Name:      "Walnut Pro Own AI Lifetime",
+		Price:     9900,
+		Currency:  "USD",
+		Validity:  "lifetime",
+		IsVisible: true,
+	}
+
+	_, err := svc.CreateCheckoutSession(context.Background(), CheckoutInput{
+		UserID:         "usr_1",
+		SKUCode:        domain.SKUProOwnAILifetime,
+		Provider:       "mock",
+		IdempotencyKey: "checkout:lifetime-again",
+	})
+	if !errors.Is(err, ErrCheckoutBlockedByPlan) {
+		t.Fatalf("expected lifetime policy block, got %v", err)
+	}
+	decision, ok := CheckoutPolicyDecisionFromError(err)
+	if !ok || decision.Reason != CheckoutPolicyReasonLifetimeAlreadyActive {
+		t.Fatalf("expected lifetime-active decision, got %#v ok=%v", decision, ok)
+	}
+	if len(orders.orders) != 0 || len(gateway.requests) != 0 {
+		t.Fatalf("blocked checkout must not create order or provider session")
 	}
 }
 

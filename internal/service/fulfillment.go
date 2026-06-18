@@ -70,33 +70,6 @@ func NewFulfillmentCatalogFromJSON(raw string, fallback []FulfillmentRule) (Fulf
 	return NewStaticFulfillmentCatalog(rules...)
 }
 
-func DefaultFulfillmentRules() []FulfillmentRule {
-	return []FulfillmentRule{
-		{
-			ID:            "editorial_studio_monthly:entitlement",
-			SKUCode:       "editorial_studio_monthly",
-			Type:          FulfillmentRuleGrantEntitlement,
-			EntitlementID: domain.EntitlementEditorialStudio,
-			Duration:      "monthly",
-		},
-		{
-			ID:                "editorial_studio_monthly:credits_600",
-			SKUCode:           "editorial_studio_monthly",
-			Type:              FulfillmentRuleGrantCredits,
-			CreditsAmount:     600,
-			CreditsBucketType: domain.CreditBucketTypeSubscriptionPeriod,
-			Duration:          "monthly",
-		},
-		{
-			ID:                "credits_600:credits",
-			SKUCode:           "credits_600",
-			Type:              FulfillmentRuleGrantCredits,
-			CreditsAmount:     600,
-			CreditsBucketType: domain.CreditBucketTypeTopup,
-		},
-	}
-}
-
 func (c *StaticFulfillmentCatalog) RulesForSKU(skuCode string) ([]FulfillmentRule, error) {
 	if c == nil {
 		return nil, ErrFulfillmentRulesNotFound
@@ -537,9 +510,6 @@ func creditBucketTypeForFulfillment(order *domain.Order, rule FulfillmentRule) s
 	if strings.TrimSpace(rule.CreditsBucketType) != "" {
 		return strings.TrimSpace(rule.CreditsBucketType)
 	}
-	if order != nil && order.SKUCode == "credits_600" {
-		return domain.CreditBucketTypeTopup
-	}
 	if order != nil && (order.OrderType == domain.OrderTypeCheckout || order.OrderType == domain.OrderTypeRenewal) && strings.TrimSpace(rule.Duration) != "" {
 		return domain.CreditBucketTypeSubscriptionPeriod
 	}
@@ -595,6 +565,9 @@ func entitlementFulfillmentAnchor(ctx context.Context, grants repository.Entitle
 					graceAnchor = &start
 				}
 			}
+			continue
+		}
+		if grant.Source != domain.GrantSourceFulfillment {
 			continue
 		}
 		if grant.ExpiresAt != nil && grant.ExpiresAt.After(paidAnchor) {

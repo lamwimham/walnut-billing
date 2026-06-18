@@ -9,11 +9,11 @@
 - 创建或识别 Walnut 用户。
 - 通过 `/api/v1/commerce/checkout-sessions` 创建 checkout session。
 - 通过 `/api/v1/webhooks/:provider` 接收 paid webhook。
-- 验证 `Order -> PaymentEventInbox -> FulfillmentExecution -> EntitlementGrant/CreditTransaction -> EntitlementSnapshot`。
+- 验证 `Order -> PaymentEventInbox -> FulfillmentExecution -> EntitlementGrant -> EntitlementSnapshot`；legacy credit SKU 另验 `CreditTransaction/CreditBucket`。
 - 验证重复 webhook 幂等。
 - 模拟 dispute/chargeback，完成 revoke/clawback、创建 `PaymentRiskFlag`、阻断新 checkout、人工 resolve 后恢复 checkout。
 - 模拟订阅续费成功、续费失败 3 天 grace period、subscription expired 的权益变化。
-- 验证 credit bucket FEFO、订阅周期 credits 到期、top-up credits 不随订阅到期。
+- 验证 Own AI 软件权益、订阅宽限期、退款/争议撤销；legacy credit bucket FEFO 仅作为 hosted AI 上线前的兼容能力。
 
 暂不覆盖：
 
@@ -43,7 +43,7 @@ Provider Webhook
         -> PaymentOrderEventProcessor
         -> FulfillmentService
           -> FulfillmentCatalog
-          -> FulfillmentRuleExecutor(entitlement | credits)
+          -> FulfillmentRuleExecutor(entitlement | legacy/future credits)
           -> EntitlementGrantRepository / CreditTransactionRepository
         -> PaymentAdjustmentService(refund | cancel | dispute)
           -> PaymentRiskFlagRepository
@@ -58,9 +58,8 @@ PC / Mobile access gate
 边界原则：
 
 - Provider facts 到 `PaymentEventInbox` 为止，不能直接成为 app access facts。
-- `EntitlementGrant`、`CreditTransaction` 和 `CreditBucket` 是 Walnut 自有权益事实。
-- 订阅宽限期只写 `EntitlementGrant(source=subscription_grace)`，不发新周期 credits。
-- 订阅周期 credits 写入 `CreditBucket(type=subscription_period, expires_at=period_end)`；top-up credits 写入 `CreditBucket(type=topup, expires_at=nil)`。
+- `EntitlementGrant` 是 Own AI 软件访问的 Walnut 自有事实；`CreditTransaction/CreditBucket` 保留给 legacy credit SKU 与未来 hosted AI。
+- 订阅宽限期只写 `EntitlementGrant(source=subscription_grace)`，不发 hosted AI credits。
 - `PaymentRiskFlag` 只控制新的 checkout 尝试，不直接改写 PC/mobile 的 access snapshot。
 - Admin 风险解除路径固定为 `PaymentRiskHandler -> PaymentRiskService -> PaymentRiskFlagRepository`。
 
@@ -92,7 +91,7 @@ PAYMENT_CREEM_WEBHOOK_SECRET=whsec_xxx
 PAYMENT_CREEM_SANDBOX=true
 PAYMENT_CREEM_SUCCESS_URL=walnut://checkout/success
 PAYMENT_CREEM_CANCEL_URL=walnut://checkout/cancel
-PAYMENT_CREEM_PRODUCT_MAP_JSON='{"editorial_studio_monthly":"prod_xxx","credits_600":"prod_yyy"}'
+PAYMENT_CREEM_PRODUCT_MAP_JSON='{"pro_own_ai_monthly":"prod_4MS4IC77zjEobSHExt0gcr","pro_own_ai_lifetime":"prod_lifetime_xxx"}'
 ```
 
 可选的 fulfillment 覆盖配置。为空时使用内置默认规则：
@@ -101,23 +100,18 @@ PAYMENT_CREEM_PRODUCT_MAP_JSON='{"editorial_studio_monthly":"prod_xxx","credits_
 FULFILLMENT_RULES_JSON='{
   "rules": [
     {
-      "id": "editorial_studio_monthly:entitlement",
-      "sku_code": "editorial_studio_monthly",
+      "id": "pro_own_ai_monthly:editorial_studio",
+      "sku_code": "pro_own_ai_monthly",
       "type": "grant_entitlement",
       "entitlement_id": "editorial.studio",
       "duration": "monthly"
     },
     {
-      "id": "editorial_studio_monthly:credits_600",
-      "sku_code": "editorial_studio_monthly",
-      "type": "grant_credits",
-      "credits_amount": 600
-    },
-    {
-      "id": "credits_600:credits",
-      "sku_code": "credits_600",
-      "type": "grant_credits",
-      "credits_amount": 600
+      "id": "pro_own_ai_monthly:cloud_storage",
+      "sku_code": "pro_own_ai_monthly",
+      "type": "grant_entitlement",
+      "entitlement_id": "cloud.storage",
+      "duration": "monthly"
     }
   ]
 }'
@@ -179,12 +173,12 @@ echo "$USER_ID"
 ### 2. 创建 checkout session
 
 ```bash
-IDEMPOTENCY_KEY="checkout:${USER_ID}:editorial_studio_monthly:$(date +%s)"
+IDEMPOTENCY_KEY="checkout:${USER_ID}:pro_own_ai_monthly:$(date +%s)"
 CHECKOUT_RESPONSE=$(curl -sS -X POST "$BASE_URL/api/v1/commerce/checkout-sessions" \
   -H 'Content-Type: application/json' \
   -d "{
     \"user_id\": \"$USER_ID\",
-    \"sku_code\": \"editorial_studio_monthly\",
+    \"sku_code\": \"pro_own_ai_monthly\",
     \"provider\": \"mock\",
     \"success_url\": \"walnut://checkout/success\",
     \"cancel_url\": \"walnut://checkout/cancel\",
@@ -205,7 +199,9 @@ echo "$OUT_TRADE_NO"
 
 ### 3. 模拟 paid webhook
 
-Mock provider 通过 legacy callback verifier 适配到 provider-agnostic webhook inbox，可使用 query/form 参数。
+推荐直接打开上一步返回的 `checkout_url`，点击本地页面的 `Simulate payment success`。这会经由 mock hosted-checkout 页面发送 paid webhook，再按 `success_url` 跳回 Walnut。
+
+如果要绕过页面，也可以用 query/form 参数直接调用 provider-agnostic webhook inbox：
 
 ```bash
 PAID_EVENT_ID="evt_paid_${OUT_TRADE_NO}"
@@ -233,8 +229,8 @@ curl -sS "$BASE_URL/api/v1/users/$USER_ID/entitlements/snapshot"
 预期：
 
 - Payment event 为 `processed`，`signature_verified` 为 true。
-- Fulfillment 包含 `editorial_studio_monthly` 的 entitlement execution 和 credits execution。
-- Snapshot 包含 `"editorial.studio": true` 与 `"credits.balance": 600`。
+- Fulfillment 包含 `pro_own_ai_monthly` 的当前真实高级权益 executions：editorial-studio 与 cloud-storage。
+- Snapshot 的 license state 进入 subscription，且 entitlements 包含 `editorial.studio`、`cloud.storage`。
 
 ### 5. 验证重复 webhook 幂等
 
@@ -245,7 +241,7 @@ curl -sS -X POST "$BASE_URL/api/v1/webhooks/mock?out_trade_no=$OUT_TRADE_NO&prov
 预期：
 
 - 响应包含 `duplicate: true` 与 `processed: true`。
-- `FulfillmentExecution`、`EntitlementGrant`、`CreditTransaction` 不重复写入。
+- `FulfillmentExecution` 与 `EntitlementGrant` 不重复写入；legacy credit SKU 不重复写入 `CreditTransaction`。
 
 ## Creem 测试流程
 
@@ -284,8 +280,8 @@ curl -sS -X PUT "$BASE_URL/api/v1/admin/payment/creem" \
     "cancel_url": "walnut://checkout/cancel",
     "sandbox": true,
     "product_ids": {
-      "editorial_studio_monthly": "prod_xxx",
-      "credits_600": "prod_yyy"
+      "pro_own_ai_monthly": "prod_4MS4IC77zjEobSHExt0gcr",
+      "pro_own_ai_lifetime": "prod_lifetime_xxx"
     }
   }'
 ```
@@ -293,12 +289,12 @@ curl -sS -X PUT "$BASE_URL/api/v1/admin/payment/creem" \
 ### 2. 创建 Creem checkout session
 
 ```bash
-IDEMPOTENCY_KEY="checkout:${USER_ID}:editorial_studio_monthly:creem:$(date +%s)"
+IDEMPOTENCY_KEY="checkout:${USER_ID}:pro_own_ai_monthly:creem:$(date +%s)"
 CHECKOUT_RESPONSE=$(curl -sS -X POST "$BASE_URL/api/v1/commerce/checkout-sessions" \
   -H 'Content-Type: application/json' \
   -d "{
     \"user_id\": \"$USER_ID\",
-    \"sku_code\": \"editorial_studio_monthly\",
+    \"sku_code\": \"pro_own_ai_monthly\",
     \"provider\": \"creem\",
     \"success_url\": \"walnut://checkout/success\",
     \"cancel_url\": \"walnut://checkout/cancel\",
@@ -331,7 +327,7 @@ https://<public-host>/api/v1/webhooks/creem
 
 ```bash
 PAYLOAD=$(cat <<JSON
-{"id":"evt_local_paid_1","eventType":"checkout.completed","object":{"id":"ch_1","request_id":"$OUT_TRADE_NO","order":{"id":"ord_1","amount":1900,"currency":"USD","status":"paid"},"metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}}}
+{"id":"evt_local_paid_1","eventType":"checkout.completed","object":{"id":"ch_1","request_id":"$OUT_TRADE_NO","order":{"id":"ord_1","amount":500,"currency":"USD","status":"paid"},"metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}}}
 JSON
 )
 
@@ -351,26 +347,25 @@ curl -sS -X POST "$BASE_URL/api/v1/webhooks/creem" \
 
 ## Credit Bucket / Expiry
 
-该流程验证 Walnut 的 credits 不再只依赖单一 aggregate balance，而是通过 bucket 维度区分订阅赠点和预存点数。客户端仍然只看聚合余额与 entitlement snapshot，bucket 只在 billing 内部用于过期、退款和可追踪性。
+当前 Own AI SKU 不包含 hosted AI credits；这里保留 legacy credit bucket 验收，确保未来 hosted AI 上线时仍能按 bucket 维度区分订阅赠点和预存点数。客户端仍然只看聚合余额与 entitlement snapshot，bucket 只在 billing 内部用于过期、退款和可追踪性。
 
-### 1. 订阅周期 credits
+### 1. Own AI 订阅权益
 
-`editorial_studio_monthly` fulfillment 会写入：
+`pro_own_ai_monthly` fulfillment 会写入：
 
-- `CreditBucket(type=subscription_period)`
-- `PeriodStartAt = paidAt`
-- `PeriodEndAt = paidAt + 1 month`
-- `ExpiresAt = PeriodEndAt`
+- `EntitlementGrant(source=fulfillment)`
+- `EntitlementID` 覆盖当前真实高级权益：`editorial.studio`、`cloud.storage`
+- `ExpiresAt = paid period end`
 
-### 2. 预存 credits
+### 2. Legacy credit bucket
 
-`credits_600` fulfillment 会写入：
+当前 Own AI 商业化不出售 hosted AI credits。`credits_600` 是历史测试 SKU，会写入：
 
 - `CreditBucket(type=topup)`
 - `ExpiresAt = nil`
 - 不随订阅周期自动过期
 
-### 3. 运行期过期
+### 3. Legacy credit bucket 运行期过期
 
 可以由 operator 或定时任务调用：
 
@@ -389,7 +384,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/credits/buckets/expire" \
 
 ### 4. FEFO 消耗
 
-当用户使用 credits 时，系统按最早到期优先（FEFO）消费。订阅周期 credits 会优先被消费，top-up credits 作为后备余额保留。
+当用户使用 legacy 或未来 hosted AI credits 时，系统按最早到期优先（FEFO）消费。订阅周期 credits 会优先被消费，top-up credits 作为后备余额保留。
 
 ### 5. 退款/clawback
 
@@ -397,19 +392,19 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/credits/buckets/expire" \
 
 ## Subscription Renewal / Grace Period
 
-该流程验证 provider subscription 事件不会直接驱动 PC/mobile 门禁，而是通过 Walnut 的 `Order`、`EntitlementGrant` 和 `CreditTransaction` 生效。Creem 官方事件映射：
+该流程验证 provider subscription 事件不会直接驱动 PC/mobile 门禁，而是通过 Walnut 的 `Order` 和 `EntitlementGrant` 生效；未来 hosted AI credits 再由 `CreditTransaction` 补充。Creem 官方事件映射：
 
 | Creem event | Walnut event | 行为 |
 |---|---|---|
-| `subscription.paid` | `payment.renewal_paid` | 续费成功，执行新周期 fulfillment，发放 entitlement + period credits |
-| `subscription.past_due` | `payment.renewal_failed` | 进入 grace period，仅保留高级权益，不发 credits |
+| `subscription.paid` | `payment.renewal_paid` | 续费成功，执行新周期 fulfillment，发放 Own AI entitlement |
+| `subscription.past_due` | `payment.renewal_failed` | 进入 grace period，仅保留高级权益，不发 hosted AI credits |
 | `subscription.expired` | `payment.subscription_expired` | 触发 grace 到期检查；若仍在 grace 窗口内则不截断，若已到 `expires_at` 后默认标记 `subscription_grace` expired |
 
 本地模拟续费失败：
 
 ```bash
 PAST_DUE_PAYLOAD=$(cat <<JSON
-{"id":"evt_sub_past_due_1","eventType":"subscription.past_due","object":{"id":"sub_1","subscription":{"id":"sub_1","metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}},"order":{"id":"ord_renewal_failed_1","amount":1900,"currency":"USD"},"current_period_start_date":"2026-07-12T10:00:00.000Z","current_period_end_date":"2026-08-12T10:00:00.000Z"}}
+{"id":"evt_sub_past_due_1","eventType":"subscription.past_due","object":{"id":"sub_1","subscription":{"id":"sub_1","metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}},"order":{"id":"ord_renewal_failed_1","amount":500,"currency":"USD"},"current_period_start_date":"2026-07-12T10:00:00.000Z","current_period_end_date":"2026-08-12T10:00:00.000Z"}}
 JSON
 )
 SIG=$(printf '%s' "$PAST_DUE_PAYLOAD" | openssl dgst -sha256 -hmac "$PAYMENT_CREEM_WEBHOOK_SECRET" -binary | xxd -p -c 256)
@@ -424,13 +419,13 @@ curl -sS -X POST "$BASE_URL/api/v1/webhooks/creem" \
 - `PaymentEventInbox.event_type=payment.renewal_failed`。
 - 若 webhook 只携带原 checkout `out_trade_no`，billing 会按 `source_out_trade_no + billing period` 派生 Walnut renewal order，避免 provider 订单直接进入门禁。
 - 创建 `EntitlementGrant(source=subscription_grace)`，`starts_at = current_period_end_date`，`expires_at = current_period_end_date + RENEWAL_GRACE_PERIOD_DAYS`。
-- 不新增 credit grant transaction。
+- 不新增 hosted AI credit grant transaction。
 
 本地模拟续费成功：
 
 ```bash
 PAID_PAYLOAD=$(cat <<JSON
-{"id":"evt_sub_paid_1","eventType":"subscription.paid","object":{"id":"sub_1","subscription":{"id":"sub_1","metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}},"order":{"id":"ord_renewal_paid_1","amount":1900,"currency":"USD"},"current_period_start_date":"2026-07-12T10:00:00.000Z","current_period_end_date":"2026-08-12T10:00:00.000Z"}}
+{"id":"evt_sub_paid_1","eventType":"subscription.paid","object":{"id":"sub_1","subscription":{"id":"sub_1","metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}},"order":{"id":"ord_renewal_paid_1","amount":500,"currency":"USD"},"current_period_start_date":"2026-07-12T10:00:00.000Z","current_period_end_date":"2026-08-12T10:00:00.000Z"}}
 JSON
 )
 SIG=$(printf '%s' "$PAID_PAYLOAD" | openssl dgst -sha256 -hmac "$PAYMENT_CREEM_WEBHOOK_SECRET" -binary | xxd -p -c 256)
@@ -443,7 +438,7 @@ curl -sS -X POST "$BASE_URL/api/v1/webhooks/creem" \
 预期：
 
 - `PaymentEventInbox.event_type=payment.renewal_paid`。
-- 已付续费 order 经 `FulfillmentService` 执行新周期 entitlement 和 period credits；重复 webhook 不重复发放。
+- 已付续费 order 经 `FulfillmentService` 执行新周期 entitlement；重复 webhook 不重复发放。
 - 首次订阅付款若同时收到 `checkout.completed` 和 `subscription.paid`，使用 checkout fulfillment 幂等键，不重复发放。
 
 本地模拟 grace 结束：
@@ -470,7 +465,7 @@ curl -sS -X POST "$BASE_URL/api/v1/webhooks/creem" \
 
 ## Dispute / Chargeback 流程
 
-该流程验证 refund/dispute 能安全撤销履约、扣回 credits，并产生人工审核 checkout hold。
+该流程验证 refund/dispute 能安全撤销履约、回收 legacy/future credits，并产生人工审核 checkout hold。
 
 ### 1. 用 mock provider 模拟 dispute
 
@@ -484,14 +479,14 @@ curl -sS -X POST "$BASE_URL/api/v1/webhooks/mock?out_trade_no=$OUT_TRADE_NO&prov
 - 响应包含 `processed: true`。
 - Order status 变为 `refunded`。
 - 本订单产生的 entitlement grant 被 revoke。
-- 本订单发放的 credits 按可用余额 clawback，不产生负余额。
+- 若本订单发放过 legacy/future credits，则按可用余额 clawback，不产生负余额。
 - 创建一条 open critical `PaymentRiskFlag`。
 
 ### 2. 用 Creem payload 模拟 dispute
 
 ```bash
 PAYLOAD=$(cat <<JSON
-{"id":"evt_local_dispute_1","eventType":"dispute.created","object":{"id":"disp_1","dispute":{"id":"disp_1","amount":1900,"currency":"USD","metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}}}}
+{"id":"evt_local_dispute_1","eventType":"dispute.created","object":{"id":"disp_1","dispute":{"id":"disp_1","amount":500,"currency":"USD","metadata":{"walnut_out_trade_no":"$OUT_TRADE_NO"}}}}
 JSON
 )
 
@@ -523,7 +518,7 @@ echo "$RISK_ID"
 预期：
 
 - Snapshot 不再包含本订单对应的 active `editorial.studio`。
-- `credits.balance` 回到 clawback 后的预期余额。
+- 若该订单包含 credits，`credits.balance` 回到 clawback 后的预期余额；Own AI SKU 可保持 0。
 - Risk flag 为 `status=open`、`severity=critical`、`reason=dispute`。
 
 ### 4. 验证 checkout hold
@@ -534,7 +529,7 @@ curl -i -sS -X POST "$BASE_URL/api/v1/commerce/checkout-sessions" \
   -H 'Content-Type: application/json' \
   -d "{
     \"user_id\": \"$USER_ID\",
-    \"sku_code\": \"editorial_studio_monthly\",
+    \"sku_code\": \"pro_own_ai_monthly\",
     \"provider\": \"mock\",
     \"idempotency_key\": \"$BLOCKED_IDEMPOTENCY_KEY\"
   }"
@@ -573,7 +568,7 @@ curl -sS -X POST "$BASE_URL/api/v1/commerce/checkout-sessions" \
   -H 'Content-Type: application/json' \
   -d "{
     \"user_id\": \"$USER_ID\",
-    \"sku_code\": \"editorial_studio_monthly\",
+    \"sku_code\": \"pro_own_ai_monthly\",
     \"provider\": \"mock\",
     \"idempotency_key\": \"$POST_RESOLVE_IDEMPOTENCY_KEY\"
   }"

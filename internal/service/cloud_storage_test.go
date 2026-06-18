@@ -1,0 +1,279 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+	"walnut-billing/internal/domain"
+	"walnut-billing/internal/repository"
+	gorm_repo "walnut-billing/internal/repository/gorm_repo"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+type fakeObjectStorageProvider struct {
+	providerID string
+}
+
+func (p fakeObjectStorageProvider) ProviderID() string {
+	return p.providerID
+}
+
+func (p fakeObjectStorageProvider) BuildUploadTarget(ctx context.Context, request CloudObjectUploadRequest) (CloudObjectUploadTarget, error) {
+	return CloudObjectUploadTarget{
+		ObjectKey: request.ObjectKey,
+		UploadURL: "test-provider://" + request.ObjectKey,
+		Method:    "PUT",
+		Provider:  p.providerID,
+		Headers: map[string]string{
+			"Content-Type": request.ContentType,
+		},
+	}, nil
+}
+
+type cloudStorageServiceTestDeps struct {
+	db        *gorm.DB
+	users     *gorm_repo.UserRepo
+	grants    *gorm_repo.EntitlementGrantRepo
+	projects  *gorm_repo.CloudProjectRepo
+	manifests *gorm_repo.CloudManifestRepo
+	objects   *gorm_repo.CloudObjectRepo
+}
+
+func newCloudStorageServiceTestDeps(t *testing.T) cloudStorageServiceTestDeps {
+	t.Helper()
+	dsn := "file:" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()) + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&domain.User{},
+		&domain.EntitlementGrant{},
+		&domain.CloudProject{},
+		&domain.CloudManifest{},
+		&domain.CloudObject{},
+	); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	return cloudStorageServiceTestDeps{
+		db:        db,
+		users:     &gorm_repo.UserRepo{DB: db},
+		grants:    &gorm_repo.EntitlementGrantRepo{DB: db},
+		projects:  &gorm_repo.CloudProjectRepo{DB: db},
+		manifests: &gorm_repo.CloudManifestRepo{DB: db},
+		objects:   &gorm_repo.CloudObjectRepo{DB: db},
+	}
+}
+
+func (d cloudStorageServiceTestDeps) serviceWithQuota(quotaBytes int64) CloudStorageService {
+	return NewCloudStorageService(CloudStorageDependencies{
+		Users:             d.users,
+		Grants:            d.grants,
+		Projects:          d.projects,
+		Manifests:         d.manifests,
+		Objects:           d.objects,
+		Policy:            NewStaticCloudStorageQuotaPolicy(quotaBytes),
+		Provider:          fakeObjectStorageProvider{providerID: "test-provider"},
+		UnitOfWorkFactory: func() repository.UnitOfWork { return gorm_repo.NewUnitOfWork(d.db) },
+	})
+}
+
+func (d cloudStorageServiceTestDeps) seedUser(t *testing.T, withCloudGrant bool) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC().Add(-time.Minute)
+	if err := d.users.Create(ctx, &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if !withCloudGrant {
+		return
+	}
+	if err := d.grants.Create(ctx, &domain.EntitlementGrant{
+		ID:            "grt_cloud",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementCloudStorage,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceTrial,
+		StartsAt:      now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("create grant: %v", err)
+	}
+}
+
+func TestCloudStorageService_AuthorizeCommitAndReplaceProjectManifest(t *testing.T) {
+	deps := newCloudStorageServiceTestDeps(t)
+	deps.seedUser(t, true)
+	svc := deps.serviceWithQuota(1000)
+	ctx := context.Background()
+
+	initialResources := []CloudResourceDescriptor{
+		{ResourceID: "wiki/page.md", ResourceKind: "wiki_markdown", ContentHash: "sha256:page-v1", SizeBytes: 400, ContentType: "text/markdown", Filename: "page.md"},
+		{ResourceID: "raw/report.pdf", ResourceKind: "raw_material", ContentHash: "sha256:report", SizeBytes: 200, ContentType: "application/pdf", Filename: "report.pdf"},
+	}
+	authorization, err := svc.AuthorizeSync(ctx, CloudSyncAuthorizationInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		ProjectName:     "Local Project",
+		Resources:       initialResources,
+	})
+	if err != nil {
+		t.Fatalf("authorize initial sync: %v", err)
+	}
+	if authorization.Provider != "test-provider" || authorization.RequestedBytes != 600 || len(authorization.UploadTargets) != 2 {
+		t.Fatalf("unexpected authorization: %#v", authorization)
+	}
+	if !strings.HasPrefix(authorization.UploadTargets[0].UploadURL, "test-provider://accounts/usr_1/projects/project-local/") {
+		t.Fatalf("unexpected upload target: %#v", authorization.UploadTargets[0])
+	}
+
+	committed, err := svc.CommitManifest(ctx, CloudManifestCommitInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		ProjectName:     "Local Project",
+		ManifestHash:    "sha256:manifest-v1",
+		ManifestVersion: 1,
+		Resources:       initialResources,
+		IdempotencyKey:  "project-local:v1",
+	})
+	if err != nil {
+		t.Fatalf("commit manifest v1: %v", err)
+	}
+	if committed.Usage.UsedBytes != 600 || committed.Manifest.ObjectCount != 2 || committed.Project.LastManifestID != committed.Manifest.ID {
+		t.Fatalf("unexpected v1 commit: %#v", committed)
+	}
+
+	idempotent, err := svc.CommitManifest(ctx, CloudManifestCommitInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		ProjectName:     "Local Project",
+		ManifestHash:    "sha256:manifest-v1",
+		ManifestVersion: 1,
+		Resources:       initialResources,
+		IdempotencyKey:  "project-local:v1",
+	})
+	if err != nil {
+		t.Fatalf("idempotent commit: %v", err)
+	}
+	if idempotent.Manifest.ID != committed.Manifest.ID {
+		t.Fatalf("expected idempotent manifest %s, got %s", committed.Manifest.ID, idempotent.Manifest.ID)
+	}
+
+	replacementResources := []CloudResourceDescriptor{
+		{ResourceID: "wiki/page.md", ResourceKind: "wiki_markdown", ContentHash: "sha256:page-v2", SizeBytes: 900, ContentType: "text/markdown", Filename: "page.md"},
+	}
+	replacementAuthorization, err := svc.AuthorizeSync(ctx, CloudSyncAuthorizationInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		ProjectName:     "Local Project",
+		Resources:       replacementResources,
+	})
+	if err != nil {
+		t.Fatalf("replacement authorization should subtract existing project bytes: %v", err)
+	}
+	if replacementAuthorization.UsedBytes != 600 || replacementAuthorization.RequestedBytes != 900 {
+		t.Fatalf("unexpected replacement authorization: %#v", replacementAuthorization)
+	}
+
+	replaced, err := svc.CommitManifest(ctx, CloudManifestCommitInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		ProjectName:     "Renamed Project",
+		ManifestHash:    "sha256:manifest-v2",
+		ManifestVersion: 2,
+		Resources:       replacementResources,
+		IdempotencyKey:  "project-local:v2",
+	})
+	if err != nil {
+		t.Fatalf("commit replacement manifest: %v", err)
+	}
+	if replaced.Usage.UsedBytes != 900 || replaced.Project.Name != "Renamed Project" {
+		t.Fatalf("unexpected replacement commit: %#v", replaced)
+	}
+	activeObjects, err := deps.objects.ListByProject(ctx, replaced.Project.ID, domain.CloudObjectStatusActive)
+	if err != nil {
+		t.Fatalf("list active objects: %v", err)
+	}
+	if len(activeObjects) != 1 || activeObjects[0].SizeBytes != 900 {
+		t.Fatalf("expected one active replacement object, got %#v", activeObjects)
+	}
+	replacedObjects, err := deps.objects.ListByProject(ctx, replaced.Project.ID, domain.CloudObjectStatusReplaced)
+	if err != nil {
+		t.Fatalf("list replaced objects: %v", err)
+	}
+	if len(replacedObjects) != 2 {
+		t.Fatalf("expected two replaced v1 objects, got %#v", replacedObjects)
+	}
+
+	_, err = svc.AuthorizeSync(ctx, CloudSyncAuthorizationInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		Resources: []CloudResourceDescriptor{
+			{ResourceID: "wiki/huge.md", ResourceKind: "wiki_markdown", ContentHash: "sha256:huge", SizeBytes: 1200, ContentType: "text/markdown", Filename: "huge.md"},
+		},
+	})
+	if !errors.Is(err, ErrCloudStorageOverQuota) {
+		t.Fatalf("expected over quota, got %v", err)
+	}
+}
+
+func TestCloudStorageService_DeniesSyncWithoutGrantButReportsUsage(t *testing.T) {
+	deps := newCloudStorageServiceTestDeps(t)
+	deps.seedUser(t, false)
+	svc := deps.serviceWithQuota(1000)
+	ctx := context.Background()
+
+	_, err := svc.AuthorizeSync(ctx, CloudSyncAuthorizationInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		Resources: []CloudResourceDescriptor{
+			{ResourceID: "wiki/page.md", ResourceKind: "wiki_markdown", ContentHash: "sha256:page", SizeBytes: 100, ContentType: "text/markdown", Filename: "page.md"},
+		},
+	})
+	if !errors.Is(err, ErrCloudStorageAccessDenied) {
+		t.Fatalf("expected access denied, got %v", err)
+	}
+	usage, err := svc.Usage(ctx, "usr_1")
+	if err != nil {
+		t.Fatalf("usage without grant: %v", err)
+	}
+	if usage.QuotaBytes != 0 || usage.UsedBytes != 0 || usage.OverQuota {
+		t.Fatalf("expected basic zero-quota usage projection, got %#v", usage)
+	}
+}
+
+func TestCloudStorageService_DefaultProviderIsUnconfigured(t *testing.T) {
+	deps := newCloudStorageServiceTestDeps(t)
+	deps.seedUser(t, true)
+	svc := NewCloudStorageService(CloudStorageDependencies{
+		Users:     deps.users,
+		Grants:    deps.grants,
+		Projects:  deps.projects,
+		Manifests: deps.manifests,
+		Objects:   deps.objects,
+		Policy:    NewStaticCloudStorageQuotaPolicy(1000),
+	})
+
+	_, err := svc.AuthorizeSync(context.Background(), CloudSyncAuthorizationInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		Resources: []CloudResourceDescriptor{
+			{ResourceID: "wiki/page.md", ResourceKind: "wiki_markdown", ContentHash: "sha256:page", SizeBytes: 100, ContentType: "text/markdown", Filename: "page.md"},
+		},
+	})
+	if !errors.Is(err, ErrCloudStorageProviderNotConfigured) {
+		t.Fatalf("expected provider not configured, got %v", err)
+	}
+	projects, err := deps.projects.ListByUser(context.Background(), "usr_1", "", 10, 0)
+	if err != nil {
+		t.Fatalf("list projects: %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("unconfigured provider must not create project anchors, got %#v", projects)
+	}
+}

@@ -23,7 +23,14 @@ type OrderRepository interface {
 	Create(ctx context.Context, order *domain.Order) error
 	GetByOutTradeNo(ctx context.Context, outTradeNo string) (*domain.Order, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (*domain.Order, error)
+	FindLatestSubscriptionOrder(ctx context.Context, query SubscriptionOrderQuery) (*domain.Order, error)
 	Update(ctx context.Context, order *domain.Order) error
+}
+
+// SubscriptionOrderQuery locates the Walnut-owned order anchoring a software subscription.
+type SubscriptionOrderQuery struct {
+	UserID  string
+	SKUCode string
 }
 
 // ProductRepository defines the interface for product data access.
@@ -52,19 +59,51 @@ type AuditQuery struct {
 	Offset    int
 }
 
+// CloudProjectRepository defines data access for cloud-backed Walnut projects.
+type CloudProjectRepository interface {
+	Create(ctx context.Context, project *domain.CloudProject) error
+	GetByID(ctx context.Context, id string) (*domain.CloudProject, error)
+	GetByUserAndClientProject(ctx context.Context, userID string, clientProjectID string) (*domain.CloudProject, error)
+	ListByUser(ctx context.Context, userID string, status string, limit int, offset int) ([]domain.CloudProject, error)
+	Update(ctx context.Context, project *domain.CloudProject) error
+}
+
+// CloudManifestRepository defines data access for immutable cloud sync manifests.
+type CloudManifestRepository interface {
+	Create(ctx context.Context, manifest *domain.CloudManifest) error
+	GetByID(ctx context.Context, id string) (*domain.CloudManifest, error)
+	GetByIdempotencyKey(ctx context.Context, key string) (*domain.CloudManifest, error)
+	ListByProject(ctx context.Context, cloudProjectID string, limit int, offset int) ([]domain.CloudManifest, error)
+}
+
+// CloudObjectRepository defines data access for cloud object metadata.
+type CloudObjectRepository interface {
+	Upsert(ctx context.Context, object *domain.CloudObject) error
+	Update(ctx context.Context, object *domain.CloudObject) error
+	ListByProject(ctx context.Context, cloudProjectID string, status string) ([]domain.CloudObject, error)
+	SumActiveBytesByUser(ctx context.Context, userID string) (int64, error)
+}
+
 // TransactionalRepositories returns new repository instances bound to a transaction.
 // All operations on these repos will be part of the same transaction.
 type TransactionalRepositories struct {
-	OrderRepo                OrderRepository
-	LicenseRepo              LicenseRepository
-	UserRepo                 UserRepository
-	EntitlementGrantRepo     EntitlementGrantRepository
-	CreditAccountRepo        CreditAccountRepository
-	CreditReservationRepo    CreditReservationRepository
-	CreditTransactionRepo    CreditTransactionRepository
-	CreditBucketRepo         CreditBucketRepository
-	FulfillmentExecutionRepo FulfillmentExecutionRepository
-	PaymentRiskFlagRepo      PaymentRiskFlagRepository
+	OrderRepo                    OrderRepository
+	LicenseRepo                  LicenseRepository
+	UserRepo                     UserRepository
+	EntitlementGrantRepo         EntitlementGrantRepository
+	CreditAccountRepo            CreditAccountRepository
+	CreditReservationRepo        CreditReservationRepository
+	CreditTransactionRepo        CreditTransactionRepository
+	CreditBucketRepo             CreditBucketRepository
+	FulfillmentExecutionRepo     FulfillmentExecutionRepository
+	PaymentEventRepo             PaymentEventRepository
+	PaymentRiskFlagRepo          PaymentRiskFlagRepository
+	SubscriptionCancellationRepo SubscriptionCancellationRepository
+	UserDeviceRepo               UserDeviceRepository
+	TrialGrantRepo               TrialGrantRepository
+	CloudProjectRepo             CloudProjectRepository
+	CloudManifestRepo            CloudManifestRepository
+	CloudObjectRepo              CloudObjectRepository
 }
 
 // UnitOfWork manages a database transaction and provides transactional repositories.
@@ -79,12 +118,77 @@ type UnitOfWork interface {
 	Rollback() error
 }
 
+// SubscriptionCancellationQuery defines filters for subscription cancellation facts.
+type SubscriptionCancellationQuery struct {
+	UserID  string
+	SKUCode string
+	Status  string
+}
+
+// SubscriptionCancellationRepository defines data access for subscription control facts.
+type SubscriptionCancellationRepository interface {
+	Create(ctx context.Context, cancellation *domain.SubscriptionCancellation) error
+	GetByIdempotencyKey(ctx context.Context, key string) (*domain.SubscriptionCancellation, error)
+	GetByResumeIdempotencyKey(ctx context.Context, key string) (*domain.SubscriptionCancellation, error)
+	FindActive(ctx context.Context, query SubscriptionCancellationQuery) (*domain.SubscriptionCancellation, error)
+	Update(ctx context.Context, cancellation *domain.SubscriptionCancellation) error
+}
+
+// AccessAccountQuery defines filters for the admin access-account read model.
+type AccessAccountQuery struct {
+	UserID string
+	Email  string
+	Status string
+	Limit  int
+	Offset int
+}
+
+// AccessAccountRecord groups the persisted identity, trial, device, and grant
+// facts required by the admin access-account view.
+type AccessAccountRecord struct {
+	User              domain.User
+	Devices           []domain.UserDevice
+	TrialGrants       []domain.TrialGrant
+	EntitlementGrants []domain.EntitlementGrant
+}
+
+// AccessAccountReadRepository defines the privacy-safe admin read model source.
+type AccessAccountReadRepository interface {
+	List(ctx context.Context, query AccessAccountQuery) ([]AccessAccountRecord, int64, error)
+}
+
 // UserRepository defines data access for stable user identities.
 type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	GetByID(ctx context.Context, id string) (*domain.User, error)
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
 	Update(ctx context.Context, user *domain.User) error
+}
+
+// UserDeviceRepository defines data access for access-session device bindings.
+type UserDeviceRepository interface {
+	Create(ctx context.Context, device *domain.UserDevice) error
+	GetByUserAndDevice(ctx context.Context, userID string, deviceID string) (*domain.UserDevice, error)
+	ListByUser(ctx context.Context, userID string, status string) ([]domain.UserDevice, error)
+	Update(ctx context.Context, device *domain.UserDevice) error
+}
+
+// TrialGrantQuery defines filtering criteria for idempotent trial allocations.
+type TrialGrantQuery struct {
+	UserID    string
+	Email     string
+	GrantType string
+	Status    string
+	Limit     int
+	Offset    int
+}
+
+// TrialGrantRepository defines data access for trial allocation ledgers.
+type TrialGrantRepository interface {
+	Create(ctx context.Context, grant *domain.TrialGrant) error
+	GetByIdempotencyKey(ctx context.Context, key string) (*domain.TrialGrant, error)
+	List(ctx context.Context, query TrialGrantQuery) ([]domain.TrialGrant, error)
+	Update(ctx context.Context, grant *domain.TrialGrant) error
 }
 
 // RegistrationQuery defines filtering criteria for registration requests.

@@ -78,20 +78,20 @@ The commerce checkout facade is the provider-agnostic entry point for future SKU
 |--------|------|---------|----------|
 | POST | `/api/v1/commerce/checkout-sessions` | `{user_id, sku_code, provider, success_url, cancel_url, idempotency_key}` | `{order, checkout_url, provider}` |
 
-Development builds register a `mock` checkout provider. Creem can be enabled as a hosted checkout adapter through `PAYMENT_CREEM_*`; PC/mobile clients still call the same Walnut checkout facade and never depend on Creem IDs.
+Development builds register a `mock` checkout provider. When `PAYMENT_MOCK_CHECKOUT_BASE_URL` is empty, checkout URLs point to the local billing server (`http://localhost:${SERVER_PORT}/checkout/...`) and render a hosted-checkout stand-in with a "Simulate payment success" action. Creem can be enabled as a hosted checkout adapter through `PAYMENT_CREEM_*`; PC/mobile clients still call the same Walnut checkout facade and never depend on Creem IDs.
 
 ### Commerce Fulfillment
 
 Paid commerce orders are fulfilled through Walnut-owned rules, not through provider state. `FulfillmentService` reads the paid order SKU, executes configured rules, writes `FulfillmentExecution` rows for idempotency/audit, and grants only stable Walnut targets such as `EntitlementGrant` and `CreditTransaction`.
 
-`editorial_studio_monthly` now grants a subscription-period credit bucket that expires at the paid period end; `credits_600` grants a top-up bucket that does not expire with subscription. Clients still read only the aggregate credit snapshot, while Walnut keeps bucket-level expiry and refund isolation internally.
+`pro_own_ai_monthly` and `pro_own_ai_lifetime` currently grant only the implemented Pro access entitlements: `editorial.studio` and `cloud.storage`. Draft or future entitlement IDs stay out of default fulfillment until the corresponding feature gates are implemented. AI usage stays bring-your-own-key. Legacy credit SKUs remain hidden compatibility records until hosted AI plans are introduced.
 
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/v1/admin/fulfillments?out_trade_no=&user_id=&sku_code=&status=` | List fulfillment executions for audit/reprocess diagnostics |
 | POST | `/api/v1/admin/credits/buckets/expire` | Expire due credit buckets in Walnut-owned storage |
 
-Fulfillment rules can be supplied through `FULFILLMENT_RULES_JSON`; the dev defaults include `editorial_studio_monthly` and `credits_600`. The production path uses UnitOfWork so order status, entitlement grants, credit ledger rows, buckets, and fulfillment executions converge safely under retries.
+Fulfillment rules can be supplied through `FULFILLMENT_RULES_JSON`; the dev defaults include the Own AI SKUs plus hidden legacy SKU compatibility. The production path uses UnitOfWork so order status, entitlement grants, credit ledger rows, buckets, and fulfillment executions converge safely under retries.
 
 ### Subscription Renewal
 
@@ -126,7 +126,9 @@ These endpoints provide the first entitlement projection for Walnut clients. Gra
 | POST | `/api/v1/callbacks/wechat` | WeChat V3 callback (AES-256-GCM encrypted) |
 | POST | `/api/v1/callbacks/alipay` | Alipay form callback |
 
-### Admin (API Key auth required)
+### Admin (API Key auth + route permissions required)
+
+`ADMIN_API_KEYS` remains the local/dev shortcut and maps each key to `admin.*`. Production should prefer `ADMIN_PRINCIPALS_JSON` so each operator key has the minimum permissions required. The embedded `/dashboard` shell asks for an Admin API key; all data and management APIs below are protected by admin middleware.
 
 | Method | Path | Notes |
 |--------|------|-------|
@@ -134,7 +136,9 @@ These endpoints provide the first entitlement projection for Walnut clients. Gra
 | GET | `/api/v1/admin/licenses/:key` | Single license detail |
 | GET | `/api/v1/admin/stats` | Stats: total, active, inactive, expired |
 | POST | `/api/v1/admin/licenses/check-expiry` | Deactivate expired subscriptions |
-| GET | `/api/v1/admin/registrations?status=` | List entitlement registration requests |
+| GET | `/api/v1/admin/access-accounts?email=&status=&limit=` | Masked access-account view for emails registered through `/api/v1/access/registrations` |
+| GET | `/api/v1/admin/audit?limit=` | Privacy-projected audit logs; email actors are masked and fingerprinted |
+| GET | `/api/v1/admin/registrations?status=` | List legacy entitlement registration requests |
 | POST | `/api/v1/admin/registrations/:id/review` | Approve or reject a registration request |
 | GET | `/api/v1/admin/grants?user_id=` | List entitlement grants |
 | POST | `/api/v1/admin/grants` | Manually grant an entitlement such as `editorial.studio` |
@@ -165,7 +169,8 @@ All settings via environment variables (see `.env.example`):
 | `SERVER_PORT` | 8082 | HTTP listen port |
 | `SERVER_ENV` | dev | Environment (dev/prod) |
 | `DATABASE_DSN` | ./walnut_billing.db | SQLite database path |
-| `ADMIN_API_KEYS` | (empty) | Comma-separated API keys for admin endpoints |
+| `ADMIN_API_KEYS` | (empty) | Comma-separated full-access admin API keys; development shortcut that maps to `admin.*` |
+| `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.audit.read"]}]` |
 | `RATELIMIT_ENABLED` | false | Enable IP rate limiting on auth endpoints |
 | `PAYMENT_WECHAT_*` | (empty) | Legacy WeChat Pay V3 credentials; not the current commercialization target |
 | `PAYMENT_ALIPAY_*` | (empty) | Legacy Alipay credentials; not the current commercialization target |
@@ -175,7 +180,8 @@ All settings via environment variables (see `.env.example`):
 | `PAYMENT_CREEM_API_BASE_URL` | (empty) | Optional override for Creem API base URL; normally leave empty |
 | `PAYMENT_CREEM_SUCCESS_URL` | (empty) | Default hosted checkout success URL; request value can override it |
 | `PAYMENT_CREEM_CANCEL_URL` | (empty) | Default hosted checkout cancel URL stored in Walnut metadata |
-| `PAYMENT_CREEM_PRODUCT_MAP_JSON` | (empty) | SKU to Creem product ID map, e.g. `{"editorial_studio_monthly":"prod_xxx"}` |
+| `PAYMENT_CREEM_PRODUCT_MAP_JSON` | (empty) | Walnut SKU to Creem product ID map, e.g. `{"pro_own_ai_monthly":"prod_4MS4IC77zjEobSHExt0gcr"}` |
+| `PAYMENT_MOCK_CHECKOUT_BASE_URL` | (empty) | Dev-only mock hosted checkout origin; empty means `http://localhost:${SERVER_PORT}` |
 | `FULFILLMENT_RULES_JSON` | (empty) | Optional JSON fulfillment rules; empty uses dev defaults |
 | `CHECKOUT_RISK_POLICY_ENABLED` | true | Enable pre-checkout risk policy based on Walnut `PaymentRiskFlag` |
 | `CHECKOUT_RISK_BLOCK_SEVERITIES` | critical,high | Comma-separated risk severities that require manual review before checkout |
@@ -221,8 +227,10 @@ Bucket expiry is exposed through `POST /api/v1/admin/credits/buckets/expire` for
 | std | walnut Standard (Buyout, legacy) | ¥68 | Lifetime |
 | sub_monthly | AI Subscription (Monthly, legacy) | ¥15/month | Monthly |
 | sub_yearly | AI Subscription (Yearly, legacy) | ¥150/year | Yearly |
-| editorial_studio_monthly | Editorial Studio Monthly | $19/month | Monthly |
-| credits_600 | Walnut Credits 600 | $9.9 | Lifetime |
+| pro_own_ai_monthly | Walnut Pro Own AI Monthly | $5/month | Monthly |
+| pro_own_ai_lifetime | Walnut Pro Own AI Lifetime | $99 | Lifetime |
+| editorial_studio_monthly | Editorial Studio Monthly (legacy hidden) | $19/month | Monthly |
+| credits_600 | Walnut Credits 600 (legacy hidden) | $9.9 | Lifetime |
 
 ## Design Patterns
 

@@ -16,10 +16,15 @@ import (
 type EntitlementHandler struct {
 	EntitlementSvc service.EntitlementService
 	AuditSvc       service.AuditService
+	AdminProjector service.AdminEntitlementProjector
 }
 
 func NewEntitlementHandler(entitlementSvc service.EntitlementService, auditSvc service.AuditService) *EntitlementHandler {
-	return &EntitlementHandler{EntitlementSvc: entitlementSvc, AuditSvc: auditSvc}
+	return &EntitlementHandler{
+		EntitlementSvc: entitlementSvc,
+		AuditSvc:       auditSvc,
+		AdminProjector: service.NewAdminEntitlementProjector(service.NewAdminPrivacyProjector()),
+	}
 }
 
 type SubmitRegistrationRequest struct {
@@ -67,7 +72,7 @@ func (h *EntitlementHandler) SubmitRegistration(c *gin.Context) {
 		return
 	}
 
-	h.recordAudit(c, strings.TrimSpace(req.Email), domain.AuditActionRegistrationSubmit, result.Registration.ID, true, result.Registration.RequestedEntitlement)
+	h.recordAudit(c, userAuditActor(result.User), domain.AuditActionRegistrationSubmit, result.Registration.ID, true, result.Registration.RequestedEntitlement)
 	c.JSON(http.StatusCreated, result)
 }
 
@@ -94,7 +99,8 @@ func (h *EntitlementHandler) ListRegistrations(c *gin.Context) {
 		writeEntitlementError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"total": len(registrations), "registrations": registrations})
+	result := h.AdminProjector.ProjectRegistrationList(registrations)
+	c.JSON(http.StatusOK, result)
 }
 
 // ReviewRegistration handles POST /api/v1/admin/registrations/:id/review.
@@ -117,7 +123,7 @@ func (h *EntitlementHandler) ReviewRegistration(c *gin.Context) {
 	}
 
 	h.recordAudit(c, defaultStringForHandler(req.ReviewedBy, "admin"), domain.AuditActionRegistrationReview, registration.ID, true, registration.Status)
-	c.JSON(http.StatusOK, gin.H{"registration": registration})
+	c.JSON(http.StatusOK, gin.H{"registration": h.AdminProjector.ProjectRegistration(*registration)})
 }
 
 // CreateGrant handles POST /api/v1/admin/grants.
@@ -214,6 +220,13 @@ func (h *EntitlementHandler) recordAudit(c *gin.Context, actor, action, target s
 		Details:   details,
 		IPAddress: clientIP(c),
 	})
+}
+
+func userAuditActor(user *domain.User) string {
+	if user != nil && strings.TrimSpace(user.ID) != "" {
+		return user.ID
+	}
+	return "unknown"
 }
 
 func defaultStringForHandler(value, fallback string) string {

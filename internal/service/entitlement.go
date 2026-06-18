@@ -38,7 +38,14 @@ func NewStaticEntitlementCatalog(ids ...string) *StaticEntitlementCatalog {
 }
 
 func DefaultEntitlementCatalog() EntitlementCatalog {
-	return NewStaticEntitlementCatalog(domain.EntitlementEditorialStudio)
+	return NewStaticEntitlementCatalog(
+		domain.EntitlementSoftwareBasic,
+		domain.EntitlementSoftwareAdvanced,
+		domain.EntitlementEditorialStudio,
+		domain.EntitlementWorkflowBatchCleanup,
+		domain.EntitlementWorkflowAdvanced,
+		domain.EntitlementCloudStorage,
+	)
 }
 
 func (c *StaticEntitlementCatalog) HasEntitlement(id string) bool {
@@ -347,11 +354,21 @@ func (s *entitlementServiceImpl) ListGrants(ctx context.Context, query repositor
 }
 
 func (s *entitlementServiceImpl) SnapshotForUser(ctx context.Context, userID string) (*domain.EntitlementSnapshot, error) {
+	return snapshotForUserWithRepos(ctx, s.users, s.grants, s.creditAccounts, userID)
+}
+
+func snapshotForUserWithRepos(
+	ctx context.Context,
+	users repository.UserRepository,
+	grants repository.EntitlementGrantRepository,
+	creditAccounts repository.CreditAccountRepository,
+	userID string,
+) (*domain.EntitlementSnapshot, error) {
 	userID = strings.TrimSpace(userID)
-	if userID == "" {
+	if userID == "" || users == nil || grants == nil {
 		return nil, ErrUserNotFound
 	}
-	user, err := s.users.GetByID(ctx, userID)
+	user, err := users.GetByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, ErrUserNotFound
@@ -359,20 +376,18 @@ func (s *entitlementServiceImpl) SnapshotForUser(ctx context.Context, userID str
 		return nil, err
 	}
 
-	grants, err := s.grants.ListByUser(ctx, userID)
+	userGrants, err := grants.ListByUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
 	now := time.Now().UTC()
 	entitlements := make(map[string]bool)
-	for _, grant := range grants {
-		if isGrantActive(grant, now) {
+	for _, grant := range userGrants {
+		if isGrantActive(grant, now) && IsCurrentAccessEntitlementID(grant.EntitlementID) {
 			entitlements[grant.EntitlementID] = true
 		}
 	}
-
-	credits := s.creditSnapshot(ctx, userID)
 
 	return &domain.EntitlementSnapshot{
 		User: domain.EntitlementSnapshotUser{
@@ -383,18 +398,18 @@ func (s *entitlementServiceImpl) SnapshotForUser(ctx context.Context, userID str
 		},
 		Entitlements: entitlements,
 		Features:     map[string]any{},
-		Credits:      credits,
+		Credits:      creditSnapshotWithRepo(ctx, creditAccounts, userID),
 		UpdatedAt:    now.Format(time.RFC3339),
 		Source:       "billing_provider",
 	}, nil
 }
 
-func (s *entitlementServiceImpl) creditSnapshot(ctx context.Context, userID string) map[string]int64 {
+func creditSnapshotWithRepo(ctx context.Context, creditAccounts repository.CreditAccountRepository, userID string) map[string]int64 {
 	credits := map[string]int64{}
-	if s.creditAccounts == nil {
+	if creditAccounts == nil {
 		return credits
 	}
-	account, err := s.creditAccounts.GetByUserID(ctx, userID)
+	account, err := creditAccounts.GetByUserID(ctx, userID)
 	if err != nil {
 		return credits
 	}

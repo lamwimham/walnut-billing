@@ -69,6 +69,18 @@ func (r *OrderRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domai
 	return &order, nil
 }
 
+func (r *OrderRepo) FindLatestSubscriptionOrder(ctx context.Context, query repository.SubscriptionOrderQuery) (*domain.Order, error) {
+	var order domain.Order
+	err := r.DB.WithContext(ctx).
+		Where("user_id = ? AND sku_code = ? AND order_type IN ?", query.UserID, query.SKUCode, []string{domain.OrderTypeCheckout, domain.OrderTypeRenewal}).
+		Order("paid_at DESC, fulfilled_at DESC, id DESC").
+		First(&order).Error
+	if err != nil {
+		return nil, mapGormNotFound(err)
+	}
+	return &order, nil
+}
+
 func (r *OrderRepo) Update(ctx context.Context, order *domain.Order) error {
 	return r.DB.WithContext(ctx).Save(order).Error
 }

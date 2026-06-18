@@ -120,6 +120,21 @@ func editorialStudioFulfillmentRules() []FulfillmentRule {
 	}
 }
 
+func byokOwnAIMonthlyPaidOrder() *domain.Order {
+	paidAt := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	return &domain.Order{
+		ID:         142,
+		OutTradeNo: "CHK-BYOK-1",
+		UserID:     "usr_1",
+		SKUCode:    domain.ProductProOwnAIMonthly,
+		Amount:     500,
+		Currency:   "USD",
+		Status:     domain.OrderStatusPaid,
+		OrderType:  domain.OrderTypeCheckout,
+		PaidAt:     &paidAt,
+	}
+}
+
 func paidCheckoutOrder() *domain.Order {
 	paidAt := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
 	return &domain.Order{
@@ -141,6 +156,45 @@ func paidRenewalOrder() *domain.Order {
 	order.OutTradeNo = "RNL-1"
 	order.OrderType = domain.OrderTypeRenewal
 	return order
+}
+
+func TestFulfillmentService_BYOKOwnAIDefaultRulesGrantCurrentAccessEntitlementsWithoutCredits(t *testing.T) {
+	svc, orders, users, grants, accounts, transactions, executions := newFulfillmentTestService(DefaultFulfillmentRules()...)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	order := byokOwnAIMonthlyPaidOrder()
+	orders.orders[order.OutTradeNo] = order
+
+	result, err := svc.FulfillOrder(context.Background(), order)
+	if err != nil {
+		t.Fatalf("expected BYOK fulfillment success, got %v", err)
+	}
+	if result.Order.Status != domain.OrderStatusFulfilled {
+		t.Fatalf("expected fulfilled order, got %#v", result.Order)
+	}
+	if len(result.Executions) != 2 || len(executions.executions) != 2 {
+		t.Fatalf("expected two entitlement executions, got result=%d stored=%d", len(result.Executions), len(executions.executions))
+	}
+	if len(grants.grants) != len(CurrentAdvancedEntitlements()) {
+		t.Fatalf("expected BYOK current access entitlement grants, got %d", len(grants.grants))
+	}
+	for _, entitlementID := range CurrentAdvancedEntitlements() {
+		found := false
+		for _, grant := range grants.grants {
+			if grant.EntitlementID == entitlementID && grant.ExpiresAt != nil {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected active timed grant for %s, got %#v", entitlementID, grants.grants)
+		}
+	}
+	if len(transactions.transactions) != 0 {
+		t.Fatalf("BYOK software purchase must not grant hosted-AI credits, got %d transactions", len(transactions.transactions))
+	}
+	account, err := accounts.GetByUserID(context.Background(), "usr_1")
+	if err == nil && account.Balance != 0 {
+		t.Fatalf("BYOK software purchase must keep credit balance at zero, got %#v", account)
+	}
 }
 
 func TestFulfillmentService_FulfillPaidOrderGrantsEntitlementAndCredits(t *testing.T) {
@@ -263,6 +317,7 @@ func TestFulfillmentService_ExtendsEntitlementFromExistingExpiry(t *testing.T) {
 		UserID:        "usr_1",
 		EntitlementID: domain.EntitlementEditorialStudio,
 		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceFulfillment,
 		StartsAt:      paidAt.Add(-time.Hour),
 		ExpiresAt:     &existingExpiry,
 	}
@@ -283,6 +338,45 @@ func TestFulfillmentService_ExtendsEntitlementFromExistingExpiry(t *testing.T) {
 	expectedExpiry := existingExpiry.AddDate(0, 1, 0)
 	if !renewed.ExpiresAt.Equal(expectedExpiry) {
 		t.Fatalf("expected renewal to extend from existing expiry %s, got %s", expectedExpiry, renewed.ExpiresAt)
+	}
+}
+
+func TestFulfillmentService_PaidCheckoutDoesNotExtendFromTrialGrant(t *testing.T) {
+	svc, orders, users, grants, _, _, _ := newFulfillmentTestService(FulfillmentRule{
+		ID:            "studio:entitlement",
+		SKUCode:       "editorial_studio_monthly",
+		Type:          FulfillmentRuleGrantEntitlement,
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Duration:      "monthly",
+	})
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	paidAt := time.Date(2026, 6, 17, 12, 17, 43, 0, time.UTC)
+	trialExpiry := paidAt.AddDate(0, 0, 14)
+	grants.grants["trial"] = &domain.EntitlementGrant{
+		ID:            "trial",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceTrial,
+		StartsAt:      paidAt.Add(-time.Hour),
+		ExpiresAt:     &trialExpiry,
+	}
+	order := paidCheckoutOrder()
+	order.PaidAt = &paidAt
+	orders.orders["CHK-1"] = order
+
+	if _, err := svc.FulfillOrder(context.Background(), orders.orders["CHK-1"]); err != nil {
+		t.Fatalf("expected paid checkout fulfillment success, got %v", err)
+	}
+	var paidGrant *domain.EntitlementGrant
+	for _, grant := range grants.grants {
+		if grant.ID != "trial" && grant.Source == domain.GrantSourceFulfillment {
+			paidGrant = grant
+		}
+	}
+	expectedExpiry := paidAt.AddDate(0, 1, 0)
+	if paidGrant == nil || paidGrant.ExpiresAt == nil || !paidGrant.ExpiresAt.Equal(expectedExpiry) {
+		t.Fatalf("expected first paid period to start from paid time %s and expire %s, got %#v", paidAt, expectedExpiry, paidGrant)
 	}
 }
 

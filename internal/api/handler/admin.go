@@ -4,19 +4,23 @@ import (
 	"fmt"
 	"net/http"
 	"time"
-	"walnut-billing/internal/repository"
 	"walnut-billing/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 type AdminHandler struct {
-	LicenseSvc service.LicenseService
-	AuditSvc   service.AuditService
+	LicenseSvc    service.LicenseService
+	AuditSvc      service.AuditService
+	AdminAuditSvc service.AdminAuditService
 }
 
 func NewAdminHandler(licenseSvc service.LicenseService, auditSvc service.AuditService) *AdminHandler {
-	return &AdminHandler{LicenseSvc: licenseSvc, AuditSvc: auditSvc}
+	return &AdminHandler{
+		LicenseSvc:    licenseSvc,
+		AuditSvc:      auditSvc,
+		AdminAuditSvc: service.NewAdminAuditService(auditSvc, service.NewAdminPrivacyProjector()),
+	}
 }
 
 // ListLicenses handles GET /api/v1/admin/licenses
@@ -30,7 +34,7 @@ func (h *AdminHandler) ListLicenses(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"total": len(licenses),
+		"total":    len(licenses),
 		"licenses": licenses,
 	})
 }
@@ -134,7 +138,7 @@ func (h *AdminHandler) ListExpiring(c *gin.Context) {
 // GetAuditLogs handles GET /api/v1/admin/audit
 // Returns audit logs with filtering and pagination.
 func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
-	var q repository.AuditQuery
+	var q service.AdminAuditQuery
 	q.Action = c.Query("action")
 	q.Actor = c.Query("actor")
 	q.Target = c.Query("target")
@@ -167,16 +171,17 @@ func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 		}
 	}
 
-	entries, total, err := h.AuditSvc.Query(c.Request.Context(), q)
+	if h.AdminAuditSvc == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "admin audit service is not configured"})
+		return
+	}
+	result, err := h.AdminAuditSvc.ListLogs(c.Request.Context(), q)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"total": total,
-		"logs":  entries,
-	})
+	c.JSON(http.StatusOK, result)
 }
 
 func parseTime(s string) (time.Time, error) {

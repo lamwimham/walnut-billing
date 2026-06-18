@@ -67,3 +67,7 @@ func (r *PaymentEventRepo) List(ctx context.Context, query repository.PaymentEve
 func (r *PaymentEventRepo) Update(ctx context.Context, event *domain.PaymentEventInbox) error {
 	return r.DB.WithContext(ctx).Save(event).Error
 }
+
+func (r *PaymentEventRepo) WithTx(tx *gorm.DB) *PaymentEventRepo {
+	return &PaymentEventRepo{DB: tx}
+}

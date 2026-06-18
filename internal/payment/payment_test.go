@@ -3,6 +3,7 @@ package payment
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 	"walnut-billing/internal/domain"
@@ -112,6 +113,25 @@ func (m *mockOrderRepo) GetByIdempotencyKey(ctx context.Context, key string) (*d
 		}
 	}
 	return nil, repository.ErrNotFound
+}
+
+func (m *mockOrderRepo) FindLatestSubscriptionOrder(ctx context.Context, query repository.SubscriptionOrderQuery) (*domain.Order, error) {
+	var selected *domain.Order
+	for _, order := range m.orders {
+		if order.UserID != query.UserID || order.SKUCode != query.SKUCode {
+			continue
+		}
+		if order.OrderType != domain.OrderTypeCheckout && order.OrderType != domain.OrderTypeRenewal {
+			continue
+		}
+		if selected == nil || order.ID > selected.ID {
+			selected = order
+		}
+	}
+	if selected == nil {
+		return nil, repository.ErrNotFound
+	}
+	return selected, nil
 }
 
 func (m *mockOrderRepo) Update(ctx context.Context, order *domain.Order) error {
@@ -360,5 +380,26 @@ func TestPaymentService_CreateCheckoutSession_AdaptsLegacyPaymentProvider(t *tes
 	}
 	if session.Status != "checkout_created" {
 		t.Fatalf("expected checkout_created, got %s", session.Status)
+	}
+}
+
+func TestCheckoutMockAdapter_UsesConfiguredBaseURLAndCheckoutContext(t *testing.T) {
+	provider := NewCheckoutMockAdapterWithBaseURL("http://localhost/callbacks/mock", "http://127.0.0.1:8082")
+
+	session, err := provider.CreateCheckoutSession(context.Background(), CheckoutRequest{
+		OutTradeNo: "CHK-LOCAL-001",
+		SuccessURL: "walnut://checkout/success",
+		CancelURL:  "walnut://checkout/cancel",
+		UserID:     "usr_1",
+		SKUCode:    "pro_own_ai_monthly",
+	})
+	if err != nil {
+		t.Fatalf("create checkout session: %v", err)
+	}
+	if session.CheckoutURL == "" || !strings.HasPrefix(session.CheckoutURL, "http://127.0.0.1:8082/checkout/CHK-LOCAL-001") {
+		t.Fatalf("expected configured local checkout url, got %s", session.CheckoutURL)
+	}
+	if !strings.Contains(session.CheckoutURL, "success_url=walnut%3A%2F%2Fcheckout%2Fsuccess") || !strings.Contains(session.CheckoutURL, "sku_code=pro_own_ai_monthly") {
+		t.Fatalf("expected checkout context query in url, got %s", session.CheckoutURL)
 	}
 }

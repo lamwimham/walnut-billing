@@ -35,6 +35,19 @@ func renewalOrder(status string) *domain.Order {
 	}
 }
 
+func byokRenewalOrder(status string) *domain.Order {
+	return &domain.Order{
+		ID:         45,
+		OutTradeNo: "RNL-BYOK-1",
+		UserID:     "usr_1",
+		SKUCode:    domain.SKUProOwnAIMonthly,
+		Amount:     500,
+		Currency:   "USD",
+		Status:     status,
+		OrderType:  domain.OrderTypeRenewal,
+	}
+}
+
 func TestSubscriptionRenewalPolicy_DefaultDecisions(t *testing.T) {
 	policy := NewConfigurableSubscriptionRenewalPolicy(DefaultSubscriptionRenewalPolicyConfig())
 	tests := []struct {
@@ -115,6 +128,63 @@ func TestSubscriptionRenewalService_RenewalFailedCreatesGraceGrantWithoutCredits
 	}
 	if !snapshot.Entitlements[domain.EntitlementEditorialStudio] {
 		t.Fatalf("expected grace entitlement to keep access, got %#v", snapshot)
+	}
+}
+
+func TestSubscriptionRenewalService_BYOKRenewalFailedCreatesCurrentAccessGrace(t *testing.T) {
+	fulfillmentSvc, orders, users, grants, accounts, transactions, _ := newFulfillmentTestService(DefaultFulfillmentRules()...)
+	renewalSvc := NewSubscriptionRenewalService(SubscriptionRenewalDependencies{
+		Repositories: SubscriptionRenewalRepositories{
+			Orders:            orders,
+			Users:             users,
+			EntitlementGrants: grants,
+		},
+		Fulfillment:        fulfillmentSvc,
+		Policy:             nil,
+		AccessPolicy:       DefaultSubscriptionAccessPolicy(),
+		EntitlementCatalog: DefaultEntitlementCatalog(),
+	})
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	now := time.Now().UTC()
+	orders.orders["RNL-BYOK-1"] = byokRenewalOrder(domain.OrderStatusFailed)
+
+	result, err := renewalSvc.Apply(context.Background(), &domain.PaymentEventInbox{
+		Provider:        "creem",
+		ProviderEventID: "evt_byok_past_due_1",
+		EventType:       domain.PaymentEventTypeRenewalFailed,
+		OutTradeNo:      "RNL-BYOK-1",
+		ReceivedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("expected BYOK current access grace, got %v", err)
+	}
+	if len(result.GraceGrants) != len(CurrentAdvancedEntitlements()) {
+		t.Fatalf("expected current access grace grants, got %#v", result.GraceGrants)
+	}
+	graceByEntitlement := map[string]bool{}
+	for _, grant := range result.GraceGrants {
+		if grant.Source != domain.GrantSourceSubscriptionGrace || grant.ExpiresAt == nil {
+			t.Fatalf("expected valid grace grant, got %#v", grant)
+		}
+		graceByEntitlement[grant.EntitlementID] = true
+	}
+	for _, entitlementID := range CurrentAdvancedEntitlements() {
+		if !graceByEntitlement[entitlementID] {
+			t.Fatalf("expected grace grant for %s, got %#v", entitlementID, result.GraceGrants)
+		}
+	}
+	if len(transactions.transactions) != 0 {
+		t.Fatalf("BYOK renewal grace must not grant hosted-AI credits, got %d", len(transactions.transactions))
+	}
+	entitlementSvc := NewEntitlementServiceWithCredits(users, newMockRegistrationRepo(), grants, accounts, DefaultEntitlementCatalog())
+	snapshot, err := entitlementSvc.SnapshotForUser(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	for _, entitlementID := range CurrentAdvancedEntitlements() {
+		if !snapshot.Entitlements[entitlementID] {
+			t.Fatalf("expected current access grace in snapshot, got %#v", snapshot)
+		}
 	}
 }
 

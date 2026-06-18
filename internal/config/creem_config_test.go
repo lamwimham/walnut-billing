@@ -10,6 +10,7 @@ func TestLoadReadsCreemEnvConfig(t *testing.T) {
 	t.Setenv("PAYMENT_CREEM_CANCEL_URL", "https://walnut.local/cancel")
 	t.Setenv("PAYMENT_CREEM_PRODUCT_MAP_JSON", `{"editorial_studio_monthly":"prod_studio"}`)
 	t.Setenv("PAYMENT_CREEM_SANDBOX", "false")
+	t.Setenv("PAYMENT_MOCK_CHECKOUT_BASE_URL", "http://127.0.0.1:8082")
 
 	cfg, err := Load()
 	if err != nil {
@@ -26,5 +27,8 @@ func TestLoadReadsCreemEnvConfig(t *testing.T) {
 	}
 	if cfg.Payment.CreemSandbox {
 		t.Fatalf("expected PAYMENT_CREEM_SANDBOX=false to override default")
+	}
+	if cfg.Payment.MockCheckoutBaseURL != "http://127.0.0.1:8082" {
+		t.Fatalf("unexpected mock checkout base url: %#v", cfg.Payment.MockCheckoutBaseURL)
 	}
 }
