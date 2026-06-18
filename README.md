@@ -4,10 +4,13 @@ License and billing microservice for walnut products. Single-binary Go service w
 
 ## Architecture
 
+`walnut-billing` is evolving into Walnut's commercial control plane. Startup assembly lives in `internal/app/bootstrap`; HTTP routes are registered by logical module owners so new capabilities do not keep expanding `cmd/server/main.go`. See `docs/architecture/MODULE_BOUNDARIES.md` for dependency rules.
+
 ```
 walnut-billing/
-├── cmd/server/main.go              # Entry point (DI + server start)
+├── cmd/server/main.go              # Process entry point + graceful shutdown
 ├── internal/
+│   ├── app/bootstrap/              # Config, DB, DI, provider setup, module route registrars
 │   ├── config/                     # Viper-based configuration
 │   ├── domain/models.go            # Entities (Product, License, Order, User, Grant)
 │   ├── generator/                  # Factory pattern: license key generation

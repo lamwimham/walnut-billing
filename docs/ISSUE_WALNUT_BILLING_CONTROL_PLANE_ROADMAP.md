@@ -1,6 +1,6 @@
 # Issue: walnut-billing 商业控制平面开发计划
 
-状态：Planning  
+状态：In Progress  
 适用仓库：`walnut-billing`  
 更新日期：2026-06-18
 
@@ -474,6 +474,8 @@ Admin 页面分区：
 ## 7. 分阶段实施计划
 
 ### WCP-0：架构基线和边界收敛（P0）
+
+进展（2026-06-18）：已开始。当前增量把进程入口缩减为启动/优雅关闭，把 config、DB、migration、repository、provider、service 和路由组装迁入 `internal/app/bootstrap`；新增 module registrar 与 import guard 测试来固定边界。
 
 目标：先把模块边界、依赖方向、启动组装、错误模型固化，避免后续继续在 `cmd/server/main.go` 和 handler 中打补丁。
 
