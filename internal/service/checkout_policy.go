@@ -19,11 +19,18 @@ var (
 const (
 	CheckoutPolicyActionAllow        = "allow"
 	CheckoutPolicyActionManualReview = "manual_review"
+	CheckoutPolicyActionKeepAccess   = "keep_existing_access"
+	CheckoutPolicyActionManage       = "manage_subscription"
+	CheckoutPolicyActionResume       = "resume_subscription"
 
-	CheckoutPolicyReasonOpenPaymentRisk                        = "open_payment_risk"
-	CheckoutPolicyReasonDuplicateActiveSubscription            = "duplicate_active_subscription"
-	CheckoutPolicyReasonLifetimeAlreadyActive                  = "lifetime_already_active"
-	CheckoutPolicyReasonActiveSubscriptionRequiresCancellation = "active_subscription_requires_cancellation"
+	CheckoutPolicyReasonPaymentRiskHold                        = "payment_risk_hold"
+	CheckoutPolicyReasonAlreadyLifetime                        = "already_lifetime"
+	CheckoutPolicyReasonSubscriptionActive                     = "subscription_active"
+	CheckoutPolicyReasonCancelAtPeriodEnd                      = "cancel_at_period_end"
+	CheckoutPolicyReasonOpenPaymentRisk                        = CheckoutPolicyReasonPaymentRiskHold
+	CheckoutPolicyReasonDuplicateActiveSubscription            = CheckoutPolicyReasonSubscriptionActive
+	CheckoutPolicyReasonLifetimeAlreadyActive                  = CheckoutPolicyReasonAlreadyLifetime
+	CheckoutPolicyReasonActiveSubscriptionRequiresCancellation = CheckoutPolicyReasonSubscriptionActive
 )
 
 // CheckoutPolicy is the strategy boundary for pre-checkout controls. Policies
@@ -92,7 +99,7 @@ func DefaultCheckoutRiskPolicyConfig() CheckoutRiskPolicyConfig {
 		},
 		OpenStatus: domain.PaymentRiskStatusOpen,
 		Action:     CheckoutPolicyActionManualReview,
-		Reason:     CheckoutPolicyReasonOpenPaymentRisk,
+		Reason:     CheckoutPolicyReasonPaymentRiskHold,
 		Message:    "checkout requires manual review",
 	}
 }
@@ -185,9 +192,7 @@ func allowCheckoutDecision() CheckoutPolicyDecision {
 // tiers server-authoritative. Clients may hide buttons, but billing still
 // rejects duplicate monthly checkout and repeat lifetime purchases.
 type SoftwareAccessPlanCheckoutPolicy struct {
-	grants        repository.EntitlementGrantRepository
-	cancellations repository.SubscriptionCancellationRepository
-	now           func() time.Time
+	projector SoftwareSubscriptionProjector
 }
 
 func NewSoftwareAccessPlanCheckoutPolicy(
@@ -195,11 +200,18 @@ func NewSoftwareAccessPlanCheckoutPolicy(
 	cancellations repository.SubscriptionCancellationRepository,
 	now func() time.Time,
 ) *SoftwareAccessPlanCheckoutPolicy {
-	return &SoftwareAccessPlanCheckoutPolicy{grants: grants, cancellations: cancellations, now: now}
+	return NewSoftwareAccessPlanCheckoutPolicyWithProjector(NewSoftwareSubscriptionProjector(SoftwareSubscriptionProjectionRepositories{
+		EntitlementGrants: grants,
+		Cancellations:     cancellations,
+	}, now))
+}
+
+func NewSoftwareAccessPlanCheckoutPolicyWithProjector(projector SoftwareSubscriptionProjector) *SoftwareAccessPlanCheckoutPolicy {
+	return &SoftwareAccessPlanCheckoutPolicy{projector: projector}
 }
 
 func (p *SoftwareAccessPlanCheckoutPolicy) Evaluate(ctx context.Context, input CheckoutPolicyInput) (CheckoutPolicyDecision, error) {
-	if p == nil || p.grants == nil {
+	if p == nil || p.projector == nil {
 		return CheckoutPolicyDecision{}, ErrCheckoutPolicyUnavailable
 	}
 	userID := ""
@@ -213,86 +225,45 @@ func (p *SoftwareAccessPlanCheckoutPolicy) Evaluate(ctx context.Context, input C
 	if skuCode != domain.SKUProOwnAIMonthly && skuCode != domain.SKUProOwnAILifetime {
 		return allowCheckoutDecision(), nil
 	}
-	summary, err := p.currentPlan(ctx, userID)
+	subscription, err := p.projector.Project(ctx, userID)
 	if err != nil {
 		return CheckoutPolicyDecision{}, err
 	}
-	if summary.HasLifetime {
+	if softwareSubscriptionIsLifetimeActive(subscription) {
 		return CheckoutPolicyDecision{
 			Allowed: false,
-			Reason:  CheckoutPolicyReasonLifetimeAlreadyActive,
-			Action:  CheckoutPolicyActionManualReview,
+			Reason:  CheckoutPolicyReasonAlreadyLifetime,
+			Action:  CheckoutPolicyActionKeepAccess,
 			Message: "lifetime access is already active",
 			Cause:   ErrCheckoutBlockedByPlan,
 		}, nil
 	}
-	if skuCode == domain.SKUProOwnAIMonthly && summary.HasActiveSubscription {
+	if skuCode == domain.SKUProOwnAIMonthly && softwareSubscriptionIsCancelAtPeriodEnd(subscription) {
 		return CheckoutPolicyDecision{
 			Allowed: false,
-			Reason:  CheckoutPolicyReasonDuplicateActiveSubscription,
-			Action:  CheckoutPolicyActionManualReview,
+			Reason:  CheckoutPolicyReasonCancelAtPeriodEnd,
+			Action:  CheckoutPolicyActionResume,
+			Message: "monthly subscription is cancelled at period end; resume instead of creating checkout",
+			Cause:   ErrCheckoutBlockedByPlan,
+		}, nil
+	}
+	if skuCode == domain.SKUProOwnAIMonthly && softwareSubscriptionIsMonthlyActive(subscription) {
+		return CheckoutPolicyDecision{
+			Allowed: false,
+			Reason:  CheckoutPolicyReasonSubscriptionActive,
+			Action:  CheckoutPolicyActionManage,
 			Message: "monthly subscription is already active",
 			Cause:   ErrCheckoutBlockedByPlan,
 		}, nil
 	}
-	if skuCode == domain.SKUProOwnAILifetime && summary.HasActiveSubscription && !summary.HasCancelAtPeriodEnd {
+	if skuCode == domain.SKUProOwnAILifetime && softwareSubscriptionIsMonthlyActive(subscription) && !softwareSubscriptionIsCancelAtPeriodEnd(subscription) {
 		return CheckoutPolicyDecision{
 			Allowed: false,
-			Reason:  CheckoutPolicyReasonActiveSubscriptionRequiresCancellation,
-			Action:  CheckoutPolicyActionManualReview,
+			Reason:  CheckoutPolicyReasonSubscriptionActive,
+			Action:  CheckoutPolicyActionManage,
 			Message: "cancel monthly renewal before buying lifetime access",
 			Cause:   ErrCheckoutBlockedByPlan,
 		}, nil
 	}
 	return allowCheckoutDecision(), nil
-}
-
-type softwareAccessPlanSummary struct {
-	HasLifetime           bool
-	HasActiveSubscription bool
-	HasCancelAtPeriodEnd  bool
-}
-
-func (p *SoftwareAccessPlanCheckoutPolicy) currentPlan(ctx context.Context, userID string) (softwareAccessPlanSummary, error) {
-	grants, err := p.grants.List(ctx, repository.EntitlementGrantQuery{
-		UserID:         userID,
-		Status:         domain.GrantStatusActive,
-		IncludeExpired: false,
-	})
-	if err != nil {
-		return softwareAccessPlanSummary{}, err
-	}
-	now := p.currentTime()
-	summary := softwareAccessPlanSummary{}
-	for _, grant := range grants {
-		if grant.Source != domain.GrantSourceFulfillment || !IsCurrentAdvancedEntitlementID(grant.EntitlementID) {
-			continue
-		}
-		if grant.ExpiresAt == nil {
-			summary.HasLifetime = true
-			continue
-		}
-		if grant.ExpiresAt.UTC().After(now) {
-			summary.HasActiveSubscription = true
-		}
-	}
-	if summary.HasActiveSubscription && p.cancellations != nil {
-		cancellation, err := p.cancellations.FindActive(ctx, repository.SubscriptionCancellationQuery{
-			UserID:  userID,
-			SKUCode: domain.SKUProOwnAIMonthly,
-			Status:  SubscriptionCancellationStatusCancelAtPeriodEnd,
-		})
-		if err != nil && !errors.Is(err, repository.ErrNotFound) {
-			return softwareAccessPlanSummary{}, err
-		}
-		summary.HasCancelAtPeriodEnd = cancellation != nil
-	}
-	return summary, nil
-}
-
-func (p *SoftwareAccessPlanCheckoutPolicy) currentTime() time.Time {
-	if p != nil && p.now != nil {
-		return p.now().UTC()
-	}
-	return time.Now().UTC()
 }

@@ -70,6 +70,8 @@ func checkoutErrorStatus(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, service.ErrCheckoutBlockedByRisk):
 		return http.StatusForbidden
+	case errors.Is(err, service.ErrCheckoutBlockedByPlan):
+		return http.StatusConflict
 	case errors.Is(err, service.ErrCheckoutPolicyUnavailable):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, service.ErrCheckoutProviderFailed):
@@ -85,8 +87,17 @@ func checkoutErrorResponse(err error) gin.H {
 		return gin.H{
 			"error":  defaultStringForHandler(decision.Message, "checkout requires manual review"),
 			"code":   "checkout_blocked_by_payment_risk",
-			"reason": defaultStringForHandler(decision.Reason, service.CheckoutPolicyReasonOpenPaymentRisk),
+			"reason": defaultStringForHandler(decision.Reason, service.CheckoutPolicyReasonPaymentRiskHold),
 			"action": defaultStringForHandler(decision.Action, service.CheckoutPolicyActionManualReview),
+		}
+	}
+	if errors.Is(err, service.ErrCheckoutBlockedByPlan) {
+		decision, _ := service.CheckoutPolicyDecisionFromError(err)
+		return gin.H{
+			"error":  defaultStringForHandler(decision.Message, "checkout blocked by subscription state"),
+			"code":   "checkout_blocked_by_subscription_state",
+			"reason": defaultStringForHandler(decision.Reason, service.CheckoutPolicyReasonSubscriptionActive),
+			"action": defaultStringForHandler(decision.Action, service.CheckoutPolicyActionManage),
 		}
 	}
 	if errors.Is(err, service.ErrCheckoutPolicyUnavailable) {

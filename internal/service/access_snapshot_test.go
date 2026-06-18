@@ -190,7 +190,7 @@ func TestAccessSnapshotIssuer_ProjectsCancelAtPeriodEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue snapshot: %v", err)
 	}
-	if snapshot.License.State != AccessLicenseStateSubscription || snapshot.License.SubscriptionStatus != SubscriptionCancellationStatusCancelAtPeriodEnd || !snapshot.License.CancelAtPeriodEnd {
+	if snapshot.License.State != AccessLicenseStateSubscription || snapshot.License.SubscriptionStatus != SoftwareSubscriptionStatusCancelAtPeriodEnd || !snapshot.License.CancelAtPeriodEnd {
 		t.Fatalf("expected cancel-at-period-end projection, got %#v", snapshot.License)
 	}
 }

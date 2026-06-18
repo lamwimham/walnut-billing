@@ -212,11 +212,9 @@ func checkoutObservation(input CheckoutInput, result *CheckoutResult, err error,
 	if err != nil {
 		observation.Status = ObservationStatusFailed
 		observation.ErrorKind = checkoutErrorKind(err)
-		if errors.Is(err, ErrCheckoutBlockedByRisk) {
+		if errors.Is(err, ErrCheckoutBlockedByRisk) || errors.Is(err, ErrCheckoutBlockedByPlan) {
 			observation.Status = ObservationStatusBlocked
 			observation.Blocked = true
-			observation.PolicyReason = CheckoutPolicyReasonOpenPaymentRisk
-			observation.PolicyAction = CheckoutPolicyActionManualReview
 		}
 		if decision, ok := CheckoutPolicyDecisionFromError(err); ok {
 			observation.PolicyReason = decision.Reason
@@ -332,6 +330,8 @@ func checkoutErrorKind(err error) string {
 		return "none"
 	case errors.Is(err, ErrCheckoutBlockedByRisk):
 		return "blocked_by_payment_risk"
+	case errors.Is(err, ErrCheckoutBlockedByPlan):
+		return "blocked_by_subscription_state"
 	case errors.Is(err, ErrCheckoutProviderFailed):
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):

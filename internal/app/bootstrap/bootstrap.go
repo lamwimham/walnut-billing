@@ -46,11 +46,10 @@ func permissionGate(enabled bool, permission string) gin.HandlerFunc {
 func buildCheckoutPolicies(
 	cfg *config.Config,
 	paymentRiskFlagRepo repository.PaymentRiskFlagRepository,
-	grantRepo repository.EntitlementGrantRepository,
-	subscriptionCancellationRepo repository.SubscriptionCancellationRepository,
+	softwareSubscriptions service.SoftwareSubscriptionProjector,
 ) []service.CheckoutPolicy {
 	policies := []service.CheckoutPolicy{
-		service.NewSoftwareAccessPlanCheckoutPolicy(grantRepo, subscriptionCancellationRepo, nil),
+		service.NewSoftwareAccessPlanCheckoutPolicyWithProjector(softwareSubscriptions),
 	}
 	if cfg != nil && cfg.Checkout.RiskPolicyEnabled {
 		riskConfig := service.DefaultCheckoutRiskPolicyConfig()
@@ -303,6 +302,10 @@ func Build() (*Application, error) {
 		l.Error("Failed to initialize access snapshot signer", "error", err)
 		return nil, err
 	}
+	softwareSubscriptions := service.NewSoftwareSubscriptionProjector(service.SoftwareSubscriptionProjectionRepositories{
+		EntitlementGrants: grantRepo,
+		Cancellations:     subscriptionCancellationRepo,
+	}, nil)
 	accessSnapshotIssuer := service.NewAccessSnapshotIssuer(service.AccessSnapshotIssuerDependencies{
 		Repositories: service.AccessSnapshotIssuerRepositories{
 			Users:             userRepo,
@@ -313,8 +316,9 @@ func Build() (*Application, error) {
 			Orders:            orderRepo,
 			Cancellations:     subscriptionCancellationRepo,
 		},
-		Policy: buildAccessSnapshotPolicy(cfg),
-		Signer: accessSnapshotSigner,
+		Policy:                buildAccessSnapshotPolicy(cfg),
+		Signer:                accessSnapshotSigner,
+		SoftwareSubscriptions: softwareSubscriptions,
 	})
 	accessAdminSvc := service.NewAccessAdminService(accessAccountRepo)
 	accessDeviceAdminSvc := service.NewAccessDeviceAdminService(userDeviceRepo)
@@ -457,7 +461,7 @@ func Build() (*Application, error) {
 
 	paymentSvc := payment.NewPaymentService(orderRepo, licRepo, registry)
 	commerceObserver := observability.NewCommerceObserver(l)
-	checkoutPolicies := buildCheckoutPolicies(cfg, paymentRiskFlagRepo, grantRepo, subscriptionCancellationRepo)
+	checkoutPolicies := buildCheckoutPolicies(cfg, paymentRiskFlagRepo, softwareSubscriptions)
 	var checkoutSvc service.CheckoutService = service.NewCheckoutServiceWithPolicies(orderRepo, productRepo, userRepo, paymentSvc, checkoutPolicies...)
 	checkoutSvc = service.NewObservedCheckoutService(checkoutSvc, commerceObserver)
 	var fulfillmentSvc service.FulfillmentService = service.NewFulfillmentService(service.FulfillmentDependencies{

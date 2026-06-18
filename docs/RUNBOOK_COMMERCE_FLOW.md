@@ -231,6 +231,40 @@ curl -sS "$BASE_URL/api/v1/users/$USER_ID/entitlements/snapshot"
 - Payment event 为 `processed`，`signature_verified` 为 true。
 - Fulfillment 包含 `pro_own_ai_monthly` 的当前真实高级权益 executions：editorial-studio 与 cloud-storage。
 - Snapshot 的 license state 进入 subscription，且 entitlements 包含 `editorial.studio`、`cloud.storage`。
+- Signed access snapshot 的 `license.subscription_status` 来源于 `SoftwareSubscriptionProjector`；月付 active 时应为 `active` 或空，`current_period_ends_at` 与当前 Walnut period 一致。
+
+### 4B. 验证订阅按钮状态 projection
+
+取消月付续订后，当前周期 Pro 权益应继续可用，但重复月付 checkout 必须被阻断并提示客户端显示“恢复月付”。
+
+```bash
+CANCEL_IDEMPOTENCY_KEY="cancel:${USER_ID}:$(date +%s)"
+curl -sS -X POST "$BASE_URL/api/v1/commerce/subscriptions/cancel" \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"user_id\": \"$USER_ID\",
+    \"sku_code\": \"pro_own_ai_monthly\",
+    \"reason\": \"local projection test\",
+    \"source\": \"runbook\",
+    \"idempotency_key\": \"$CANCEL_IDEMPOTENCY_KEY\"
+  }" | jq .
+
+curl -i -sS -X POST "$BASE_URL/api/v1/commerce/checkout-sessions" \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"user_id\": \"$USER_ID\",
+    \"sku_code\": \"pro_own_ai_monthly\",
+    \"provider\": \"mock\",
+    \"idempotency_key\": \"checkout:${USER_ID}:monthly-after-cancel:$(date +%s)\"
+  }"
+```
+
+预期：
+
+- cancel response 的 `projection.status` 为 `cancel_at_period_end`，`projection.cancel_at_period_end=true`。
+- 重新创建月付 checkout 返回 HTTP `409`，`code=checkout_blocked_by_subscription_state`，`reason=cancel_at_period_end`，`action=resume_subscription`。
+- 刷新 signed access snapshot 时 `license.cancel_at_period_end=true` 且 `license.current_period_ends_at` 非空。
+- 调用 `/api/v1/commerce/subscriptions/resume` 后，response 的 `projection.status=active`，重复月付 checkout 仍以 `reason=subscription_active` 阻断。
 
 ### 5. 验证重复 webhook 幂等
 
@@ -647,6 +681,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 | checkout 返回 `payment provider not found: creem` | Creem 当前不是 active provider | `/admin/payment/providers` | 先消除 `disabled/error` 状态，再重试 checkout |
 | checkout 返回 `checkout_provider_failed` | provider 请求失败或 SKU 未映射 | 服务日志；响应 body | 检查 product map、API base URL、网络、Creem credentials |
 | checkout 返回 `checkout_blocked_by_payment_risk` | 存在 open high/critical `PaymentRiskFlag` | `/admin/payment-risk-flags?user_id=...&status=open` | 仅在人工审核后 resolve |
+| checkout 返回 `checkout_blocked_by_subscription_state` | `SoftwareSubscriptionProjector` 判断已有 active/cancel-at-period-end/lifetime access | response `reason`/`action`；signed snapshot license | 按 `already_lifetime`、`subscription_active`、`cancel_at_period_end` 展示保留权益、管理订阅或恢复月付 |
 | webhook 返回 bad request | 签名或 payload 无效 | `creem-signature`、raw payload、secret | 重算签名；核对 dashboard secret |
 | event 因 amount mismatch failed | Provider amount 与 Walnut order 不一致 | event `amount`；order `amount` | 按高风险处理，不能手工强行 paid |
 | event 因 currency mismatch failed | Provider currency 与 order 不一致 | event `currency`；order `currency` | 修正 product/provider mapping 后再 reprocess |

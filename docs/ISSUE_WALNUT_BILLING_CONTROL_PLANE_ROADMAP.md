@@ -567,6 +567,8 @@ POST /api/v1/access/login-challenges/verify
 
 ### WCP-3：订阅状态投影和按钮状态闭环（P0）
 
+WCP-3 进展（2026-06-19）：第一切片已完成。新增 service 层 `SoftwareSubscriptionProjector` 作为等价 read model，从 Walnut 自有 `EntitlementGrant` 与 `SubscriptionCancellation` facts 投影 `active`、`cancel_at_period_end`、lifetime 等互斥状态。`SoftwareAccessPlanCheckoutPolicy` 改为依赖投影接口，checkout 被阻断时统一返回 roadmap 约定的机器可读 reason：`already_lifetime`、`subscription_active`、`cancel_at_period_end`、`payment_risk_hold`；handler 映射 `checkout_blocked_by_subscription_state` 且不创建 order/provider session。`AccessSnapshotIssuer` 复用同一投影写入 `license.subscription_status`、`current_period_ends_at`、`cancel_at_period_end`，cancel/resume API response 也返回 projection。该切片未引入 provider-specific 逻辑，Creem 字段仍停留在 payment adapter/order metadata 边界。
+
 目标：服务端提供清晰、互斥、可解释的软件授权状态，让客户端按钮不靠猜。
 
 任务：

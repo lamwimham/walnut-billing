@@ -110,8 +110,11 @@ func TestSubscriptionCancellationService_CancelsAtPeriodEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cancel subscription: %v", err)
 	}
-	if result.Status != SubscriptionCancellationStatusCancelAtPeriodEnd || !result.CancelAtPeriodEnd || result.CurrentPeriodEndsAt == "" {
+	if result.Status != SoftwareSubscriptionStatusCancelAtPeriodEnd || !result.CancelAtPeriodEnd || result.CurrentPeriodEndsAt == "" {
 		t.Fatalf("unexpected cancellation result: %#v", result)
+	}
+	if result.Projection.Status != SoftwareSubscriptionStatusCancelAtPeriodEnd || !result.Projection.CancelAtPeriodEnd {
+		t.Fatalf("expected cancel-at-period-end projection, got %#v", result.Projection)
 	}
 	if orders.orders["CHK-1"].Status != domain.OrderStatusFulfilled {
 		t.Fatalf("cancellation must not rewrite paid order facts, got %s", orders.orders["CHK-1"].Status)
@@ -180,11 +183,14 @@ func TestSubscriptionCancellationService_ResumesCancelledSubscription(t *testing
 	if err != nil {
 		t.Fatalf("resume subscription: %v", err)
 	}
-	if cancelled.Status != SubscriptionCancellationStatusCancelAtPeriodEnd || !cancelled.CancelAtPeriodEnd {
+	if cancelled.Status != SoftwareSubscriptionStatusCancelAtPeriodEnd || !cancelled.CancelAtPeriodEnd {
 		t.Fatalf("expected cancelled-at-period-end before resume, got %#v", cancelled)
 	}
 	if resumed.Status != SubscriptionStatusActive || resumed.CancelAtPeriodEnd || resumed.CurrentPeriodEndsAt == "" {
 		t.Fatalf("unexpected resumed subscription: %#v", resumed)
+	}
+	if resumed.Projection.Status != SoftwareSubscriptionStatusActive || resumed.Projection.CancelAtPeriodEnd {
+		t.Fatalf("expected active projection after resume, got %#v", resumed.Projection)
 	}
 	stored := cancellations.cancellations["cancel-1"]
 	if stored.Status != SubscriptionStatusActive || stored.CancelAtPeriodEnd || stored.ResumeIdempotencyKey != "resume-1" || stored.ResumedAt == nil {
@@ -246,7 +252,7 @@ func TestSubscriptionCancellationService_RecordsProviderSubscriptionControlMetad
 		t.Fatalf("cancel subscription: %v", err)
 	}
 	cancelMetadata := orderMetadataMap(orders.orders["CHK-1"].Metadata)
-	if cancelMetadata["walnut_subscription_status"] != SubscriptionCancellationStatusCancelAtPeriodEnd ||
+	if cancelMetadata["walnut_subscription_status"] != SoftwareSubscriptionStatusCancelAtPeriodEnd ||
 		cancelMetadata["walnut_cancel_at_period_end"] != "true" ||
 		cancelMetadata["walnut_provider_subscription_id"] != "sub_provider_1" {
 		t.Fatalf("expected cancel control metadata, got %#v", cancelMetadata)

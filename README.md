@@ -77,6 +77,8 @@ Current commercialization work focuses on overseas hosted checkout providers. Cr
 
 The commerce checkout facade is the provider-agnostic entry point for future SKU-based purchases. It creates a Walnut-owned order first, then asks the selected payment adapter for a checkout session. Provider-specific product IDs and checkout details stay inside `walnut-billing`.
 
+Checkout policies use a service-owned software subscription projection before any provider call. Rejections return stable machine-readable reasons: `already_lifetime`, `subscription_active`, `cancel_at_period_end`, or `payment_risk_hold`; clients should use these reasons to show keep-access/manage-subscription/resume/manual-review states instead of guessing from SKU or provider metadata.
+
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
 | POST | `/api/v1/commerce/checkout-sessions` | `{user_id, sku_code, provider, success_url, cancel_url, idempotency_key}` | `{order, checkout_url, provider}` |
@@ -100,7 +102,12 @@ Fulfillment rules can be supplied through `FULFILLMENT_RULES_JSON`; the dev defa
 
 Subscription webhooks are normalized into Walnut-owned events before they affect access: `payment.renewal_paid`, `payment.renewal_failed`, and `payment.subscription_expired`. `SubscriptionRenewalService` applies a configurable policy: paid renewals reuse `FulfillmentService`, failed renewals create a short `subscription_grace` entitlement grant without credits, and expiry events can expire grace grants or let them naturally expire.
 
-Creem-specific statuses remain inside the payment adapter. PC/mobile gates still consume only `EntitlementSnapshot` and credit balances.
+Creem-specific statuses remain inside the payment adapter. PC/mobile gates still consume only Walnut projections: `EntitlementSnapshot`, credit balances, and signed access snapshots. The software subscription projection normalizes active monthly, `cancel_at_period_end`, and lifetime states from Walnut grants plus cancellation facts; signed snapshots expose the same `subscription_status`, `current_period_ends_at`, and `cancel_at_period_end` values.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/api/v1/commerce/subscriptions/cancel` | Mark monthly renewal as `cancel_at_period_end`; current-period Pro access remains active |
+| POST | `/api/v1/commerce/subscriptions/resume` | Clear the cancel-at-period-end fact and return the active subscription projection |
 
 ### Payment Webhook Inbox
 

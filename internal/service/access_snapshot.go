@@ -50,9 +50,10 @@ type AccessSnapshotIssuerRepositories struct {
 }
 
 type AccessSnapshotIssuerDependencies struct {
-	Repositories AccessSnapshotIssuerRepositories
-	Policy       AccessSnapshotPolicy
-	Signer       AccessSnapshotSigner
+	Repositories          AccessSnapshotIssuerRepositories
+	Policy                AccessSnapshotPolicy
+	Signer                AccessSnapshotSigner
+	SoftwareSubscriptions SoftwareSubscriptionProjector
 }
 
 type AccessSnapshotPolicy interface {
@@ -240,9 +241,10 @@ func (s *ed25519AccessSnapshotSigner) Algorithm() string {
 }
 
 type accessSnapshotIssuer struct {
-	repos  AccessSnapshotIssuerRepositories
-	policy AccessSnapshotPolicy
-	signer AccessSnapshotSigner
+	repos                 AccessSnapshotIssuerRepositories
+	policy                AccessSnapshotPolicy
+	signer                AccessSnapshotSigner
+	softwareSubscriptions SoftwareSubscriptionProjector
 }
 
 func NewAccessSnapshotIssuer(deps AccessSnapshotIssuerDependencies) AccessSnapshotIssuer {
@@ -254,7 +256,14 @@ func NewAccessSnapshotIssuer(deps AccessSnapshotIssuerDependencies) AccessSnapsh
 	if signer == nil {
 		signer = DefaultAccessSnapshotSigner()
 	}
-	return &accessSnapshotIssuer{repos: deps.Repositories, policy: policy, signer: signer}
+	projector := deps.SoftwareSubscriptions
+	if projector == nil && deps.Repositories.EntitlementGrants != nil {
+		projector = NewSoftwareSubscriptionProjector(SoftwareSubscriptionProjectionRepositories{
+			EntitlementGrants: deps.Repositories.EntitlementGrants,
+			Cancellations:     deps.Repositories.Cancellations,
+		}, nil)
+	}
+	return &accessSnapshotIssuer{repos: deps.Repositories, policy: policy, signer: signer, softwareSubscriptions: projector}
 }
 
 func (i *accessSnapshotIssuer) Issue(ctx context.Context, input AccessSnapshotIssueInput) (*domain.AccessSnapshotV2, error) {
@@ -284,7 +293,7 @@ func (i *accessSnapshotIssuer) Issue(ctx context.Context, input AccessSnapshotIs
 	expiresAt := issuedAt.Add(i.policy.TTL(ctx, user))
 	offlineGraceUntil := expiresAt.Add(i.policy.OfflineGrace(ctx, user))
 	license := licenseProjectionFromGrants(activeGrants, trial, now)
-	license = i.enrichLicenseWithSubscriptionCancellation(ctx, user, license)
+	license = i.enrichLicenseWithSoftwareSubscription(ctx, user, license)
 	snapshot := domain.AccessSnapshotV2{
 		Version: 2,
 		User: domain.AccessSnapshotUserV2{
@@ -314,25 +323,21 @@ func (i *accessSnapshotIssuer) Issue(ctx context.Context, input AccessSnapshotIs
 	return &snapshot, nil
 }
 
-func (i *accessSnapshotIssuer) enrichLicenseWithSubscriptionCancellation(ctx context.Context, user *domain.User, license domain.AccessSnapshotLicenseV2) domain.AccessSnapshotLicenseV2 {
+func (i *accessSnapshotIssuer) enrichLicenseWithSoftwareSubscription(ctx context.Context, user *domain.User, license domain.AccessSnapshotLicenseV2) domain.AccessSnapshotLicenseV2 {
 	if license.CurrentPeriodEndsAt == "" {
 		license.CurrentPeriodEndsAt = license.SubscriptionEndsAt
 	}
-	if i.repos.Cancellations == nil || user == nil || license.State != AccessLicenseStateSubscription {
+	if i.softwareSubscriptions == nil || user == nil || license.State != AccessLicenseStateSubscription {
 		return license
 	}
-	cancellation, err := i.repos.Cancellations.FindActive(ctx, repository.SubscriptionCancellationQuery{
-		UserID:  user.ID,
-		SKUCode: license.Plan,
-		Status:  SubscriptionCancellationStatusCancelAtPeriodEnd,
-	})
-	if err != nil || cancellation == nil {
+	subscription, err := i.softwareSubscriptions.Project(ctx, user.ID)
+	if err != nil || subscription.SKUCode != domain.SKUProOwnAIMonthly {
 		return license
 	}
-	license.SubscriptionStatus = SubscriptionCancellationStatusCancelAtPeriodEnd
-	license.CancelAtPeriodEnd = true
-	if !cancellation.CurrentPeriodEndsAt.IsZero() {
-		license.CurrentPeriodEndsAt = cancellation.CurrentPeriodEndsAt.UTC().Format(time.RFC3339)
+	license.SubscriptionStatus = subscription.Status
+	license.CancelAtPeriodEnd = subscription.CancelAtPeriodEnd
+	if subscription.CurrentPeriodEndsAt != "" {
+		license.CurrentPeriodEndsAt = subscription.CurrentPeriodEndsAt
 	}
 	return license
 }

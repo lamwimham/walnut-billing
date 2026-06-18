@@ -336,7 +336,7 @@ func TestSoftwareAccessPlanCheckoutPolicy_BlocksDuplicateMonthlySubscription(t *
 		t.Fatalf("expected plan policy block, got %v", err)
 	}
 	decision, ok := CheckoutPolicyDecisionFromError(err)
-	if !ok || decision.Reason != CheckoutPolicyReasonDuplicateActiveSubscription {
+	if !ok || decision.Reason != CheckoutPolicyReasonSubscriptionActive || decision.Action != CheckoutPolicyActionManage {
 		t.Fatalf("expected duplicate subscription decision, got %#v ok=%v", decision, ok)
 	}
 	if len(orders.orders) != 0 || len(gateway.requests) != 0 {
@@ -378,7 +378,7 @@ func TestSoftwareAccessPlanCheckoutPolicy_BlocksLifetimeFromActiveSubscriptionBe
 		t.Fatalf("expected plan policy block, got %v", err)
 	}
 	decision, ok := CheckoutPolicyDecisionFromError(err)
-	if !ok || decision.Reason != CheckoutPolicyReasonActiveSubscriptionRequiresCancellation {
+	if !ok || decision.Reason != CheckoutPolicyReasonSubscriptionActive || decision.Action != CheckoutPolicyActionManage {
 		t.Fatalf("expected active subscription decision, got %#v ok=%v", decision, ok)
 	}
 	if len(orders.orders) != 0 || len(gateway.requests) != 0 {
@@ -434,6 +434,58 @@ func TestSoftwareAccessPlanCheckoutPolicy_AllowsLifetimeAfterCancelAtPeriodEnd(t
 	}
 }
 
+func TestSoftwareAccessPlanCheckoutPolicy_BlocksMonthlyCheckoutWithResumeReasonAfterCancelAtPeriodEnd(t *testing.T) {
+	grants := newMockGrantRepo()
+	cancellations := newMockSubscriptionCancellationRepo()
+	periodEnd := time.Now().UTC().AddDate(0, 1, 0)
+	grants.grants["monthly"] = &domain.EntitlementGrant{
+		ID:            "monthly",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementEditorialStudio,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceFulfillment,
+		StartsAt:      time.Now().UTC().Add(-time.Hour),
+		ExpiresAt:     &periodEnd,
+	}
+	cancellations.cancellations["cancel-1"] = &domain.SubscriptionCancellation{
+		ID:                  "sub_cancel_1",
+		UserID:              "usr_1",
+		SKUCode:             domain.SKUProOwnAIMonthly,
+		Status:              SubscriptionCancellationStatusCancelAtPeriodEnd,
+		CancelAtPeriodEnd:   true,
+		CurrentPeriodEndsAt: periodEnd,
+		IdempotencyKey:      "cancel-1",
+	}
+	policy := NewSoftwareAccessPlanCheckoutPolicy(grants, cancellations, func() time.Time { return time.Now().UTC() })
+	svc, orders, products, users, gateway := newCheckoutTestServiceWithPolicies(policy)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	products.products[domain.SKUProOwnAIMonthly] = &domain.Product{
+		Code:      domain.SKUProOwnAIMonthly,
+		Name:      "Walnut Pro Own AI Monthly",
+		Price:     500,
+		Currency:  "USD",
+		Validity:  "monthly",
+		IsVisible: true,
+	}
+
+	_, err := svc.CreateCheckoutSession(context.Background(), CheckoutInput{
+		UserID:         "usr_1",
+		SKUCode:        domain.SKUProOwnAIMonthly,
+		Provider:       "mock",
+		IdempotencyKey: "checkout:monthly-after-cancel",
+	})
+	if !errors.Is(err, ErrCheckoutBlockedByPlan) {
+		t.Fatalf("expected plan policy block, got %v", err)
+	}
+	decision, ok := CheckoutPolicyDecisionFromError(err)
+	if !ok || decision.Reason != CheckoutPolicyReasonCancelAtPeriodEnd || decision.Action != CheckoutPolicyActionResume {
+		t.Fatalf("expected cancel-at-period-end resume decision, got %#v ok=%v", decision, ok)
+	}
+	if len(orders.orders) != 0 || len(gateway.requests) != 0 {
+		t.Fatalf("blocked checkout must not create order or provider session")
+	}
+}
+
 func TestSoftwareAccessPlanCheckoutPolicy_BlocksCheckoutWhenLifetimeAlreadyActive(t *testing.T) {
 	grants := newMockGrantRepo()
 	grants.grants["lifetime"] = &domain.EntitlementGrant{
@@ -466,7 +518,7 @@ func TestSoftwareAccessPlanCheckoutPolicy_BlocksCheckoutWhenLifetimeAlreadyActiv
 		t.Fatalf("expected lifetime policy block, got %v", err)
 	}
 	decision, ok := CheckoutPolicyDecisionFromError(err)
-	if !ok || decision.Reason != CheckoutPolicyReasonLifetimeAlreadyActive {
+	if !ok || decision.Reason != CheckoutPolicyReasonAlreadyLifetime || decision.Action != CheckoutPolicyActionKeepAccess {
 		t.Fatalf("expected lifetime-active decision, got %#v ok=%v", decision, ok)
 	}
 	if len(orders.orders) != 0 || len(gateway.requests) != 0 {

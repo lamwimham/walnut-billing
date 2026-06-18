@@ -47,6 +47,7 @@ type SubscriptionCancellationResult struct {
 	CancelAtPeriodEnd   bool                           `json:"cancel_at_period_end"`
 	CurrentPeriodEndsAt string                         `json:"current_period_ends_at"`
 	Subscription        SubscriptionCancellationRecord `json:"subscription"`
+	Projection          SoftwareSubscriptionProjection `json:"projection"`
 }
 
 type SubscriptionCancellationRecord struct {
@@ -349,7 +350,7 @@ func markProviderSubscriptionCancellation(
 		return order, nil
 	}
 	metadata := orderMetadataMap(order.Metadata)
-	changed := putOrderMetadata(metadata, "walnut_subscription_status", SubscriptionCancellationStatusCancelAtPeriodEnd)
+	changed := putOrderMetadata(metadata, "walnut_subscription_status", SoftwareSubscriptionStatusCancelAtPeriodEnd)
 	changed = putOrderMetadata(metadata, "walnut_cancel_at_period_end", "true") || changed
 	changed = putOrderMetadata(metadata, "walnut_subscription_cancel_source", input.Source) || changed
 	changed = putOrderMetadata(metadata, "walnut_subscription_cancel_reason", input.Reason) || changed
@@ -601,7 +602,7 @@ func subscriptionCancellationResult(input SubscriptionCancellationInput, order *
 	record := SubscriptionCancellationRecord{
 		UserID:              input.UserID,
 		SKUCode:             input.SKUCode,
-		Status:              SubscriptionCancellationStatusCancelAtPeriodEnd,
+		Status:              SoftwareSubscriptionStatusCancelAtPeriodEnd,
 		CancelAtPeriodEnd:   true,
 		CurrentPeriodEndsAt: periodEnd,
 		SourceOrderNo:       sourceOrderNo,
@@ -610,10 +611,17 @@ func subscriptionCancellationResult(input SubscriptionCancellationInput, order *
 	return &SubscriptionCancellationResult{
 		UserID:              input.UserID,
 		SKUCode:             input.SKUCode,
-		Status:              SubscriptionCancellationStatusCancelAtPeriodEnd,
+		Status:              SoftwareSubscriptionStatusCancelAtPeriodEnd,
 		CancelAtPeriodEnd:   true,
 		CurrentPeriodEndsAt: periodEnd,
 		Subscription:        record,
+		Projection: SoftwareSubscriptionProjection{
+			UserID:              input.UserID,
+			SKUCode:             input.SKUCode,
+			Status:              SoftwareSubscriptionStatusCancelAtPeriodEnd,
+			CancelAtPeriodEnd:   true,
+			CurrentPeriodEndsAt: periodEnd,
+		},
 	}
 }
 
@@ -641,6 +649,13 @@ func subscriptionResumeResult(input SubscriptionResumeInput, period subscription
 		CancelAtPeriodEnd:   false,
 		CurrentPeriodEndsAt: periodEnd,
 		Subscription:        record,
+		Projection: SoftwareSubscriptionProjection{
+			UserID:              input.UserID,
+			SKUCode:             input.SKUCode,
+			Status:              SoftwareSubscriptionStatusActive,
+			CancelAtPeriodEnd:   false,
+			CurrentPeriodEndsAt: periodEnd,
+		},
 	}
 }
 

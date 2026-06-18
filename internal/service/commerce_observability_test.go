@@ -151,6 +151,35 @@ func TestObservedCheckoutService_ClassifiesRiskBlock(t *testing.T) {
 	}
 }
 
+func TestObservedCheckoutService_ClassifiesSubscriptionPolicyBlock(t *testing.T) {
+	observer := &spyCommerceObserver{}
+	rejection := &CheckoutPolicyRejection{
+		Cause: ErrCheckoutBlockedByPlan,
+		Decision: CheckoutPolicyDecision{
+			Allowed: false,
+			Reason:  CheckoutPolicyReasonCancelAtPeriodEnd,
+			Action:  CheckoutPolicyActionResume,
+		},
+	}
+	svc := NewObservedCheckoutService(&stubCheckoutService{err: rejection}, observer)
+
+	_, err := svc.CreateCheckoutSession(context.Background(), CheckoutInput{
+		UserID:   "usr_1",
+		SKUCode:  domain.SKUProOwnAIMonthly,
+		Provider: "mock",
+	})
+	if !errors.Is(err, ErrCheckoutBlockedByPlan) {
+		t.Fatalf("expected plan block error, got %v", err)
+	}
+	if len(observer.checkout) != 1 {
+		t.Fatalf("expected one checkout observation, got %d", len(observer.checkout))
+	}
+	obs := observer.checkout[0]
+	if obs.Status != ObservationStatusBlocked || !obs.Blocked || obs.ErrorKind != "blocked_by_subscription_state" || obs.PolicyReason != CheckoutPolicyReasonCancelAtPeriodEnd || obs.PolicyAction != CheckoutPolicyActionResume {
+		t.Fatalf("unexpected subscription blocked observation: %#v", obs)
+	}
+}
+
 func TestObservedPaymentEventService_ClassifiesFailedReceiveWithoutRawPayload(t *testing.T) {
 	observer := &spyCommerceObserver{}
 	svc := NewObservedPaymentEventService(&stubPaymentEventService{err: errors.New("creem webhook signature verification failed")}, observer)
