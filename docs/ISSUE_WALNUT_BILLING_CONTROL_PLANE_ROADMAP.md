@@ -531,6 +531,8 @@ WCP-2 进展（2026-06-18）：第二切片已完成。新增 `AccessDeviceAdmin
 
 WCP-2 进展（2026-06-19）：第三切片已完成。登录 challenge 增加持久化滥用控制策略：按 normalized email 与 hashed client IP 统计创建频率，超过配置窗口返回稳定错误 `login_challenge_rate_limited`；challenge 仅保存 IP/User-Agent hash，不保存原始网络标识。错误验证码或设备不匹配会记录 failure reason，达到最大尝试次数后写隐私安全的 `access.login_challenge.abuse` audit。相关阈值通过 `ACCESS_LOGIN_CHALLENGE_RATE_LIMIT_WINDOW_SECONDS`、`ACCESS_LOGIN_CHALLENGE_MAX_CREATES_PER_EMAIL`、`ACCESS_LOGIN_CHALLENGE_MAX_CREATES_PER_IP` 配置，合同测试已纳入 `scripts/verify_access_login_challenge_contract.sh`。
 
+WCP-2 进展（2026-06-19）：第四切片已完成。新增 service 层 `AccessDeviceCapacity` value object，`AccessSessionService.RegisterOrRestore` 在绑定/恢复设备后统一返回 `device_capacity.active_device_count`、`max_devices`、`remaining_device_slots`；`AccessSnapshotIssuer` 在 signed `access_snapshot.device` 中嵌入同一容量投影。容量计算只统计 active devices，被 admin revoke 的设备继续返回稳定错误 `access_device_revoked` 且不占用剩余槽位。handler 不计算业务字段，仍只转发 service projection；相关 service/handler/snapshot 合同已纳入设备生命周期验证。
+
 当前依赖流：
 
 ```text
@@ -542,7 +544,7 @@ POST /api/v1/access/login-challenges
 POST /api/v1/access/login-challenges/verify
   -> atomic ConsumePending(challenge)
   -> AccessSessionService.RegisterOrRestore
-  -> User/UserDevice/TrialGrant/EntitlementSnapshot/AccessSnapshotV2
+  -> User/UserDevice/AccessDeviceCapacity/TrialGrant/EntitlementSnapshot/AccessSnapshotV2
 ```
 
 目标：解决“换设备、重装、删除本地数据后授权如何恢复”的成熟闭环。

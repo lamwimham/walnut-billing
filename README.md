@@ -121,11 +121,13 @@ These endpoints provide the first entitlement projection for Walnut clients. Gra
 
 Login challenge abuse controls are persisted at the identity boundary: challenge creates are limited per normalized email and hashed client IP, failed verify attempts expire the challenge after the configured threshold, and rate-limit/max-attempt events write privacy-safe audit records without raw email, IP, user-agent, device id, or OTP values.
 
+Access session responses include a service-owned `device_capacity` projection with `active_device_count`, `max_devices`, and `remaining_device_slots`. The signed `access_snapshot.device` embeds the same capacity fields so Walnut clients can render restore/device-bind UI without re-deriving slot state; revoked devices are excluded from active capacity and return `access_device_revoked` when reused.
+
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
 | POST | `/api/v1/access/login-challenges` | `{email, device_id, source, idempotency_key}` | `{challenge_id, email, device_id, expires_at, delivery, dev_token?}` |
-| POST | `/api/v1/access/login-challenges/verify` | `{challenge_id, token, device_id, display_name, source}` | Access session with trial/device/signed snapshot |
-| POST | `/api/v1/access/registrations` | `{email, display_name, device_id, source, note}` | Access session with trial/device/signed snapshot |
+| POST | `/api/v1/access/login-challenges/verify` | `{challenge_id, token, device_id, display_name, source}` | Access session with trial/device/device capacity/signed snapshot |
+| POST | `/api/v1/access/registrations` | `{email, display_name, device_id, source, note}` | Access session with trial/device/device capacity/signed snapshot |
 | POST | `/api/v1/registrations` | `{email, display_name, requested_entitlement, device_id, source, note}` | `{user, registration}` with pending status |
 | GET | `/api/v1/users/:user_id/entitlements/snapshot` | — | PC Core compatible entitlement snapshot |
 
@@ -208,7 +210,7 @@ All settings via environment variables (see `.env.example`):
 | `RENEWAL_GRACE_PERIOD_DAYS` | 3 | Grace window after renewal payment failure; grants access only, no period credits |
 | `RENEWAL_EXPIRED_ACTION` | expire_grace | Expiry handling: `expire_grace` or `natural_expiry` |
 | `ACCESS_SNAPSHOT_*` | dev HS256 values | Signed access snapshot policy and signer configuration |
-| `ACCESS_MAX_DEVICES` | 2 | Maximum active devices per access account |
+| `ACCESS_MAX_DEVICES` | 2 | Maximum active devices per access account; projected as device capacity in access sessions and signed snapshots |
 | `ACCESS_CLOUD_STORAGE_QUOTA_MB` | 1024 | Default cloud storage quota projected into access snapshots |
 | `ACCESS_TRIAL_DURATION_DAYS` | 14 | One-time trial duration keyed by normalized email and trial type |
 | `ACCESS_LOGIN_CHALLENGE_TTL_SECONDS` | 600 | Email login/recovery OTP validity window |

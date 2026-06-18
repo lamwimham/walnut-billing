@@ -83,7 +83,8 @@ Expected behavior:
 
 - `AccessLoginChallenge.token_hash` is persisted, but no plaintext token is stored.
 - Client IP and User-Agent are stored as hashes only; raw IP/User-Agent do not enter the challenge row or abuse audit details.
-- Verification consumes the challenge exactly once and delegates to the existing access session service, so trial idempotency, device limits, and signed snapshot issuance stay in one place.
+- Verification consumes the challenge exactly once and delegates to the existing access session service, so trial idempotency, device limits, device capacity, and signed snapshot issuance stay in one place.
+- The verify response contains `device_capacity.remaining_device_slots`; the signed `access_snapshot.device` contains the same remaining-slot projection for offline restore UI.
 - Reusing a consumed/expired challenge returns a stable error code such as `login_challenge_failed` or `login_challenge_expired`.
 - Excess challenge creation returns `login_challenge_rate_limited` and records `access.login_challenge.abuse` with only fingerprints/hashes.
 
@@ -156,7 +157,7 @@ curl -sS -X POST "http://127.0.0.1:8082/api/v1/admin/devices/$DEVICE_ROW_ID/revo
   -d '{"revoked_by":"ops","reason":"local lifecycle test"}' | python3 -m json.tool
 ```
 
-After revoke, the same device cannot restore or refresh a signed access snapshot; APIs return `access_device_revoked`. Run the contract test with:
+After revoke, the same device cannot restore or refresh a signed access snapshot; APIs return `access_device_revoked`. Revoked devices are excluded from `active_device_count`, so remaining slots reopen only through the service-owned capacity projection. Run the contract test with:
 
 ```bash
 scripts/verify_access_device_lifecycle_contract.sh

@@ -151,6 +151,12 @@ func TestAccessSessionService_RegisterOrRestoreFirstEmailCreatesTrialSnapshot(t 
 	if result.Device == nil || result.Device.DeviceID != "device-1" || result.Device.Status != domain.DeviceStatusActive {
 		t.Fatalf("expected active device binding, got %#v", result.Device)
 	}
+	if result.DeviceCapacity.MaxDevices != 2 || result.DeviceCapacity.ActiveDeviceCount != 1 || result.DeviceCapacity.RemainingDeviceSlots != 1 {
+		t.Fatalf("expected first-device capacity projection, got %#v", result.DeviceCapacity)
+	}
+	if result.AccessSnapshot.Device.MaxDevices != 2 || result.AccessSnapshot.Device.ActiveDeviceCount != 1 || result.AccessSnapshot.Device.RemainingDeviceSlots != 1 {
+		t.Fatalf("expected signed snapshot device capacity projection, got %#v", result.AccessSnapshot.Device)
+	}
 	if !result.TrialCreated || result.Trial == nil || result.Trial.GrantType != domain.TrialGrantTypeProOwnAI || result.Trial.ExpiresAt == nil {
 		t.Fatalf("expected new pro trial, got %#v", result)
 	}
@@ -190,8 +196,43 @@ func TestAccessSessionService_RegisterOrRestoreIsIdempotentForSameEmail(t *testi
 	if !second.Device.LastSeenAt.After(firstSeen) {
 		t.Fatalf("expected existing device last_seen refresh")
 	}
+	if second.DeviceCapacity.ActiveDeviceCount != 1 || second.DeviceCapacity.MaxDevices != 2 || second.DeviceCapacity.RemainingDeviceSlots != 1 {
+		t.Fatalf("restore must keep device capacity stable, got %#v", second.DeviceCapacity)
+	}
 	if len(devices.devices) != 1 || len(trials.grants) != 1 || len(grants.grants) != len(CurrentAdvancedEntitlements()) {
 		t.Fatalf("expected idempotent restore side effects, devices=%d trials=%d grants=%d", len(devices.devices), len(trials.grants), len(grants.grants))
+	}
+}
+
+func TestAccessSessionService_DeviceCapacityTracksRemainingSlots(t *testing.T) {
+	policy := NewConfigurableAccessSessionPolicy(AccessSessionPolicyConfig{MaxDevices: 2})
+	svc, _, _, _, _, _ := newAccessSessionTestService(policy)
+
+	first, err := svc.RegisterOrRestore(context.Background(), AccessSessionInput{Email: "writer@example.com", DeviceID: "device-1"})
+	if err != nil {
+		t.Fatalf("first device: %v", err)
+	}
+	if first.DeviceCapacity.ActiveDeviceCount != 1 || first.DeviceCapacity.MaxDevices != 2 || first.DeviceCapacity.RemainingDeviceSlots != 1 {
+		t.Fatalf("expected one remaining slot after first bind, got %#v", first.DeviceCapacity)
+	}
+
+	second, err := svc.RegisterOrRestore(context.Background(), AccessSessionInput{Email: "writer@example.com", DeviceID: "device-2"})
+	if err != nil {
+		t.Fatalf("second device: %v", err)
+	}
+	if second.DeviceCapacity.ActiveDeviceCount != 2 || second.DeviceCapacity.MaxDevices != 2 || second.DeviceCapacity.RemainingDeviceSlots != 0 {
+		t.Fatalf("expected zero remaining slots after second bind, got %#v", second.DeviceCapacity)
+	}
+	if second.AccessSnapshot == nil || second.AccessSnapshot.Device.ActiveDeviceCount != 2 || second.AccessSnapshot.Device.RemainingDeviceSlots != 0 {
+		t.Fatalf("expected signed snapshot capacity to match session, got %#v", second.AccessSnapshot)
+	}
+
+	restore, err := svc.RegisterOrRestore(context.Background(), AccessSessionInput{Email: "writer@example.com", DeviceID: "device-1"})
+	if err != nil {
+		t.Fatalf("restore first device: %v", err)
+	}
+	if restore.DeviceCapacity.ActiveDeviceCount != 2 || restore.DeviceCapacity.RemainingDeviceSlots != 0 {
+		t.Fatalf("restore should not increase active device count, got %#v", restore.DeviceCapacity)
 	}
 }
 

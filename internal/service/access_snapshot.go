@@ -77,7 +77,7 @@ func DefaultAccessSnapshotPolicyConfig() AccessSnapshotPolicyConfig {
 	return AccessSnapshotPolicyConfig{
 		TTLSeconds:          24 * 60 * 60,
 		OfflineGraceSeconds: 7 * 24 * 60 * 60,
-		MaxDevices:          2,
+		MaxDevices:          defaultAccessMaxDevices,
 		CloudStorageQuotaMB: 1024,
 	}
 }
@@ -370,31 +370,35 @@ func (i *accessSnapshotIssuer) activeTrial(ctx context.Context, user *domain.Use
 }
 
 func (i *accessSnapshotIssuer) snapshotDevice(ctx context.Context, user *domain.User, deviceID string) (domain.AccessSnapshotDeviceV2, error) {
-	maxDevices := i.policy.MaxDevices(ctx, user)
+	maxDevices := normalizeAccessMaxDevices(i.policy.MaxDevices(ctx, user))
 	if i.repos.Devices == nil || user == nil {
-		return domain.AccessSnapshotDeviceV2{MaxDevices: maxDevices}, nil
+		return deviceSnapshotProjection(nil, newAccessDeviceCapacity(0, maxDevices)), nil
 	}
+	activeDevices, err := i.repos.Devices.ListByUser(ctx, user.ID, domain.DeviceStatusActive)
+	if err != nil {
+		return domain.AccessSnapshotDeviceV2{}, err
+	}
+	capacity := newAccessDeviceCapacity(len(activeDevices), maxDevices)
 	if deviceID != "" {
 		device, err := i.repos.Devices.GetByUserAndDevice(ctx, user.ID, deviceID)
 		if err != nil {
 			if errors.Is(err, repository.ErrNotFound) {
-				return domain.AccessSnapshotDeviceV2{DeviceID: deviceID, Status: "unknown", MaxDevices: maxDevices}, nil
+				projection := deviceSnapshotProjection(nil, capacity)
+				projection.DeviceID = deviceID
+				projection.Status = "unknown"
+				return projection, nil
 			}
 			return domain.AccessSnapshotDeviceV2{}, err
 		}
 		if device.Status == domain.DeviceStatusDisabled {
 			return domain.AccessSnapshotDeviceV2{}, ErrAccessDeviceRevoked
 		}
-		return deviceSnapshotProjection(device, maxDevices), nil
+		return deviceSnapshotProjection(device, capacity), nil
 	}
-	devices, err := i.repos.Devices.ListByUser(ctx, user.ID, domain.DeviceStatusActive)
-	if err != nil {
-		return domain.AccessSnapshotDeviceV2{}, err
+	if len(activeDevices) == 0 {
+		return deviceSnapshotProjection(nil, capacity), nil
 	}
-	if len(devices) == 0 {
-		return domain.AccessSnapshotDeviceV2{MaxDevices: maxDevices}, nil
-	}
-	return deviceSnapshotProjection(&devices[0], maxDevices), nil
+	return deviceSnapshotProjection(&activeDevices[0], capacity), nil
 }
 
 func (i *accessSnapshotIssuer) featureProjection(ctx context.Context, user *domain.User, entitlements map[string]bool) map[string]any {
@@ -508,15 +512,21 @@ func isAdvancedSoftwareGrant(grant domain.EntitlementGrant) bool {
 	return IsCurrentAdvancedEntitlementID(grant.EntitlementID)
 }
 
-func deviceSnapshotProjection(device *domain.UserDevice, maxDevices int) domain.AccessSnapshotDeviceV2 {
+func deviceSnapshotProjection(device *domain.UserDevice, capacity AccessDeviceCapacity) domain.AccessSnapshotDeviceV2 {
 	if device == nil {
-		return domain.AccessSnapshotDeviceV2{MaxDevices: maxDevices}
+		return domain.AccessSnapshotDeviceV2{
+			MaxDevices:           capacity.MaxDevices,
+			ActiveDeviceCount:    capacity.ActiveDeviceCount,
+			RemainingDeviceSlots: capacity.RemainingDeviceSlots,
+		}
 	}
 	return domain.AccessSnapshotDeviceV2{
-		ID:         device.ID,
-		DeviceID:   device.DeviceID,
-		Status:     device.Status,
-		MaxDevices: maxDevices,
+		ID:                   device.ID,
+		DeviceID:             device.DeviceID,
+		Status:               device.Status,
+		MaxDevices:           capacity.MaxDevices,
+		ActiveDeviceCount:    capacity.ActiveDeviceCount,
+		RemainingDeviceSlots: capacity.RemainingDeviceSlots,
 	}
 }
 

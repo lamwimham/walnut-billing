@@ -39,6 +39,7 @@ func TestAccessSnapshotIssuer_IssuesSignedTrialSnapshot(t *testing.T) {
 	expires := now.AddDate(0, 0, 14)
 	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", DisplayName: "Writer", Status: domain.UserStatusActive}
 	devices.devices["usr_1:device-1"] = &domain.UserDevice{ID: "dev_1", UserID: "usr_1", DeviceID: "device-1", Status: domain.DeviceStatusActive}
+	devices.devices["usr_1:device-2"] = &domain.UserDevice{ID: "dev_2", UserID: "usr_1", DeviceID: "device-2", Status: domain.DeviceStatusActive}
 	trials.grants[trialGrantIdempotencyKey("writer@example.com", domain.TrialGrantTypeProOwnAI)] = &domain.TrialGrant{
 		ID:             "trl_1",
 		UserID:         "usr_1",
@@ -67,7 +68,7 @@ func TestAccessSnapshotIssuer_IssuesSignedTrialSnapshot(t *testing.T) {
 	if snapshot.License.State != AccessLicenseStateTrial || snapshot.License.Plan != AccessPlanProOwnAITrial || snapshot.License.TrialEndsAt == "" {
 		t.Fatalf("expected trial license projection, got %#v", snapshot.License)
 	}
-	if snapshot.Device.ID != "dev_1" || snapshot.Device.MaxDevices != 2 {
+	if snapshot.Device.ID != "dev_1" || snapshot.Device.MaxDevices != 2 || snapshot.Device.ActiveDeviceCount != 2 || snapshot.Device.RemainingDeviceSlots != 0 {
 		t.Fatalf("expected device projection, got %#v", snapshot.Device)
 	}
 	if quota, ok := snapshot.Features["cloud.storage.quota_mb"].(int64); !ok || quota != 2048 {
@@ -225,5 +226,23 @@ func TestAccessSnapshotIssuer_RejectsRevokedDevice(t *testing.T) {
 	_, err := issuer.Issue(context.Background(), AccessSnapshotIssueInput{UserID: "usr_1", DeviceID: "device-1"})
 	if !errors.Is(err, ErrAccessDeviceRevoked) {
 		t.Fatalf("expected revoked device error, got %v", err)
+	}
+}
+
+func TestAccessSnapshotIssuer_ProjectsDeviceCapacityForUnknownDevice(t *testing.T) {
+	policy := NewConfigurableAccessSnapshotPolicy(AccessSnapshotPolicyConfig{MaxDevices: 3})
+	issuer, users, devices, _, _, _, _, _ := newAccessSnapshotTestIssuer(policy, nil)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	devices.devices["usr_1:device-1"] = &domain.UserDevice{ID: "dev_1", UserID: "usr_1", DeviceID: "device-1", Status: domain.DeviceStatusActive}
+
+	snapshot, err := issuer.Issue(context.Background(), AccessSnapshotIssueInput{UserID: "usr_1", DeviceID: "unknown-device"})
+	if err != nil {
+		t.Fatalf("issue snapshot: %v", err)
+	}
+	if snapshot.Device.DeviceID != "unknown-device" || snapshot.Device.Status != "unknown" {
+		t.Fatalf("expected unknown device projection, got %#v", snapshot.Device)
+	}
+	if snapshot.Device.ActiveDeviceCount != 1 || snapshot.Device.MaxDevices != 3 || snapshot.Device.RemainingDeviceSlots != 2 {
+		t.Fatalf("expected capacity projection for unknown device, got %#v", snapshot.Device)
 	}
 }

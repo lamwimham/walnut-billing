@@ -33,11 +33,17 @@ type AccessSessionInput struct {
 type AccessSessionResult struct {
 	User           *domain.User                `json:"user"`
 	Device         *domain.UserDevice          `json:"device"`
+	DeviceCapacity AccessDeviceCapacity        `json:"device_capacity"`
 	Trial          *domain.TrialGrant          `json:"trial,omitempty"`
 	TrialCreated   bool                        `json:"trial_created"`
 	Snapshot       *domain.EntitlementSnapshot `json:"snapshot"`
 	AccessSnapshot *domain.AccessSnapshotV2    `json:"access_snapshot,omitempty"`
 	Source         string                      `json:"source"`
+}
+
+type accessDeviceBindingResult struct {
+	Device   *domain.UserDevice
+	Capacity AccessDeviceCapacity
 }
 
 type AccessSessionRepositories struct {
@@ -82,7 +88,7 @@ func DefaultAccessSessionPolicyConfig() AccessSessionPolicyConfig {
 	return AccessSessionPolicyConfig{
 		TrialGrantType:    domain.TrialGrantTypeProOwnAI,
 		TrialDurationDays: 14,
-		MaxDevices:        2,
+		MaxDevices:        defaultAccessMaxDevices,
 		TrialEntitlements: CurrentAdvancedEntitlements(),
 	}
 }
@@ -171,7 +177,7 @@ func (s *accessSessionServiceImpl) registerOrRestoreWithRepos(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	device, err := s.bindDevice(ctx, repos.Devices, user.ID, input.DeviceID, s.policy.MaxDevices(ctx, input), now)
+	binding, err := s.bindDevice(ctx, repos.Devices, user.ID, input.DeviceID, s.policy.MaxDevices(ctx, input), now)
 	if err != nil {
 		return nil, err
 	}
@@ -184,12 +190,13 @@ func (s *accessSessionServiceImpl) registerOrRestoreWithRepos(ctx context.Contex
 		return nil, err
 	}
 	return &AccessSessionResult{
-		User:         user,
-		Device:       device,
-		Trial:        trial,
-		TrialCreated: trialCreated,
-		Snapshot:     snapshot,
-		Source:       "billing_provider",
+		User:           user,
+		Device:         binding.Device,
+		DeviceCapacity: binding.Capacity,
+		Trial:          trial,
+		TrialCreated:   trialCreated,
+		Snapshot:       snapshot,
+		Source:         "billing_provider",
 	}, nil
 }
 
@@ -229,10 +236,8 @@ func (s *accessSessionServiceImpl) upsertUser(ctx context.Context, users reposit
 	return user, nil
 }
 
-func (s *accessSessionServiceImpl) bindDevice(ctx context.Context, devices repository.UserDeviceRepository, userID string, deviceID string, maxDevices int, now time.Time) (*domain.UserDevice, error) {
-	if maxDevices <= 0 {
-		maxDevices = DefaultAccessSessionPolicyConfig().MaxDevices
-	}
+func (s *accessSessionServiceImpl) bindDevice(ctx context.Context, devices repository.UserDeviceRepository, userID string, deviceID string, maxDevices int, now time.Time) (*accessDeviceBindingResult, error) {
+	maxDevices = normalizeAccessMaxDevices(maxDevices)
 	device, err := devices.GetByUserAndDevice(ctx, userID, deviceID)
 	if err == nil {
 		if device.Status != "" && device.Status != domain.DeviceStatusActive {
@@ -244,7 +249,14 @@ func (s *accessSessionServiceImpl) bindDevice(ctx context.Context, devices repos
 		if err := devices.Update(ctx, device); err != nil {
 			return nil, err
 		}
-		return device, nil
+		activeDevices, err := devices.ListByUser(ctx, userID, domain.DeviceStatusActive)
+		if err != nil {
+			return nil, err
+		}
+		return &accessDeviceBindingResult{
+			Device:   device,
+			Capacity: newAccessDeviceCapacity(len(activeDevices), maxDevices),
+		}, nil
 	}
 	if !errors.Is(err, repository.ErrNotFound) {
 		return nil, err
@@ -273,7 +285,10 @@ func (s *accessSessionServiceImpl) bindDevice(ctx context.Context, devices repos
 	if err := devices.Create(ctx, device); err != nil {
 		return nil, err
 	}
-	return device, nil
+	return &accessDeviceBindingResult{
+		Device:   device,
+		Capacity: newAccessDeviceCapacity(len(activeDevices)+1, maxDevices),
+	}, nil
 }
 
 func (s *accessSessionServiceImpl) ensureTrial(ctx context.Context, repos AccessSessionRepositories, user *domain.User, input AccessSessionInput, plan TrialAccessPlan, now time.Time) (*domain.TrialGrant, bool, error) {

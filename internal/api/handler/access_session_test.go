@@ -28,8 +28,13 @@ func (f *fakeAccessSessionService) RegisterOrRestore(ctx context.Context, input 
 func TestAccessSessionHandler_RegisterOrRestore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeAccessSessionService{result: &service.AccessSessionResult{
-		User:         &domain.User{ID: "usr_1", Email: "writer@example.com"},
-		Device:       &domain.UserDevice{ID: "dev_1", UserID: "usr_1", DeviceID: "device-1", Status: domain.DeviceStatusActive},
+		User:   &domain.User{ID: "usr_1", Email: "writer@example.com"},
+		Device: &domain.UserDevice{ID: "dev_1", UserID: "usr_1", DeviceID: "device-1", Status: domain.DeviceStatusActive},
+		DeviceCapacity: service.AccessDeviceCapacity{
+			ActiveDeviceCount:    1,
+			MaxDevices:           2,
+			RemainingDeviceSlots: 1,
+		},
 		Trial:        &domain.TrialGrant{ID: "trl_1", UserID: "usr_1", GrantType: domain.TrialGrantTypeProOwnAI},
 		TrialCreated: true,
 		Snapshot: &domain.EntitlementSnapshot{
@@ -64,6 +69,9 @@ func TestAccessSessionHandler_RegisterOrRestore(t *testing.T) {
 	}
 	if resp.User.ID != "usr_1" || !resp.Snapshot.Entitlements[domain.EntitlementEditorialStudio] || !resp.TrialCreated || resp.AccessSnapshot == nil || resp.AccessSnapshot.Signature == "" {
 		t.Fatalf("unexpected access session response: %#v", resp)
+	}
+	if resp.DeviceCapacity.ActiveDeviceCount != 1 || resp.DeviceCapacity.MaxDevices != 2 || resp.DeviceCapacity.RemainingDeviceSlots != 1 {
+		t.Fatalf("expected service-projected device capacity, got %#v", resp.DeviceCapacity)
 	}
 }
 
@@ -169,8 +177,13 @@ func TestAccessSessionHandler_UnexpectedError(t *testing.T) {
 func TestAccessSessionHandler_AuditUsesUserIDNotEmail(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeAccessSessionService{result: &service.AccessSessionResult{
-		User:         &domain.User{ID: "usr_1", Email: "writer@example.com"},
-		Device:       &domain.UserDevice{ID: "dev_1", UserID: "usr_1", DeviceID: "device-1", Status: domain.DeviceStatusActive},
+		User:   &domain.User{ID: "usr_1", Email: "writer@example.com"},
+		Device: &domain.UserDevice{ID: "dev_1", UserID: "usr_1", DeviceID: "device-1", Status: domain.DeviceStatusActive},
+		DeviceCapacity: service.AccessDeviceCapacity{
+			ActiveDeviceCount:    1,
+			MaxDevices:           2,
+			RemainingDeviceSlots: 1,
+		},
 		Trial:        &domain.TrialGrant{ID: "trl_1", UserID: "usr_1", GrantType: domain.TrialGrantTypeProOwnAI},
 		TrialCreated: true,
 		Snapshot: &domain.EntitlementSnapshot{

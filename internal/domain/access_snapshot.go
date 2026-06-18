@@ -40,8 +40,10 @@ type AccessSnapshotLicenseV2 struct {
 }
 
 type AccessSnapshotDeviceV2 struct {
-	ID         string `json:"id"`
-	DeviceID   string `json:"device_id"`
-	Status     string `json:"status"`
-	MaxDevices int    `json:"max_devices"`
+	ID                   string `json:"id"`
+	DeviceID             string `json:"device_id"`
+	Status               string `json:"status"`
+	MaxDevices           int    `json:"max_devices"`
+	ActiveDeviceCount    int    `json:"active_device_count"`
+	RemainingDeviceSlots int    `json:"remaining_device_slots"`
 }
