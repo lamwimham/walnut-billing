@@ -94,6 +94,8 @@ func writeAccessLoginChallengeError(c *gin.Context, err error) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error(), "code": "login_challenge_failed"})
 	case errors.Is(err, service.ErrAccessLoginChallengeDeliveryUnavailable):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": "login_challenge_delivery_unavailable"})
+	case errors.Is(err, service.ErrAccessDeviceRevoked):
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error(), "code": "access_device_revoked"})
 	case errors.Is(err, service.ErrDeviceLimitExceeded):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "device_limit_exceeded"})
 	case errors.Is(err, service.ErrAccessUserDisabled):

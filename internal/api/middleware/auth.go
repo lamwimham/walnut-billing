@@ -25,6 +25,7 @@ const (
 	PermissionPaymentRiskWrite       = "admin.payment_risk.write"
 	PermissionFulfillmentsRead       = "admin.fulfillments.read"
 	PermissionAccessAccountsRead     = "admin.access_accounts.read"
+	PermissionAccessAccountsWrite    = "admin.access_accounts.write"
 	PermissionRegistrationsRead      = "admin.registrations.read"
 	PermissionRegistrationsWrite     = "admin.registrations.write"
 	PermissionEntitlementGrantsRead  = "admin.entitlement_grants.read"

@@ -216,3 +216,14 @@ func TestAccessSnapshotPolicy_NormalizesConfig(t *testing.T) {
 		t.Fatalf("expected default normalized access snapshot policy")
 	}
 }
+
+func TestAccessSnapshotIssuer_RejectsRevokedDevice(t *testing.T) {
+	issuer, users, devices, _, _, _, _, _ := newAccessSnapshotTestIssuer(nil, nil)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	devices.devices["usr_1:device-1"] = &domain.UserDevice{ID: "dev_1", UserID: "usr_1", DeviceID: "device-1", Status: domain.DeviceStatusDisabled}
+
+	_, err := issuer.Issue(context.Background(), AccessSnapshotIssueInput{UserID: "usr_1", DeviceID: "device-1"})
+	if !errors.Is(err, ErrAccessDeviceRevoked) {
+		t.Fatalf("expected revoked device error, got %v", err)
+	}
+}

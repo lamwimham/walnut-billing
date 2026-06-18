@@ -178,6 +178,7 @@ type UserRepository interface {
 // UserDeviceRepository defines data access for access-session device bindings.
 type UserDeviceRepository interface {
 	Create(ctx context.Context, device *domain.UserDevice) error
+	GetByID(ctx context.Context, id string) (*domain.UserDevice, error)
 	GetByUserAndDevice(ctx context.Context, userID string, deviceID string) (*domain.UserDevice, error)
 	ListByUser(ctx context.Context, userID string, status string) ([]domain.UserDevice, error)
 	Update(ctx context.Context, device *domain.UserDevice) error

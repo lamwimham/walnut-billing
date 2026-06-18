@@ -22,6 +22,15 @@ func (m *mockUserDeviceRepo) Create(ctx context.Context, device *domain.UserDevi
 	return nil
 }
 
+func (m *mockUserDeviceRepo) GetByID(ctx context.Context, id string) (*domain.UserDevice, error) {
+	for _, device := range m.devices {
+		if device.ID == id {
+			return device, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
 func (m *mockUserDeviceRepo) GetByUserAndDevice(ctx context.Context, userID string, deviceID string) (*domain.UserDevice, error) {
 	device, ok := m.devices[userID+":"+deviceID]
 	if !ok {
@@ -213,5 +222,27 @@ func TestAccessSessionPolicy_NormalizesTrialConfig(t *testing.T) {
 	}
 	if policy.MaxDevices(context.Background(), AccessSessionInput{}) != 3 {
 		t.Fatalf("expected configured max devices")
+	}
+}
+
+func TestAccessSessionService_RevokedDeviceCannotRestore(t *testing.T) {
+	svc, _, devices, _, _, _ := newAccessSessionTestService(nil)
+	if _, err := svc.RegisterOrRestore(context.Background(), AccessSessionInput{Email: "writer@example.com", DeviceID: "device-1"}); err != nil {
+		t.Fatalf("first register: %v", err)
+	}
+	device := devices.devices["usr_1:device-1"]
+	if device == nil {
+		// User IDs are generated, so find the only device if the deterministic key is unknown.
+		for _, candidate := range devices.devices {
+			device = candidate
+		}
+	}
+	if device == nil {
+		t.Fatalf("expected created device")
+	}
+	device.Status = domain.DeviceStatusDisabled
+	_, err := svc.RegisterOrRestore(context.Background(), AccessSessionInput{Email: "writer@example.com", DeviceID: device.DeviceID})
+	if !errors.Is(err, ErrAccessDeviceRevoked) {
+		t.Fatalf("expected revoked device error, got %v", err)
 	}
 }

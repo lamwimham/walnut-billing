@@ -125,6 +125,30 @@ func TestAccessSessionHandler_UserDisabled(t *testing.T) {
 	}
 }
 
+func TestAccessSessionHandler_DeviceRevoked(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewAccessSessionHandler(&fakeAccessSessionService{err: service.ErrAccessDeviceRevoked}, nil)
+	r := gin.New()
+	r.POST("/access/registrations", h.RegisterOrRestore)
+
+	body := bytes.NewBufferString(`{"email":"writer@example.com","device_id":"device-1"}`)
+	req, _ := http.NewRequest(http.MethodPost, "/access/registrations", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d: %s", w.Code, w.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["code"] != "access_device_revoked" {
+		t.Fatalf("expected stable error code, got %#v", response)
+	}
+}
+
 func TestAccessSessionHandler_UnexpectedError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h := NewAccessSessionHandler(&fakeAccessSessionService{err: errors.New("boom")}, nil)

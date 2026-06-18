@@ -145,6 +145,7 @@ These endpoints provide the first entitlement projection for Walnut clients. Gra
 | GET | `/api/v1/admin/stats` | Stats: total, active, inactive, expired |
 | POST | `/api/v1/admin/licenses/check-expiry` | Deactivate expired subscriptions |
 | GET | `/api/v1/admin/access-accounts?email=&status=&limit=` | Masked access-account view for emails registered through `/api/v1/access/registrations` |
+| POST | `/api/v1/admin/devices/:id/revoke` | Revoke one access device; future login/snapshot refresh for that device returns `access_device_revoked` |
 | GET | `/api/v1/admin/audit?limit=` | Privacy-projected audit logs; email actors are masked and fingerprinted |
 | GET | `/api/v1/admin/registrations?status=` | List legacy entitlement registration requests |
 | POST | `/api/v1/admin/registrations/:id/review` | Approve or reject a registration request |
@@ -178,7 +179,7 @@ All settings via environment variables (see `.env.example`):
 | `SERVER_ENV` | dev | Environment (dev/prod) |
 | `DATABASE_DSN` | ./walnut_billing.db | SQLite database path |
 | `ADMIN_API_KEYS` | (empty) | Comma-separated full-access admin API keys; development shortcut that maps to `admin.*` |
-| `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.audit.read"]}]` |
+| `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.audit.read"]}]`; device revoke requires `admin.access_accounts.write` |
 | `RATELIMIT_ENABLED` | false | Enable IP rate limiting on auth endpoints |
 | `PAYMENT_WECHAT_*` | (empty) | Legacy WeChat Pay V3 credentials; not the current commercialization target |
 | `PAYMENT_ALIPAY_*` | (empty) | Legacy Alipay credentials; not the current commercialization target |

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -57,6 +58,9 @@ func TestAccessAdminServiceMasksEmailAndProjectsCurrentEntitlements(t *testing.T
 	if account.DisplayNameMasked != "W***" || account.ActiveDeviceCount != 1 || account.TrialStatus != domain.TrialGrantStatusIssued {
 		t.Fatalf("expected account summary, got %#v", account)
 	}
+	if len(account.Devices) != 1 || account.Devices[0].ID != "dev_1" || account.Devices[0].DeviceIDMasked == "device-1" || account.Devices[0].DeviceIDFingerprint == "" {
+		t.Fatalf("expected privacy-safe device projection, got %#v", account.Devices)
+	}
 	if !reflect.DeepEqual(account.CurrentEntitlements, []string{domain.EntitlementCloudStorage, domain.EntitlementEditorialStudio}) {
 		t.Fatalf("expected current entitlements only, got %#v", account.CurrentEntitlements)
 	}
@@ -64,7 +68,7 @@ func TestAccessAdminServiceMasksEmailAndProjectsCurrentEntitlements(t *testing.T
 		t.Fatalf("expected legacy entitlements, got %#v", account.LegacyEntitlements)
 	}
 	raw, _ := json.Marshal(result)
-	if strings.Contains(string(raw), "writer@example.com") || strings.Contains(string(raw), "Writer@Example.COM") {
+	if strings.Contains(string(raw), "writer@example.com") || strings.Contains(string(raw), "Writer@Example.COM") || strings.Contains(string(raw), "device-1") {
 		t.Fatalf("admin access account response leaked raw email: %s", raw)
 	}
 }
@@ -84,5 +88,33 @@ func TestAccessAdminServiceMarksExpiredTrials(t *testing.T) {
 	}
 	if result.Accounts[0].TrialStatus != "expired" {
 		t.Fatalf("expected expired trial, got %#v", result.Accounts[0])
+	}
+}
+
+func TestAccessDeviceAdminService_RevokeDevice(t *testing.T) {
+	now := time.Date(2026, 6, 18, 9, 0, 0, 0, time.UTC)
+	devices := newMockUserDeviceRepo()
+	devices.devices["usr_1:device-1"] = &domain.UserDevice{ID: "dev_1", UserID: "usr_1", DeviceID: "device-1", Status: domain.DeviceStatusActive, LastSeenAt: now.Add(-time.Hour)}
+	svc := &accessDeviceAdminService{devices: devices, now: func() time.Time { return now }}
+
+	device, err := svc.RevokeDevice(context.Background(), AccessDeviceRevokeInput{DeviceID: "dev_1", RevokedBy: "ops", Reason: "lost laptop"})
+	if err != nil {
+		t.Fatalf("revoke device: %v", err)
+	}
+	if device.Status != domain.DeviceStatusDisabled || device.RevokedAt == nil || device.RevokedBy != "ops" || device.RevokeReason != "lost laptop" {
+		t.Fatalf("expected revoked device, got %#v", device)
+	}
+
+	again, err := svc.RevokeDevice(context.Background(), AccessDeviceRevokeInput{DeviceID: "dev_1", RevokedBy: "ops"})
+	if err != nil || again.ID != "dev_1" {
+		t.Fatalf("expected idempotent revoke, device=%#v err=%v", again, err)
+	}
+}
+
+func TestAccessDeviceAdminService_RevokeDeviceNotFound(t *testing.T) {
+	svc := NewAccessDeviceAdminService(newMockUserDeviceRepo())
+	_, err := svc.RevokeDevice(context.Background(), AccessDeviceRevokeInput{DeviceID: "missing"})
+	if !errors.Is(err, ErrAccessDeviceNotFound) {
+		t.Fatalf("expected not found, got %v", err)
 	}
 }

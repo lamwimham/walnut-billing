@@ -19,6 +19,14 @@ func (r *UserDeviceRepo) Create(ctx context.Context, device *domain.UserDevice) 
 	return r.DB.WithContext(ctx).Create(device).Error
 }
 
+func (r *UserDeviceRepo) GetByID(ctx context.Context, id string) (*domain.UserDevice, error) {
+	var device domain.UserDevice
+	if err := r.DB.WithContext(ctx).Where("id = ?", id).First(&device).Error; err != nil {
+		return nil, mapGormNotFound(err)
+	}
+	return &device, nil
+}
+
 func (r *UserDeviceRepo) GetByUserAndDevice(ctx context.Context, userID string, deviceID string) (*domain.UserDevice, error) {
 	var device domain.UserDevice
 	if err := r.DB.WithContext(ctx).Where("user_id = ? AND device_id = ?", userID, deviceID).First(&device).Error; err != nil {

@@ -100,3 +100,39 @@ func TestAccessSessionRepositoriesReturnNotFound(t *testing.T) {
 		t.Fatalf("expected trial not found, got %v", err)
 	}
 }
+
+func TestUserDeviceRepo_GetByIDAndPersistRevocation(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:user_device_revoke?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&domain.UserDevice{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repo := &UserDeviceRepo{DB: db}
+	ctx := context.Background()
+	now := time.Date(2026, 6, 18, 9, 0, 0, 0, time.UTC)
+	device := &domain.UserDevice{ID: "dev_revoke", UserID: "usr_1", DeviceID: "device-1", Status: domain.DeviceStatusActive, CreatedAt: now, UpdatedAt: now}
+	if err := repo.Create(ctx, device); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	loaded, err := repo.GetByID(ctx, "dev_revoke")
+	if err != nil || loaded.DeviceID != "device-1" {
+		t.Fatalf("get by id=%#v err=%v", loaded, err)
+	}
+	revokedAt := now.Add(time.Minute)
+	loaded.Status = domain.DeviceStatusDisabled
+	loaded.RevokedAt = &revokedAt
+	loaded.RevokedBy = "ops"
+	loaded.RevokeReason = "lost laptop"
+	if err := repo.Update(ctx, loaded); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	updated, err := repo.GetByID(ctx, "dev_revoke")
+	if err != nil || updated.Status != domain.DeviceStatusDisabled || updated.RevokedAt == nil || updated.RevokedBy != "ops" {
+		t.Fatalf("updated=%#v err=%v", updated, err)
+	}
+	if _, err := repo.GetByID(ctx, "missing"); err != repository.ErrNotFound {
+		t.Fatalf("expected not found, got %v", err)
+	}
+}

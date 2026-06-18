@@ -14,6 +14,7 @@ import (
 var (
 	ErrInvalidAccessSession = errors.New("invalid access session")
 	ErrDeviceLimitExceeded  = errors.New("device limit exceeded")
+	ErrAccessDeviceRevoked  = errors.New("access device revoked")
 	ErrAccessUserDisabled   = errors.New("access user disabled")
 )
 
@@ -235,7 +236,7 @@ func (s *accessSessionServiceImpl) bindDevice(ctx context.Context, devices repos
 	device, err := devices.GetByUserAndDevice(ctx, userID, deviceID)
 	if err == nil {
 		if device.Status != "" && device.Status != domain.DeviceStatusActive {
-			return nil, ErrDeviceLimitExceeded
+			return nil, ErrAccessDeviceRevoked
 		}
 		device.Status = domain.DeviceStatusActive
 		device.LastSeenAt = now

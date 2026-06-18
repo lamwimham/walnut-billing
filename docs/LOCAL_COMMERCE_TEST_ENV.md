@@ -140,6 +140,26 @@ export ADMIN_PRINCIPALS_JSON='[{"name":"support","key":"support-key","permission
 
 Use `support-key` to verify read-only views and `ops-key` to verify management actions such as grant creation, webhook reprocessing, and risk resolution.
 
+Device lifecycle check:
+
+```bash
+# First identify a device id from the privacy-safe access account projection.
+DEVICE_ROW_ID=$(curl -sS -H 'Authorization: Bearer ops-key' \
+  'http://127.0.0.1:8082/api/v1/admin/access-accounts?limit=1' \
+  | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["accounts"][0]["devices"][0]["id"])')
+
+curl -sS -X POST "http://127.0.0.1:8082/api/v1/admin/devices/$DEVICE_ROW_ID/revoke" \
+  -H 'Authorization: Bearer ops-key' \
+  -H 'Content-Type: application/json' \
+  -d '{"revoked_by":"ops","reason":"local lifecycle test"}' | python3 -m json.tool
+```
+
+After revoke, the same device cannot restore or refresh a signed access snapshot; APIs return `access_device_revoked`. Run the contract test with:
+
+```bash
+scripts/verify_access_device_lifecycle_contract.sh
+```
+
 ## 5. Creem Test Mode Profile
 
 Creem test mode must stay isolated from production:

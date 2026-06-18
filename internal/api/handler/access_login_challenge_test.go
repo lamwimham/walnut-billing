@@ -138,6 +138,7 @@ func TestAccessLoginChallengeHandler_MapsErrors(t *testing.T) {
 		{name: "expired", err: service.ErrAccessLoginChallengeExpired, want: http.StatusGone, code: "login_challenge_expired"},
 		{name: "failed", err: service.ErrAccessLoginChallengeFailed, want: http.StatusUnauthorized, code: "login_challenge_failed"},
 		{name: "delivery", err: service.ErrAccessLoginChallengeDeliveryUnavailable, want: http.StatusServiceUnavailable, code: "login_challenge_delivery_unavailable"},
+		{name: "revoked_device", err: service.ErrAccessDeviceRevoked, want: http.StatusForbidden, code: "access_device_revoked"},
 		{name: "device", err: service.ErrDeviceLimitExceeded, want: http.StatusConflict, code: "device_limit_exceeded"},
 		{name: "unknown", err: errors.New("boom"), want: http.StatusInternalServerError},
 	}

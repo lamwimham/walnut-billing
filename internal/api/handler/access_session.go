@@ -54,6 +54,8 @@ func writeAccessSessionError(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_access_session"})
 	case errors.Is(err, service.ErrDeviceLimitExceeded):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "device_limit_exceeded"})
+	case errors.Is(err, service.ErrAccessDeviceRevoked):
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error(), "code": "access_device_revoked"})
 	case errors.Is(err, service.ErrAccessUserDisabled):
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error(), "code": "access_user_disabled"})
 	case errors.Is(err, service.ErrUserNotFound), errors.Is(err, service.ErrUnknownEntitlement):

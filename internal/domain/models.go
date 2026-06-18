@@ -298,14 +298,17 @@ type EntitlementGrant struct {
 // UserDevice records a server-side device binding for access restore and risk
 // control. The raw DeviceID is supplied by the desktop app and scoped per user.
 type UserDevice struct {
-	ID          string    `json:"id" gorm:"primaryKey;size:40"`
-	UserID      string    `json:"user_id" gorm:"size:40;index;uniqueIndex:idx_user_device"`
-	DeviceID    string    `json:"device_id" gorm:"size:128;index;uniqueIndex:idx_user_device"`
-	Status      string    `json:"status" gorm:"size:16;default:'active';index"`
-	FirstSeenAt time.Time `json:"first_seen_at"`
-	LastSeenAt  time.Time `json:"last_seen_at"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           string     `json:"id" gorm:"primaryKey;size:40"`
+	UserID       string     `json:"user_id" gorm:"size:40;index;uniqueIndex:idx_user_device"`
+	DeviceID     string     `json:"device_id" gorm:"size:128;index;uniqueIndex:idx_user_device"`
+	Status       string     `json:"status" gorm:"size:16;default:'active';index"`
+	FirstSeenAt  time.Time  `json:"first_seen_at"`
+	LastSeenAt   time.Time  `json:"last_seen_at"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	RevokedAt    *time.Time `json:"revoked_at"`
+	RevokedBy    string     `json:"revoked_by" gorm:"size:64"`
+	RevokeReason string     `json:"revoke_reason" gorm:"type:text"`
 }
 
 // TrialGrant is the idempotent ledger for one trial allocation. It prevents

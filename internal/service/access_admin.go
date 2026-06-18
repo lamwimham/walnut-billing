@@ -35,23 +35,34 @@ type AccessAccountList struct {
 }
 
 type AccessAccountRecord struct {
-	UserID              string   `json:"user_id"`
-	EmailMasked         string   `json:"email_masked"`
-	EmailFingerprint    string   `json:"email_fingerprint"`
-	EmailDomain         string   `json:"email_domain"`
-	DisplayNameMasked   string   `json:"display_name_masked"`
-	Status              string   `json:"status"`
-	DeviceCount         int      `json:"device_count"`
-	ActiveDeviceCount   int      `json:"active_device_count"`
-	LastSeenAt          string   `json:"last_seen_at"`
-	TrialGrantType      string   `json:"trial_grant_type"`
-	TrialStatus         string   `json:"trial_status"`
-	TrialStartsAt       string   `json:"trial_starts_at"`
-	TrialExpiresAt      string   `json:"trial_expires_at"`
-	CurrentEntitlements []string `json:"current_entitlements"`
-	LegacyEntitlements  []string `json:"legacy_entitlements"`
-	CreatedAt           string   `json:"created_at"`
-	UpdatedAt           string   `json:"updated_at"`
+	UserID              string               `json:"user_id"`
+	EmailMasked         string               `json:"email_masked"`
+	EmailFingerprint    string               `json:"email_fingerprint"`
+	EmailDomain         string               `json:"email_domain"`
+	DisplayNameMasked   string               `json:"display_name_masked"`
+	Status              string               `json:"status"`
+	DeviceCount         int                  `json:"device_count"`
+	ActiveDeviceCount   int                  `json:"active_device_count"`
+	Devices             []AccessDeviceRecord `json:"devices"`
+	LastSeenAt          string               `json:"last_seen_at"`
+	TrialGrantType      string               `json:"trial_grant_type"`
+	TrialStatus         string               `json:"trial_status"`
+	TrialStartsAt       string               `json:"trial_starts_at"`
+	TrialExpiresAt      string               `json:"trial_expires_at"`
+	CurrentEntitlements []string             `json:"current_entitlements"`
+	LegacyEntitlements  []string             `json:"legacy_entitlements"`
+	CreatedAt           string               `json:"created_at"`
+	UpdatedAt           string               `json:"updated_at"`
+}
+
+type AccessDeviceRecord struct {
+	ID                  string `json:"id"`
+	DeviceIDMasked      string `json:"device_id_masked"`
+	DeviceIDFingerprint string `json:"device_id_fingerprint"`
+	Status              string `json:"status"`
+	FirstSeenAt         string `json:"first_seen_at"`
+	LastSeenAt          string `json:"last_seen_at"`
+	RevokedAt           string `json:"revoked_at,omitempty"`
 }
 
 type accessAdminServiceImpl struct {
@@ -97,6 +108,7 @@ func projectAccessAccount(record repository.AccessAccountRecord, now time.Time) 
 		Status:              record.User.Status,
 		DeviceCount:         len(record.Devices),
 		ActiveDeviceCount:   countActiveDevices(record.Devices),
+		Devices:             projectAccessDevices(record.Devices),
 		LastSeenAt:          formatTime(latestDeviceSeenAt(record.Devices)),
 		TrialGrantType:      trial.GrantType,
 		TrialStatus:         trialStatus(trial, now),
@@ -107,6 +119,22 @@ func projectAccessAccount(record repository.AccessAccountRecord, now time.Time) 
 		CreatedAt:           formatTime(record.User.CreatedAt),
 		UpdatedAt:           formatTime(record.User.UpdatedAt),
 	}
+}
+
+func projectAccessDevices(devices []domain.UserDevice) []AccessDeviceRecord {
+	result := make([]AccessDeviceRecord, 0, len(devices))
+	for _, device := range devices {
+		result = append(result, AccessDeviceRecord{
+			ID:                  device.ID,
+			DeviceIDMasked:      maskToken(device.DeviceID),
+			DeviceIDFingerprint: deviceFingerprint(device.DeviceID),
+			Status:              defaultString(device.Status, domain.DeviceStatusActive),
+			FirstSeenAt:         formatTime(device.FirstSeenAt),
+			LastSeenAt:          formatTime(device.LastSeenAt),
+			RevokedAt:           formatOptionalTime(device.RevokedAt),
+		})
+	}
+	return result
 }
 
 func normalizeAccessAccountLimit(limit int) int {
@@ -227,6 +255,15 @@ func emailFingerprint(email string) string {
 		return ""
 	}
 	digest := sha256.Sum256([]byte("walnut-access-admin-v1:" + normalized))
+	return hex.EncodeToString(digest[:])[:12]
+}
+
+func deviceFingerprint(deviceID string) string {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte("walnut-access-device-v1:" + deviceID))
 	return hex.EncodeToString(digest[:])[:12]
 }
 

@@ -36,9 +36,11 @@ func (h *AccessSnapshotHandler) GetSnapshot(c *gin.Context) {
 func writeAccessSnapshotError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidAccessSnapshot):
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_access_snapshot"})
+	case errors.Is(err, service.ErrAccessDeviceRevoked):
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error(), "code": "access_device_revoked"})
 	case errors.Is(err, service.ErrUserNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "access_user_not_found"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}

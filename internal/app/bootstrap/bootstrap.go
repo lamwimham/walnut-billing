@@ -314,6 +314,7 @@ func Build() (*Application, error) {
 		Signer: accessSnapshotSigner,
 	})
 	accessAdminSvc := service.NewAccessAdminService(accessAccountRepo)
+	accessDeviceAdminSvc := service.NewAccessDeviceAdminService(userDeviceRepo)
 	accessSessionSvc := service.NewAccessSessionService(service.AccessSessionDependencies{
 		Repositories: service.AccessSessionRepositories{
 			Users:             userRepo,
@@ -526,7 +527,7 @@ func Build() (*Application, error) {
 		Entitlement:          handler.NewEntitlementHandler(entitlementSvc, auditSvc),
 		AccessSession:        handler.NewAccessSessionHandler(accessSessionSvc, auditSvc),
 		AccessLoginChallenge: handler.NewAccessLoginChallengeHandler(accessLoginChallengeSvc, auditSvc),
-		AccessAdmin:          handler.NewAccessAdminHandler(accessAdminSvc),
+		AccessAdmin:          handler.NewAccessAdminHandler(accessAdminSvc, accessDeviceAdminSvc, auditSvc),
 		AccessSnapshot:       handler.NewAccessSnapshotHandler(accessSnapshotIssuer),
 		Credit:               handler.NewCreditHandler(creditSvc, auditSvc),
 		Checkout:             handler.NewCheckoutHandler(checkoutSvc),

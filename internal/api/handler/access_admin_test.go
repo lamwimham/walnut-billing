@@ -3,10 +3,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"walnut-billing/internal/api/middleware"
+	"walnut-billing/internal/domain"
 	"walnut-billing/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -17,15 +20,29 @@ type fakeAccessAdminService struct {
 	result *service.AccessAccountList
 }
 
+type fakeAccessDeviceAdminService struct {
+	input  service.AccessDeviceRevokeInput
+	device *domain.UserDevice
+	err    error
+}
+
 func (f *fakeAccessAdminService) ListAccounts(ctx context.Context, query service.AccessAdminQuery) (*service.AccessAccountList, error) {
 	f.query = query
 	return f.result, nil
 }
 
+func (f *fakeAccessDeviceAdminService) RevokeDevice(ctx context.Context, input service.AccessDeviceRevokeInput) (*domain.UserDevice, error) {
+	f.input = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.device, nil
+}
+
 func TestAccessAdminHandler_ListAccounts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeAccessAdminService{result: &service.AccessAccountList{Total: 1, Accounts: []service.AccessAccountRecord{{UserID: "usr_1", EmailMasked: "wr**er@example.com"}}}}
-	handler := NewAccessAdminHandler(fake)
+	handler := NewAccessAdminHandler(fake, nil, nil)
 	r := gin.New()
 	r.GET("/admin/access-accounts", handler.ListAccounts)
 
@@ -48,5 +65,93 @@ func TestAccessAdminHandler_ListAccounts(t *testing.T) {
 	}
 	if resp.Total != 1 || resp.Accounts[0].EmailMasked != "wr**er@example.com" {
 		t.Fatalf("unexpected response: %#v", resp)
+	}
+}
+
+func TestAccessAdminHandler_RevokeDevice(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	deviceSvc := &fakeAccessDeviceAdminService{device: &domain.UserDevice{ID: "dev_1", UserID: "usr_1", DeviceID: "device-1", Status: domain.DeviceStatusDisabled}}
+	audit := &mockAuditWithData{}
+	handler := NewAccessAdminHandler(nil, deviceSvc, audit)
+	r := gin.New()
+	r.POST("/admin/devices/:id/revoke", handler.RevokeDevice)
+
+	req, _ := http.NewRequest(http.MethodPost, "/admin/devices/dev_1/revoke", strings.NewReader(`{"revoked_by":"ops","reason":"lost laptop"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if deviceSvc.input.DeviceID != "dev_1" || deviceSvc.input.RevokedBy != "ops" || deviceSvc.input.Reason != "lost laptop" {
+		t.Fatalf("unexpected revoke input: %#v", deviceSvc.input)
+	}
+	if len(audit.entries) != 1 || audit.entries[0].Action != domain.AuditActionAccessDeviceRevoke || !audit.entries[0].Success {
+		t.Fatalf("expected successful revoke audit, got %#v", audit.entries)
+	}
+	if strings.Contains(w.Body.String(), "device-1") {
+		t.Fatalf("revoke response leaked raw device id: %s", w.Body.String())
+	}
+}
+
+func TestAccessAdminHandler_RevokeDeviceUsesAuthenticatedPrincipal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	deviceSvc := &fakeAccessDeviceAdminService{device: &domain.UserDevice{ID: "dev_1", UserID: "usr_1", Status: domain.DeviceStatusDisabled}}
+	audit := &mockAuditWithData{}
+	handler := NewAccessAdminHandler(nil, deviceSvc, audit)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.AdminPrincipalContextKey, middleware.AdminPrincipal{Name: "ops-principal"})
+		c.Next()
+	})
+	r.POST("/admin/devices/:id/revoke", handler.RevokeDevice)
+
+	req, _ := http.NewRequest(http.MethodPost, "/admin/devices/dev_1/revoke", strings.NewReader(`{"revoked_by":"body-actor","reason":"lost laptop"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if deviceSvc.input.RevokedBy != "ops-principal" {
+		t.Fatalf("expected principal actor to override body actor, got %#v", deviceSvc.input)
+	}
+	if len(audit.entries) != 1 || audit.entries[0].Actor != "ops-principal" {
+		t.Fatalf("expected principal audit actor, got %#v", audit.entries)
+	}
+}
+
+func TestAccessAdminHandler_RevokeDeviceMapsErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+		code string
+	}{
+		{"invalid", service.ErrInvalidAccessDevice, http.StatusBadRequest, "invalid_access_device"},
+		{"not_found", service.ErrAccessDeviceNotFound, http.StatusNotFound, "access_device_not_found"},
+		{"unknown", errors.New("boom"), http.StatusInternalServerError, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			handler := NewAccessAdminHandler(nil, &fakeAccessDeviceAdminService{err: tt.err}, nil)
+			r := gin.New()
+			r.POST("/admin/devices/:id/revoke", handler.RevokeDevice)
+
+			req, _ := http.NewRequest(http.MethodPost, "/admin/devices/dev_missing/revoke", strings.NewReader(`{"revoked_by":"ops"}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if w.Code != tt.want {
+				t.Fatalf("expected status %d, got %d: %s", tt.want, w.Code, w.Body.String())
+			}
+			if tt.code != "" && !strings.Contains(w.Body.String(), tt.code) {
+				t.Fatalf("expected error code %s, got %s", tt.code, w.Body.String())
+			}
+		})
 	}
 }

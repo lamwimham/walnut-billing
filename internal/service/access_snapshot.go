@@ -382,6 +382,9 @@ func (i *accessSnapshotIssuer) snapshotDevice(ctx context.Context, user *domain.
 			}
 			return domain.AccessSnapshotDeviceV2{}, err
 		}
+		if device.Status == domain.DeviceStatusDisabled {
+			return domain.AccessSnapshotDeviceV2{}, ErrAccessDeviceRevoked
+		}
 		return deviceSnapshotProjection(device, maxDevices), nil
 	}
 	devices, err := i.repos.Devices.ListByUser(ctx, user.ID, domain.DeviceStatusActive)

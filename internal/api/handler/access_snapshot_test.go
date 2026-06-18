@@ -64,10 +64,12 @@ func TestAccessSnapshotHandler_MapsErrors(t *testing.T) {
 		name string
 		err  error
 		want int
+		code string
 	}{
-		{"invalid", service.ErrInvalidAccessSnapshot, http.StatusBadRequest},
-		{"not_found", service.ErrUserNotFound, http.StatusNotFound},
-		{"other", errors.New("boom"), http.StatusInternalServerError},
+		{"invalid", service.ErrInvalidAccessSnapshot, http.StatusBadRequest, "invalid_access_snapshot"},
+		{"revoked_device", service.ErrAccessDeviceRevoked, http.StatusForbidden, "access_device_revoked"},
+		{"not_found", service.ErrUserNotFound, http.StatusNotFound, "access_user_not_found"},
+		{"other", errors.New("boom"), http.StatusInternalServerError, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -81,6 +83,15 @@ func TestAccessSnapshotHandler_MapsErrors(t *testing.T) {
 			r.ServeHTTP(w, req)
 			if w.Code != tt.want {
 				t.Fatalf("expected %d, got %d: %s", tt.want, w.Code, w.Body.String())
+			}
+			if tt.code != "" {
+				var response map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+				if response["code"] != tt.code {
+					t.Fatalf("expected code %s, got %#v", tt.code, response)
+				}
 			}
 		})
 	}
