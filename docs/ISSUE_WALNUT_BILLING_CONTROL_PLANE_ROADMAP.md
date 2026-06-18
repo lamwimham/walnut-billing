@@ -54,7 +54,7 @@ Walnut App / PC Core
 | 履约 | `internal/service/fulfillment.go` | 已将支付成功投影为 entitlement / credits，方向正确 |
 | Access session | `internal/service/access_session.go` | 已支持邮箱注册/恢复、设备、trial、snapshot issuance |
 | Signed snapshot | `internal/service/access_snapshot.go` | 已支持 snapshot v2、TTL、offline grace、签名 |
-| 订阅取消/恢复 | `internal/service/subscription_cancellation.go` | 已有 Walnut 自有取消事实；后续需接 provider subscription control |
+| 订阅取消/恢复 | `internal/service/subscription_cancellation.go` | 已接 provider-first subscription control，并保留 Walnut 自有取消/恢复事实 |
 | 云存储控制面 | `internal/service/cloud_storage.go` | 已有 provider interface、quota、manifest、object metadata；provider 未配置时显式失败 |
 | 管理后台 | `internal/api/handler/*admin*`, `internal/web/static/index.html` | 已有 API key/RBAC、脱敏账号、dashboard shell；需要用户/订单/云存储运营面完善 |
 | 可重复测试环境 | `scripts/run_deterministic_billing.sh`, `docs/LOCAL_COMMERCE_TEST_ENV.md` | 已具备 mock profile；需要补齐 Creem sandbox 与测试数据 reset 策略 |
@@ -436,8 +436,8 @@ Admin 页面分区：
 | `POST` | `/api/v1/access/login-challenges/verify` | identity | 新增，验证并绑定设备 |
 | `GET` | `/api/v1/users/:user_id/access/snapshot` | access | 已有，需生产签名和错误 code |
 | `POST` | `/api/v1/commerce/checkout-sessions` | commerce | 已有，需补 checkout policy reason |
-| `POST` | `/api/v1/commerce/subscriptions/cancel` | commerce | 已有，需接 provider subscription control |
-| `POST` | `/api/v1/commerce/subscriptions/resume` | commerce | 已有，需接 provider subscription control |
+| `POST` | `/api/v1/commerce/subscriptions/cancel` | commerce | 已接 provider subscription control |
+| `POST` | `/api/v1/commerce/subscriptions/resume` | commerce | 已接 provider subscription control |
 | `POST` | `/api/v1/cloud-storage/sync-sessions` | cloud_storage | 已有，待 provider ADR 后启用 |
 | `POST` | `/api/v1/cloud-storage/manifests` | cloud_storage | 已有，需 sync session 校验 |
 | `GET` | `/api/v1/users/:user_id/cloud-storage/usage` | cloud_storage | 已有 |
@@ -568,6 +568,8 @@ POST /api/v1/access/login-challenges/verify
 ### WCP-3：订阅状态投影和按钮状态闭环（P0）
 
 WCP-3 进展（2026-06-19）：第一切片已完成。新增 service 层 `SoftwareSubscriptionProjector` 作为等价 read model，从 Walnut 自有 `EntitlementGrant` 与 `SubscriptionCancellation` facts 投影 `active`、`cancel_at_period_end`、lifetime 等互斥状态。`SoftwareAccessPlanCheckoutPolicy` 改为依赖投影接口，checkout 被阻断时统一返回 roadmap 约定的机器可读 reason：`already_lifetime`、`subscription_active`、`cancel_at_period_end`、`payment_risk_hold`；handler 映射 `checkout_blocked_by_subscription_state` 且不创建 order/provider session。`AccessSnapshotIssuer` 复用同一投影写入 `license.subscription_status`、`current_period_ends_at`、`cancel_at_period_end`，cancel/resume API response 也返回 projection。该切片未引入 provider-specific 逻辑，Creem 字段仍停留在 payment adapter/order metadata 边界。
+
+WCP-3 进展（2026-06-19）：第二切片已完成。支付层新增可选 `SubscriptionControlProvider` port，`PaymentService` 暴露 provider-neutral cancel/resume facade；mock provider 与 Creem adapter 实现同一接口。Creem test mode 按官方文档使用 `POST /v1/subscriptions/{id}/cancel` 与 `POST /v1/subscriptions/{id}/resume`，test/prod 只由 `PAYMENT_CREEM_SANDBOX`、base URL、key、product map 和 webhook secret 配置切换。`SubscriptionCancellationService` 改为 provider-first 编排：先根据 payment event/order metadata 解析 provider subscription id 并调用 provider cancel/resume，provider 成功后才写 Walnut `SubscriptionCancellation` fact、order metadata 与 projection；provider 失败不写本地取消/恢复事实，可用同一 idempotency key 重试。HTTP handler 返回稳定错误 code：`subscription_control_unavailable`、`subscription_control_failed`、`subscription_not_found`。新增 `scripts/verify_subscription_control_contract.sh` 固化 payment/service/handler/architecture 合同。
 
 目标：服务端提供清晰、互斥、可解释的软件授权状态，让客户端按钮不靠猜。
 

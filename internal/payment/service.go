@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 	"walnut-billing/internal/domain"
@@ -73,6 +74,34 @@ func (s *PaymentService) CreateCheckoutSession(ctx context.Context, providerName
 	}, nil
 }
 
+// CancelSubscription delegates a hosted subscription cancellation to providers
+// that implement the optional subscription-control port.
+func (s *PaymentService) CancelSubscription(ctx context.Context, providerName string, req SubscriptionControlRequest) (*SubscriptionControlResult, error) {
+	provider, err := s.GetProvider(providerName)
+	if err != nil {
+		return nil, err
+	}
+	controlProvider, ok := provider.(SubscriptionControlProvider)
+	if !ok {
+		return nil, ErrSubscriptionControlUnsupported
+	}
+	return controlProvider.CancelSubscription(ctx, req)
+}
+
+// ResumeSubscription delegates a hosted subscription resume to providers that
+// implement the optional subscription-control port.
+func (s *PaymentService) ResumeSubscription(ctx context.Context, providerName string, req SubscriptionControlRequest) (*SubscriptionControlResult, error) {
+	provider, err := s.GetProvider(providerName)
+	if err != nil {
+		return nil, err
+	}
+	controlProvider, ok := provider.(SubscriptionControlProvider)
+	if !ok {
+		return nil, ErrSubscriptionControlUnsupported
+	}
+	return controlProvider.ResumeSubscription(ctx, req)
+}
+
 // VerifyWebhookEvent normalizes a provider webhook event. Providers that expose
 // WebhookVerifier own their signature and payload semantics; legacy callback
 // providers are adapted through VerifyCallback for compatibility.
@@ -101,6 +130,10 @@ func (s *PaymentService) VerifyWebhookEvent(ctx context.Context, providerName st
 		providerTradeNo,
 		outTradeNo,
 	)
+	rawPayload := string(req.RawPayload)
+	if strings.TrimSpace(rawPayload) == "" {
+		rawPayload = encodeWebhookParams(req.Params)
+	}
 	return &VerifiedWebhookEvent{
 		ProviderEventID:   eventID,
 		EventType:         eventType,
@@ -109,7 +142,7 @@ func (s *PaymentService) VerifyWebhookEvent(ctx context.Context, providerName st
 		Amount:            amount,
 		Currency:          strings.TrimSpace(req.Params["currency"]),
 		SignatureVerified: true,
-		RawPayload:        string(req.RawPayload),
+		RawPayload:        rawPayload,
 	}, nil
 }
 
@@ -121,6 +154,21 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func encodeWebhookParams(params map[string]string) string {
+	if len(params) == 0 {
+		return ""
+	}
+	values := url.Values{}
+	for key, value := range params {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		values.Set(key, strings.TrimSpace(value))
+	}
+	return values.Encode()
 }
 
 // CreatePayment generates a payment URL for an existing order.

@@ -518,6 +518,7 @@ func Build() (*Application, error) {
 			PaymentEvents:     paymentEventRepo,
 			Cancellations:     subscriptionCancellationRepo,
 		},
+		ProviderControl:   paymentSvc,
 		UnitOfWorkFactory: uowFactory,
 	})
 

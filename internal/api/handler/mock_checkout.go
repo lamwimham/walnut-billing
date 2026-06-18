@@ -67,6 +67,7 @@ func (h *MockCheckoutHandler) Complete(c *gin.Context) {
 		"out_trade_no":      outTradeNo,
 		"provider_event_id": "evt_paid_" + strings.ReplaceAll(outTradeNo, "-", "_"),
 		"event_type":        "payment.paid",
+		"subscription_id":   "sub_mock_" + strings.ReplaceAll(outTradeNo, "-", "_"),
 		"transaction_id":    "txn_" + outTradeNo,
 		"currency":          "USD",
 	}
@@ -77,6 +78,7 @@ func (h *MockCheckoutHandler) Complete(c *gin.Context) {
 			"out_trade_no":      {params["out_trade_no"]},
 			"provider_event_id": {params["provider_event_id"]},
 			"event_type":        {params["event_type"]},
+			"subscription_id":   {params["subscription_id"]},
 			"transaction_id":    {params["transaction_id"]},
 			"currency":          {params["currency"]},
 		}.Encode()),

@@ -74,6 +74,99 @@ func TestCreemAdapter_CreateCheckoutSessionBuildsProviderRequest(t *testing.T) {
 	}
 }
 
+func TestCreemAdapter_CancelSubscriptionSchedulesProviderCancellation(t *testing.T) {
+	var captured struct {
+		Path    string
+		APIKey  string
+		Payload map[string]any
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.Path = r.URL.Path
+		captured.APIKey = r.Header.Get("x-api-key")
+		if err := json.NewDecoder(r.Body).Decode(&captured.Payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"sub_test_1","status":"scheduled_cancel","current_period_start_date":"2026-06-17T12:00:00Z","current_period_end_date":"2026-07-17T12:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	adapter, err := NewCreemAdapter(CreemConfig{
+		APIKey:        "creem_test_key",
+		WebhookSecret: "whsec_test",
+		SandboxMode:   true,
+		APIBaseURL:    server.URL,
+		ProductIDs:    map[string]string{"pro_own_ai_monthly": "prod_monthly"},
+	})
+	if err != nil {
+		t.Fatalf("create adapter: %v", err)
+	}
+
+	result, err := adapter.CancelSubscription(context.Background(), SubscriptionControlRequest{
+		ProviderSubscriptionID: "sub_test_1",
+		UserID:                 "usr_1",
+		SKUCode:                domain.SKUProOwnAIMonthly,
+		CancelAtPeriodEnd:      true,
+		IdempotencyKey:         "cancel:1",
+	})
+	if err != nil {
+		t.Fatalf("cancel subscription: %v", err)
+	}
+	if captured.Path != "/v1/subscriptions/sub_test_1/cancel" || captured.APIKey != "creem_test_key" {
+		t.Fatalf("unexpected request path/api key: %#v", captured)
+	}
+	if captured.Payload["mode"] != "scheduled" || captured.Payload["onExecute"] != "cancel" {
+		t.Fatalf("expected scheduled cancel payload, got %#v", captured.Payload)
+	}
+	if result.ProviderSubscriptionID != "sub_test_1" || result.Status != "cancel_at_period_end" || !result.CancelAtPeriodEnd || result.CurrentPeriodEndsAt == nil {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestCreemAdapter_ResumeSubscriptionCallsProviderResume(t *testing.T) {
+	var captured struct {
+		Path   string
+		APIKey string
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.Path = r.URL.Path
+		captured.APIKey = r.Header.Get("x-api-key")
+		if r.Body != nil && r.ContentLength > 0 {
+			t.Fatalf("resume request must not send a body")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"sub_test_1","status":"active","current_period_end_date":"2026-07-17T12:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	adapter, err := NewCreemAdapter(CreemConfig{
+		APIKey:        "creem_test_key",
+		WebhookSecret: "whsec_test",
+		SandboxMode:   true,
+		APIBaseURL:    server.URL,
+		ProductIDs:    map[string]string{"pro_own_ai_monthly": "prod_monthly"},
+	})
+	if err != nil {
+		t.Fatalf("create adapter: %v", err)
+	}
+
+	result, err := adapter.ResumeSubscription(context.Background(), SubscriptionControlRequest{
+		ProviderSubscriptionID: "sub_test_1",
+		UserID:                 "usr_1",
+		SKUCode:                domain.SKUProOwnAIMonthly,
+		IdempotencyKey:         "resume:1",
+	})
+	if err != nil {
+		t.Fatalf("resume subscription: %v", err)
+	}
+	if captured.Path != "/v1/subscriptions/sub_test_1/resume" || captured.APIKey != "creem_test_key" {
+		t.Fatalf("unexpected request path/api key: %#v", captured)
+	}
+	if result.ProviderSubscriptionID != "sub_test_1" || result.Status != "active" || result.CancelAtPeriodEnd {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 func TestCreemAdapter_VerifyCheckoutCompletedWebhook(t *testing.T) {
 	adapter, err := NewCreemAdapter(CreemConfig{
 		APIKey:        "creem_test_key",

@@ -384,6 +384,54 @@ func TestPaymentService_CreateCheckoutSession_AdaptsLegacyPaymentProvider(t *tes
 	}
 }
 
+func TestPaymentService_SubscriptionControlUsesOptionalProviderPort(t *testing.T) {
+	orderRepo := newMockOrderRepo()
+	licRepo := newMockLicenseRepo()
+	provider := NewCheckoutMockAdapter("http://localhost/callbacks/mock")
+	registry := NewProviderRegistry()
+	registry.Register("mock", provider, ProviderStatus{IsMock: true})
+	svc := NewPaymentService(orderRepo, licRepo, registry)
+
+	cancelled, err := svc.CancelSubscription(context.Background(), "mock", SubscriptionControlRequest{
+		ProviderSubscriptionID: "sub_mock_1",
+		UserID:                 "usr_1",
+		SKUCode:                domain.SKUProOwnAIMonthly,
+		CancelAtPeriodEnd:      true,
+	})
+	if err != nil {
+		t.Fatalf("cancel subscription: %v", err)
+	}
+	if cancelled.ProviderSubscriptionID != "sub_mock_1" || cancelled.Status != "cancel_at_period_end" || !cancelled.CancelAtPeriodEnd {
+		t.Fatalf("unexpected cancel result: %#v", cancelled)
+	}
+
+	resumed, err := svc.ResumeSubscription(context.Background(), "mock", SubscriptionControlRequest{
+		ProviderSubscriptionID: "sub_mock_1",
+		UserID:                 "usr_1",
+		SKUCode:                domain.SKUProOwnAIMonthly,
+	})
+	if err != nil {
+		t.Fatalf("resume subscription: %v", err)
+	}
+	if resumed.ProviderSubscriptionID != "sub_mock_1" || resumed.Status != "active" || resumed.CancelAtPeriodEnd {
+		t.Fatalf("unexpected resume result: %#v", resumed)
+	}
+}
+
+func TestPaymentService_SubscriptionControlUnsupportedForLegacyProvider(t *testing.T) {
+	orderRepo := newMockOrderRepo()
+	licRepo := newMockLicenseRepo()
+	provider := &MockPaymentProvider{NameStr: "legacy", PaymentURL: "legacy://pay"}
+	registry := NewProviderRegistry()
+	registry.Register("legacy", provider, ProviderStatus{IsMock: true})
+	svc := NewPaymentService(orderRepo, licRepo, registry)
+
+	_, err := svc.CancelSubscription(context.Background(), "legacy", SubscriptionControlRequest{ProviderSubscriptionID: "sub_1"})
+	if !errors.Is(err, ErrSubscriptionControlUnsupported) {
+		t.Fatalf("expected unsupported error, got %v", err)
+	}
+}
+
 func TestCheckoutMockAdapter_UsesConfiguredBaseURLAndCheckoutContext(t *testing.T) {
 	provider := NewCheckoutMockAdapterWithBaseURL("http://localhost/callbacks/mock", "http://127.0.0.1:8082")
 

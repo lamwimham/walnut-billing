@@ -171,11 +171,13 @@ Creem test mode must stay isolated from production:
 - Test and production API keys are separate; never use a `creem_live...` key with sandbox mode or a `creem_test...` key with production mode.
 - Test products are separate from production products. Map every checkout-visible Walnut SKU before enabling Creem (`pro_own_ai_monthly` and `pro_own_ai_lifetime` today).
 - Test webhooks must point to the test webhook URL in the Creem dashboard; production webhooks use a different endpoint/secret.
+- Subscription control uses the same documented paths in test and prod: `POST /v1/subscriptions/{id}/cancel` and `POST /v1/subscriptions/{id}/resume`; switching production is a config change from `PAYMENT_CREEM_SANDBOX=true` to `false` with production credentials.
 
 First run the local adapter/fixture contract; it does not call Creem:
 
 ```bash
 scripts/verify_creem_sandbox_contract.sh
+scripts/verify_subscription_control_contract.sh
 ```
 
 Set these before `scripts/run_local_billing_test_env.sh`:
@@ -203,6 +205,8 @@ https://<public-test-host>/api/v1/webhooks/creem
 ```
 
 Use Creem's successful test card `4242 4242 4242 4242` for paid checkout validation; keep mock checkout as the deterministic CI/local regression path. The adapter refuses obvious sandbox/production endpoint or key mixing before registering the provider.
+
+For monthly subscription cancel/resume validation, ensure the paid checkout or renewal webhook contains a provider subscription id. Billing records it as `walnut_provider_subscription_id` on the Walnut order, then cancel/resume calls Creem first and only writes Walnut cancellation/resume facts after provider success. Provider failures return stable codes (`subscription_control_unavailable` or `subscription_control_failed`) and can be retried with the same idempotency key.
 
 The admin provider status endpoint also reports unavailable Creem state:
 

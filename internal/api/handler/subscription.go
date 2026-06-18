@@ -50,7 +50,7 @@ func (h *SubscriptionHandler) Cancel(c *gin.Context) {
 		IdempotencyKey: req.IdempotencyKey,
 	})
 	if err != nil {
-		c.JSON(subscriptionCancellationErrorStatus(err), gin.H{"error": err.Error()})
+		c.JSON(subscriptionCancellationErrorStatus(err), subscriptionCancellationErrorResponse(err))
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -74,7 +74,7 @@ func (h *SubscriptionHandler) Resume(c *gin.Context) {
 		IdempotencyKey: req.IdempotencyKey,
 	})
 	if err != nil {
-		c.JSON(subscriptionCancellationErrorStatus(err), gin.H{"error": err.Error()})
+		c.JSON(subscriptionCancellationErrorStatus(err), subscriptionCancellationErrorResponse(err))
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -84,6 +84,10 @@ func subscriptionCancellationErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, service.ErrInvalidSubscriptionCancellation):
 		return http.StatusBadRequest
+	case errors.Is(err, service.ErrSubscriptionControlUnavailable):
+		return http.StatusConflict
+	case errors.Is(err, service.ErrSubscriptionControlFailed):
+		return http.StatusBadGateway
 	case errors.Is(err, service.ErrUserNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, service.ErrSubscriptionNotFound):
@@ -91,4 +95,21 @@ func subscriptionCancellationErrorStatus(err error) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+func subscriptionCancellationErrorResponse(err error) gin.H {
+	response := gin.H{"error": err.Error(), "code": "subscription_control_failed"}
+	switch {
+	case errors.Is(err, service.ErrInvalidSubscriptionCancellation):
+		response["code"] = "invalid_subscription_cancellation"
+	case errors.Is(err, service.ErrSubscriptionControlUnavailable):
+		response["code"] = "subscription_control_unavailable"
+	case errors.Is(err, service.ErrSubscriptionControlFailed):
+		response["code"] = "subscription_control_failed"
+	case errors.Is(err, service.ErrUserNotFound):
+		response["code"] = "user_not_found"
+	case errors.Is(err, service.ErrSubscriptionNotFound):
+		response["code"] = "subscription_not_found"
+	}
+	return response
 }

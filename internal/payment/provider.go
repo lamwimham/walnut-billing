@@ -13,6 +13,10 @@ var (
 	ErrWebhookInvalidPayload = errors.New("webhook invalid payload")
 	// ErrWebhookSignatureVerificationFailed marks provider webhook signature failures.
 	ErrWebhookSignatureVerificationFailed = errors.New("webhook signature verification failed")
+	// ErrSubscriptionControlUnsupported marks providers that cannot mutate hosted subscriptions.
+	ErrSubscriptionControlUnsupported = errors.New("subscription control unsupported")
+	// ErrSubscriptionControlInvalidRequest marks missing provider subscription control inputs.
+	ErrSubscriptionControlInvalidRequest = errors.New("invalid subscription control request")
 )
 
 // PaymentProvider defines the interface for payment gateway adapters.
@@ -68,6 +72,37 @@ type CheckoutSession struct {
 type CheckoutProvider interface {
 	Name() string
 	CreateCheckoutSession(ctx context.Context, req CheckoutRequest) (*CheckoutSession, error)
+}
+
+// SubscriptionControlRequest is the provider-neutral contract for hosted
+// subscription lifecycle mutations. Provider adapters own the translation from
+// Walnut's cancel-at-period-end semantics to provider-specific API fields.
+type SubscriptionControlRequest struct {
+	ProviderSubscriptionID string
+	UserID                 string
+	SKUCode                string
+	CancelAtPeriodEnd      bool
+	IdempotencyKey         string
+	Metadata               map[string]string
+}
+
+// SubscriptionControlResult is a normalized view of a provider subscription
+// after a cancel/resume mutation.
+type SubscriptionControlResult struct {
+	ProviderSubscriptionID string
+	Status                 string
+	RawStatus              string
+	CancelAtPeriodEnd      bool
+	CurrentPeriodStartAt   *time.Time
+	CurrentPeriodEndsAt    *time.Time
+}
+
+// SubscriptionControlProvider is an optional extension for providers that can
+// cancel or resume hosted subscriptions.
+type SubscriptionControlProvider interface {
+	Name() string
+	CancelSubscription(ctx context.Context, req SubscriptionControlRequest) (*SubscriptionControlResult, error)
+	ResumeSubscription(ctx context.Context, req SubscriptionControlRequest) (*SubscriptionControlResult, error)
 }
 
 // WebhookVerificationRequest contains the raw provider webhook request after the

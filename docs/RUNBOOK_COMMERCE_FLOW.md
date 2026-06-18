@@ -265,6 +265,29 @@ curl -i -sS -X POST "$BASE_URL/api/v1/commerce/checkout-sessions" \
 - 重新创建月付 checkout 返回 HTTP `409`，`code=checkout_blocked_by_subscription_state`，`reason=cancel_at_period_end`，`action=resume_subscription`。
 - 刷新 signed access snapshot 时 `license.cancel_at_period_end=true` 且 `license.current_period_ends_at` 非空。
 - 调用 `/api/v1/commerce/subscriptions/resume` 后，response 的 `projection.status=active`，重复月付 checkout 仍以 `reason=subscription_active` 阻断。
+- mock paid webhook 会写入 `subscription_id=sub_mock_<out_trade_no>`；cancel/resume 因此会先走 mock `SubscriptionControlProvider`，再写 Walnut `SubscriptionCancellation` fact 和 order metadata。
+
+恢复月付：
+
+```bash
+RESUME_IDEMPOTENCY_KEY="resume:${USER_ID}:$(date +%s)"
+curl -sS -X POST "$BASE_URL/api/v1/commerce/subscriptions/resume" \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"user_id\": \"$USER_ID\",
+    \"sku_code\": \"pro_own_ai_monthly\",
+    \"source\": \"runbook\",
+    \"idempotency_key\": \"$RESUME_IDEMPOTENCY_KEY\"
+  }" | jq .
+```
+
+Provider control 失败时，API 返回稳定 code：
+
+| 场景 | HTTP | code |
+|---|---:|---|
+| Provider 不支持 subscription control | 409 | `subscription_control_unavailable` |
+| Provider API 请求失败或返回非 2xx | 502 | `subscription_control_failed` |
+| 当前用户/SKU 没有可恢复订阅 | 404 | `subscription_not_found` |
 
 ### 5. 验证重复 webhook 幂等
 
@@ -281,6 +304,22 @@ curl -sS -X POST "$BASE_URL/api/v1/webhooks/mock?out_trade_no=$OUT_TRADE_NO&prov
 
 只有在 mock-provider 流程通过后，再验证真实 Creem adapter。
 
+Creem test mode 与生产 mode 使用同一套 subscription control API，区别只在 base URL 与 key/product/webhook secret：
+
+| 操作 | Method / Path | Test base URL |
+|---|---|---|
+| checkout | `POST /v1/checkouts` | `https://test-api.creem.io` |
+| cancel monthly | `POST /v1/subscriptions/{id}/cancel` | `https://test-api.creem.io` |
+| resume monthly | `POST /v1/subscriptions/{id}/resume` | `https://test-api.creem.io` |
+
+Walnut 的 cancel-at-period-end 语义映射到 Creem cancel body：
+
+```json
+{"mode":"scheduled","onExecute":"cancel"}
+```
+
+后续切生产时，保持 Walnut API 不变，只把 `PAYMENT_CREEM_SANDBOX=false` 并使用生产 API key/product map/webhook secret；`PAYMENT_CREEM_API_BASE_URL` 通常继续留空，由 adapter 选择 `https://api.creem.io`。
+
 ### 1. 确认 Creem adapter 已注册
 
 ```bash
@@ -293,6 +332,7 @@ curl -sS "$BASE_URL/api/v1/admin/payment/providers" \
 - `creem` 出现在 provider 列表中。
 - `is_mock` 为 false。
 - `sandbox_mode` 与 `PAYMENT_CREEM_SANDBOX` 一致。
+- Provider 状态 active 后，checkout、webhook、subscription cancel/resume 都走同一个 Creem adapter 边界；App 不接触 Creem subscription id。
 
 如果未出现 `creem`，检查：
 
@@ -354,6 +394,8 @@ https://<public-host>/api/v1/webhooks/creem
 ```
 
 本地测试可通过 tunnel 或反向代理暴露服务，再把 Creem webhook endpoint 指向 tunnel URL。PC/mobile 仍只调用 walnut-billing，不调用 Creem。
+
+成功月付 checkout/renewal webhook 必须包含或可从 payload 推导 Creem subscription id；billing 会把它记录为 order metadata 中的 `walnut_provider_subscription_id`。后续 `/commerce/subscriptions/cancel` 和 `/commerce/subscriptions/resume` 通过该 id 调用 Creem subscription control，再写 Walnut 自有 projection。若 provider 调用失败，Walnut 不写取消/恢复 fact，用户可用相同 `idempotency_key` 重试。
 
 ### 4. 本地模拟 Creem 签名 webhook
 

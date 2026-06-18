@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"walnut-billing/internal/domain"
@@ -60,6 +61,7 @@ type CreemAdapter struct {
 var _ PaymentProvider = (*CreemAdapter)(nil)
 var _ CheckoutProvider = (*CreemAdapter)(nil)
 var _ WebhookVerifier = (*CreemAdapter)(nil)
+var _ SubscriptionControlProvider = (*CreemAdapter)(nil)
 
 func NewCreemAdapter(cfg CreemConfig) (*CreemAdapter, error) {
 	products, err := creemProductMap(cfg.ProductIDs, cfg.ProductMapJSON)
@@ -166,6 +168,39 @@ func (c *CreemAdapter) VerifyCallback(ctx context.Context, params map[string]str
 	return "", "", 0, ErrCreemCheckoutUnsupported
 }
 
+func (c *CreemAdapter) CancelSubscription(ctx context.Context, req SubscriptionControlRequest) (*SubscriptionControlResult, error) {
+	if c == nil {
+		return nil, ErrCreemInvalidConfig
+	}
+	subscriptionID := strings.TrimSpace(req.ProviderSubscriptionID)
+	if subscriptionID == "" {
+		return nil, ErrSubscriptionControlInvalidRequest
+	}
+	body := creemSubscriptionCancelRequest{
+		Mode:      "immediate",
+		OnExecute: "cancel",
+	}
+	if req.CancelAtPeriodEnd {
+		body.Mode = "scheduled"
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	return c.doSubscriptionControl(ctx, http.MethodPost, subscriptionID, "cancel", bytes.NewReader(payload))
+}
+
+func (c *CreemAdapter) ResumeSubscription(ctx context.Context, req SubscriptionControlRequest) (*SubscriptionControlResult, error) {
+	if c == nil {
+		return nil, ErrCreemInvalidConfig
+	}
+	subscriptionID := strings.TrimSpace(req.ProviderSubscriptionID)
+	if subscriptionID == "" {
+		return nil, ErrSubscriptionControlInvalidRequest
+	}
+	return c.doSubscriptionControl(ctx, http.MethodPost, subscriptionID, "resume", nil)
+}
+
 func (c *CreemAdapter) VerifyWebhookEvent(ctx context.Context, req WebhookVerificationRequest) (*VerifiedWebhookEvent, error) {
 	if c == nil || strings.TrimSpace(c.webhookSecret) == "" || len(req.RawPayload) == 0 {
 		return nil, fmt.Errorf("%w: %w", ErrWebhookInvalidPayload, ErrCreemInvalidWebhook)
@@ -229,6 +264,58 @@ type creemCheckoutResponse struct {
 	Customer         struct {
 		ID string `json:"id"`
 	} `json:"customer"`
+}
+
+type creemSubscriptionCancelRequest struct {
+	Mode      string `json:"mode,omitempty"`
+	OnExecute string `json:"onExecute,omitempty"`
+}
+
+type creemSubscriptionResponse struct {
+	ID                     string `json:"id"`
+	Status                 string `json:"status"`
+	CurrentPeriodStartDate string `json:"current_period_start_date"`
+	CurrentPeriodEndDate   string `json:"current_period_end_date"`
+}
+
+func (c *CreemAdapter) doSubscriptionControl(ctx context.Context, method string, subscriptionID string, action string, body io.Reader) (*SubscriptionControlResult, error) {
+	endpoint := fmt.Sprintf("%s/v1/subscriptions/%s/%s", strings.TrimRight(c.apiBaseURL, "/"), urlPathEscape(subscriptionID), strings.Trim(action, "/"))
+	httpReq, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("x-api-key", c.apiKey)
+	if body != nil {
+		httpReq.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("creem subscription %s request: %w", action, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("creem subscription %s error: status=%d body=%s", action, resp.StatusCode, string(respBody))
+	}
+
+	var subscription creemSubscriptionResponse
+	if err := json.Unmarshal(respBody, &subscription); err != nil {
+		return nil, fmt.Errorf("parse creem subscription %s response: %w", action, err)
+	}
+	providerSubscriptionID := firstNonEmpty(subscription.ID, subscriptionID)
+	if providerSubscriptionID == "" {
+		return nil, fmt.Errorf("creem subscription %s response missing id", action)
+	}
+	rawStatus := strings.TrimSpace(subscription.Status)
+	return &SubscriptionControlResult{
+		ProviderSubscriptionID: providerSubscriptionID,
+		Status:                 normalizeCreemSubscriptionControlStatus(rawStatus),
+		RawStatus:              rawStatus,
+		CancelAtPeriodEnd:      rawStatus == "scheduled_cancel",
+		CurrentPeriodStartAt:   parseCreemTime(subscription.CurrentPeriodStartDate),
+		CurrentPeriodEndsAt:    parseCreemTime(subscription.CurrentPeriodEndDate),
+	}, nil
 }
 
 func validateCreemRequiredProducts(products map[string]string, requiredSKUCodes []string) error {
@@ -357,6 +444,21 @@ func creemCheckoutMetadata(req CheckoutRequest, defaultCancelURL string) map[str
 		return nil
 	}
 	return metadata
+}
+
+func normalizeCreemSubscriptionControlStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "scheduled_cancel":
+		return "cancel_at_period_end"
+	case "canceled":
+		return "cancelled"
+	default:
+		return strings.TrimSpace(status)
+	}
+}
+
+func urlPathEscape(value string) string {
+	return url.PathEscape(strings.TrimSpace(value))
 }
 
 func verifyCreemSignature(payload []byte, secret string, signature string) bool {

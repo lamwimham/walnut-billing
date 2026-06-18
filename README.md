@@ -104,10 +104,20 @@ Subscription webhooks are normalized into Walnut-owned events before they affect
 
 Creem-specific statuses remain inside the payment adapter. PC/mobile gates still consume only Walnut projections: `EntitlementSnapshot`, credit balances, and signed access snapshots. The software subscription projection normalizes active monthly, `cancel_at_period_end`, and lifetime states from Walnut grants plus cancellation facts; signed snapshots expose the same `subscription_status`, `current_period_ends_at`, and `cancel_at_period_end` values.
 
+Cancel/resume uses an optional `SubscriptionControlProvider` port. Mock and Creem implement it; legacy providers return `subscription_control_unavailable`. The service calls the provider first using the order's provider subscription id, then writes Walnut `SubscriptionCancellation` facts and order metadata. If the provider call fails, no local cancellation/resume fact is written and clients can retry with the same idempotency key. Creem test mode uses the same subscription endpoints as production (`POST /v1/subscriptions/{id}/cancel` and `POST /v1/subscriptions/{id}/resume`); only the configured base URL/key/product map change.
+
 | Method | Path | Notes |
 |--------|------|-------|
 | POST | `/api/v1/commerce/subscriptions/cancel` | Mark monthly renewal as `cancel_at_period_end`; current-period Pro access remains active |
 | POST | `/api/v1/commerce/subscriptions/resume` | Clear the cancel-at-period-end fact and return the active subscription projection |
+
+Stable subscription-control errors:
+
+| code | HTTP | Meaning |
+|------|-----:|---------|
+| `subscription_control_unavailable` | 409 | The selected provider does not support hosted subscription cancel/resume |
+| `subscription_control_failed` | 502 | The provider subscription API failed; local Walnut facts were not changed |
+| `subscription_not_found` | 404 | No active/cancel-at-period-end monthly subscription exists for the user/SKU |
 
 ### Payment Webhook Inbox
 
@@ -179,6 +189,7 @@ Access session responses include a service-owned `device_capacity` projection wi
 ## Runbooks
 
 - `docs/RUNBOOK_COMMERCE_FLOW.md`: executable local/test checklist for checkout, webhook inbox, fulfillment, dispute hold, and admin risk resolution.
+- `scripts/verify_subscription_control_contract.sh`: local contract for the provider subscription-control port, subscription service, handler errors, and architecture boundaries.
 
 ## Configuration
 
@@ -196,8 +207,8 @@ All settings via environment variables (see `.env.example`):
 | `PAYMENT_ALIPAY_*` | (empty) | Legacy Alipay credentials; not the current commercialization target |
 | `PAYMENT_CREEM_API_KEY` | (empty) | Creem API key; server-side only |
 | `PAYMENT_CREEM_WEBHOOK_SECRET` | (empty) | Creem webhook HMAC secret |
-| `PAYMENT_CREEM_SANDBOX` | true | Use `https://test-api.creem.io` unless explicitly false |
-| `PAYMENT_CREEM_API_BASE_URL` | (empty) | Optional override for Creem API base URL; normally leave empty |
+| `PAYMENT_CREEM_SANDBOX` | true | Use `https://test-api.creem.io` for checkout and subscription control unless explicitly false |
+| `PAYMENT_CREEM_API_BASE_URL` | (empty) | Optional override for Creem API base URL; normally leave empty so sandbox/prod chooses the documented default |
 | `PAYMENT_CREEM_SUCCESS_URL` | (empty) | Default hosted checkout success URL; request value can override it |
 | `PAYMENT_CREEM_CANCEL_URL` | (empty) | Default hosted checkout cancel URL stored in Walnut metadata |
 | `PAYMENT_CREEM_PRODUCT_MAP_JSON` | (empty) | Walnut SKU to Creem product ID map, e.g. `{"pro_own_ai_monthly":"prod_4MS4IC77zjEobSHExt0gcr"}` |
@@ -268,7 +279,7 @@ Bucket expiry is exposed through `POST /api/v1/admin/credits/buckets/expire` for
 | Pattern | Application |
 |---------|-------------|
 | Factory | License key generation (product-specific formats) |
-| Adapter | Creem hosted checkout and webhook verifier; legacy WeChat/Alipay remain behind the same interface |
+| Adapter | Creem hosted checkout, webhook verifier, and subscription control; legacy WeChat/Alipay remain behind the same interface |
 | Facade | Commerce checkout entry point hides provider details from PC/mobile clients |
 | Repository | Data access abstraction (interface → GORM implementation) |
 | UnitOfWork | Database transactions for license creation and commerce fulfillment |
@@ -278,6 +289,7 @@ Bucket expiry is exposed through `POST /api/v1/admin/credits/buckets/expire` for
 | PaymentEventService | Webhook inbox, provider event idempotency, retries, and reprocessing |
 | FulfillmentService | Rule-engine facade for paid order delivery into grants and credit ledger rows |
 | SubscriptionRenewalService | Provider-agnostic renewal/grace policy executor |
+| SubscriptionControlProvider | Optional provider port for cancel/resume; payment adapters own test/prod URL and payload translation |
 | Strategy | Fulfillment rule executors, payment adjustment policy, and subscription renewal policy |
 | Catalog | Validates stable entitlement IDs and configurable fulfillment rules independently from provider copy |
 | Bucket FEFO | Credit bucket allocation and expiry prioritize earliest expiring credits first |

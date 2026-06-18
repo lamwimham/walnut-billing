@@ -4,15 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 	"walnut-billing/internal/domain"
+	"walnut-billing/internal/payment"
 	"walnut-billing/internal/repository"
 )
 
 var (
 	ErrInvalidSubscriptionCancellation = errors.New("invalid subscription cancellation request")
 	ErrSubscriptionNotFound            = errors.New("subscription not found")
+	ErrSubscriptionControlUnavailable  = errors.New("subscription control unavailable")
+	ErrSubscriptionControlFailed       = errors.New("subscription control failed")
 )
 
 const (
@@ -68,23 +72,34 @@ type SubscriptionCancellationRepositories struct {
 	Cancellations     repository.SubscriptionCancellationRepository
 }
 
+// SubscriptionControlGateway is the commerce-owned provider boundary for hosted
+// subscription lifecycle changes. payment.PaymentService implements it without
+// leaking concrete provider adapters into subscription orchestration.
+type SubscriptionControlGateway interface {
+	CancelSubscription(ctx context.Context, providerName string, req payment.SubscriptionControlRequest) (*payment.SubscriptionControlResult, error)
+	ResumeSubscription(ctx context.Context, providerName string, req payment.SubscriptionControlRequest) (*payment.SubscriptionControlResult, error)
+}
+
 type SubscriptionCancellationDependencies struct {
 	Repositories      SubscriptionCancellationRepositories
+	ProviderControl   SubscriptionControlGateway
 	UnitOfWorkFactory func() repository.UnitOfWork
 	Now               func() time.Time
 }
 
 type subscriptionCancellationServiceImpl struct {
-	repos      SubscriptionCancellationRepositories
-	uowFactory func() repository.UnitOfWork
-	now        func() time.Time
+	repos           SubscriptionCancellationRepositories
+	providerControl SubscriptionControlGateway
+	uowFactory      func() repository.UnitOfWork
+	now             func() time.Time
 }
 
 func NewSubscriptionCancellationService(deps SubscriptionCancellationDependencies) SubscriptionCancellationService {
 	return &subscriptionCancellationServiceImpl{
-		repos:      deps.Repositories,
-		uowFactory: deps.UnitOfWorkFactory,
-		now:        deps.Now,
+		repos:           deps.Repositories,
+		providerControl: deps.ProviderControl,
+		uowFactory:      deps.UnitOfWorkFactory,
+		now:             deps.Now,
 	}
 }
 
@@ -93,8 +108,12 @@ func (s *subscriptionCancellationServiceImpl) Cancel(ctx context.Context, input 
 	if s == nil || !s.hasRequiredRepos(s.repos) || input.UserID == "" || input.SKUCode == "" {
 		return nil, ErrInvalidSubscriptionCancellation
 	}
+	providerControl, err := s.prepareCancelProviderControl(ctx, input)
+	if err != nil {
+		return nil, err
+	}
 	return s.withCancellationTransaction(ctx, func(repos SubscriptionCancellationRepositories) (*SubscriptionCancellationResult, error) {
-		return s.cancelWithRepos(ctx, repos, input)
+		return s.cancelWithRepos(ctx, repos, input, providerControl)
 	})
 }
 
@@ -103,12 +122,16 @@ func (s *subscriptionCancellationServiceImpl) Resume(ctx context.Context, input 
 	if s == nil || !s.hasRequiredRepos(s.repos) || input.UserID == "" || input.SKUCode == "" {
 		return nil, ErrInvalidSubscriptionCancellation
 	}
+	providerControl, err := s.prepareResumeProviderControl(ctx, input)
+	if err != nil {
+		return nil, err
+	}
 	return s.withCancellationTransaction(ctx, func(repos SubscriptionCancellationRepositories) (*SubscriptionCancellationResult, error) {
-		return s.resumeWithRepos(ctx, repos, input)
+		return s.resumeWithRepos(ctx, repos, input, providerControl)
 	})
 }
 
-func (s *subscriptionCancellationServiceImpl) cancelWithRepos(ctx context.Context, repos SubscriptionCancellationRepositories, input SubscriptionCancellationInput) (*SubscriptionCancellationResult, error) {
+func (s *subscriptionCancellationServiceImpl) cancelWithRepos(ctx context.Context, repos SubscriptionCancellationRepositories, input SubscriptionCancellationInput, providerControl *payment.SubscriptionControlResult) (*SubscriptionCancellationResult, error) {
 	if _, err := repos.Users.GetByID(ctx, input.UserID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, ErrUserNotFound
@@ -126,7 +149,7 @@ func (s *subscriptionCancellationServiceImpl) cancelWithRepos(ctx context.Contex
 	if err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return nil, err
 	}
-	order, err = markProviderSubscriptionCancellation(ctx, repos.Orders, repos.PaymentEvents, order, input, s.currentTime())
+	order, err = markProviderSubscriptionCancellation(ctx, repos.Orders, repos.PaymentEvents, order, input, providerControl, s.currentTime())
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +163,7 @@ func (s *subscriptionCancellationServiceImpl) cancelWithRepos(ctx context.Contex
 	return subscriptionCancellationResult(input, order, period, cancellation), nil
 }
 
-func (s *subscriptionCancellationServiceImpl) resumeWithRepos(ctx context.Context, repos SubscriptionCancellationRepositories, input SubscriptionResumeInput) (*SubscriptionCancellationResult, error) {
+func (s *subscriptionCancellationServiceImpl) resumeWithRepos(ctx context.Context, repos SubscriptionCancellationRepositories, input SubscriptionResumeInput, providerControl *payment.SubscriptionControlResult) (*SubscriptionCancellationResult, error) {
 	if _, err := repos.Users.GetByID(ctx, input.UserID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, ErrUserNotFound
@@ -151,7 +174,14 @@ func (s *subscriptionCancellationServiceImpl) resumeWithRepos(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	if _, err := markProviderSubscriptionResumed(ctx, repos.Orders, repos.PaymentEvents, input, s.currentTime()); err != nil {
+	order, err := repos.Orders.FindLatestSubscriptionOrder(ctx, repository.SubscriptionOrderQuery{
+		UserID:  input.UserID,
+		SKUCode: input.SKUCode,
+	})
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+	if _, err := markProviderSubscriptionResumed(ctx, repos.Orders, repos.PaymentEvents, order, input, providerControl, s.currentTime()); err != nil {
 		return nil, err
 	}
 	cancellation, err := resumeSubscriptionCancellation(ctx, repos.Cancellations, input, s.currentTime())
@@ -170,6 +200,153 @@ func (s *subscriptionCancellationServiceImpl) currentTime() time.Time {
 		return s.now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (s *subscriptionCancellationServiceImpl) prepareCancelProviderControl(ctx context.Context, input SubscriptionCancellationInput) (*payment.SubscriptionControlResult, error) {
+	if s == nil || s.providerControl == nil {
+		return nil, nil
+	}
+	if input.IdempotencyKey != "" {
+		existing, err := s.repos.Cancellations.GetByIdempotencyKey(ctx, input.IdempotencyKey)
+		if err == nil && existing.Status == SubscriptionCancellationStatusCancelAtPeriodEnd && existing.CancelAtPeriodEnd {
+			return nil, nil
+		}
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return nil, err
+		}
+	}
+	if _, err := s.repos.Users.GetByID(ctx, input.UserID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	if _, err := currentSubscriptionPeriod(ctx, s.repos.EntitlementGrants, input.UserID, input.SKUCode, s.currentTime()); err != nil {
+		return nil, err
+	}
+	order, err := s.repos.Orders.FindLatestSubscriptionOrder(ctx, repository.SubscriptionOrderQuery{
+		UserID:  input.UserID,
+		SKUCode: input.SKUCode,
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return s.cancelProviderSubscription(ctx, s.repos.PaymentEvents, order, input)
+}
+
+func (s *subscriptionCancellationServiceImpl) prepareResumeProviderControl(ctx context.Context, input SubscriptionResumeInput) (*payment.SubscriptionControlResult, error) {
+	if s == nil || s.providerControl == nil {
+		return nil, nil
+	}
+	if _, err := s.repos.Users.GetByID(ctx, input.UserID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	if _, err := currentSubscriptionPeriod(ctx, s.repos.EntitlementGrants, input.UserID, input.SKUCode, s.currentTime()); err != nil {
+		return nil, err
+	}
+	if input.IdempotencyKey != "" {
+		existing, err := s.repos.Cancellations.GetByResumeIdempotencyKey(ctx, input.IdempotencyKey)
+		if err == nil && existing.Status != SubscriptionCancellationStatusCancelAtPeriodEnd && !existing.CancelAtPeriodEnd {
+			return nil, nil
+		}
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return nil, err
+		}
+	}
+	if _, err := s.repos.Cancellations.FindActive(ctx, repository.SubscriptionCancellationQuery{
+		UserID:  input.UserID,
+		SKUCode: input.SKUCode,
+		Status:  SubscriptionCancellationStatusCancelAtPeriodEnd,
+	}); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrSubscriptionNotFound
+		}
+		return nil, err
+	}
+	order, err := s.repos.Orders.FindLatestSubscriptionOrder(ctx, repository.SubscriptionOrderQuery{
+		UserID:  input.UserID,
+		SKUCode: input.SKUCode,
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return s.resumeProviderSubscription(ctx, s.repos.PaymentEvents, order, input)
+}
+
+func (s *subscriptionCancellationServiceImpl) cancelProviderSubscription(
+	ctx context.Context,
+	events repository.PaymentEventRepository,
+	order *domain.Order,
+	input SubscriptionCancellationInput,
+) (*payment.SubscriptionControlResult, error) {
+	if s == nil || s.providerControl == nil || order == nil {
+		return nil, nil
+	}
+	subscriptionID := providerSubscriptionIDForOrder(ctx, events, order)
+	if subscriptionID == "" {
+		return nil, nil
+	}
+	result, err := s.providerControl.CancelSubscription(ctx, order.Provider, payment.SubscriptionControlRequest{
+		ProviderSubscriptionID: subscriptionID,
+		UserID:                 input.UserID,
+		SKUCode:                input.SKUCode,
+		CancelAtPeriodEnd:      true,
+		IdempotencyKey:         input.IdempotencyKey,
+		Metadata: map[string]string{
+			"walnut_out_trade_no": order.OutTradeNo,
+			"walnut_action":       "subscription_cancel",
+			"walnut_source":       input.Source,
+		},
+	})
+	if err != nil {
+		if errors.Is(err, payment.ErrSubscriptionControlUnsupported) {
+			return nil, ErrSubscriptionControlUnavailable
+		}
+		return nil, errors.Join(ErrSubscriptionControlFailed, err)
+	}
+	return result, nil
+}
+
+func (s *subscriptionCancellationServiceImpl) resumeProviderSubscription(
+	ctx context.Context,
+	events repository.PaymentEventRepository,
+	order *domain.Order,
+	input SubscriptionResumeInput,
+) (*payment.SubscriptionControlResult, error) {
+	if s == nil || s.providerControl == nil || order == nil {
+		return nil, nil
+	}
+	subscriptionID := providerSubscriptionIDForOrder(ctx, events, order)
+	if subscriptionID == "" {
+		return nil, nil
+	}
+	result, err := s.providerControl.ResumeSubscription(ctx, order.Provider, payment.SubscriptionControlRequest{
+		ProviderSubscriptionID: subscriptionID,
+		UserID:                 input.UserID,
+		SKUCode:                input.SKUCode,
+		IdempotencyKey:         input.IdempotencyKey,
+		Metadata: map[string]string{
+			"walnut_out_trade_no": order.OutTradeNo,
+			"walnut_action":       "subscription_resume",
+			"walnut_source":       input.Source,
+		},
+	})
+	if err != nil {
+		if errors.Is(err, payment.ErrSubscriptionControlUnsupported) {
+			return nil, ErrSubscriptionControlUnavailable
+		}
+		return nil, errors.Join(ErrSubscriptionControlFailed, err)
+	}
+	return result, nil
 }
 
 func (s *subscriptionCancellationServiceImpl) withCancellationTransaction(
@@ -344,6 +521,7 @@ func markProviderSubscriptionCancellation(
 	events repository.PaymentEventRepository,
 	order *domain.Order,
 	input SubscriptionCancellationInput,
+	providerControl *payment.SubscriptionControlResult,
 	now time.Time,
 ) (*domain.Order, error) {
 	if order == nil || orders == nil {
@@ -355,9 +533,10 @@ func markProviderSubscriptionCancellation(
 	changed = putOrderMetadata(metadata, "walnut_subscription_cancel_source", input.Source) || changed
 	changed = putOrderMetadata(metadata, "walnut_subscription_cancel_reason", input.Reason) || changed
 	changed = putOrderMetadata(metadata, "walnut_subscription_cancelled_at", now.UTC().Format(time.RFC3339)) || changed
-	if providerSubscriptionID := currentProviderSubscriptionID(ctx, events, order.OutTradeNo); providerSubscriptionID != "" {
+	if providerSubscriptionID := firstProviderSubscriptionID(providerControl, providerSubscriptionIDForOrder(ctx, events, order)); providerSubscriptionID != "" {
 		changed = putOrderMetadata(metadata, "walnut_provider_subscription_id", providerSubscriptionID) || changed
 	}
+	changed = putProviderControlMetadata(metadata, providerControl) || changed
 	if !changed {
 		return order, nil
 	}
@@ -372,30 +551,23 @@ func markProviderSubscriptionResumed(
 	ctx context.Context,
 	orders repository.OrderRepository,
 	events repository.PaymentEventRepository,
+	order *domain.Order,
 	input SubscriptionResumeInput,
+	providerControl *payment.SubscriptionControlResult,
 	now time.Time,
 ) (*domain.Order, error) {
-	if orders == nil {
+	if order == nil || orders == nil {
 		return nil, nil
-	}
-	order, err := orders.FindLatestSubscriptionOrder(ctx, repository.SubscriptionOrderQuery{
-		UserID:  input.UserID,
-		SKUCode: input.SKUCode,
-	})
-	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return nil, nil
-		}
-		return nil, err
 	}
 	metadata := orderMetadataMap(order.Metadata)
 	changed := putOrderMetadata(metadata, "walnut_subscription_status", SubscriptionStatusActive)
 	changed = putOrderMetadata(metadata, "walnut_cancel_at_period_end", "false") || changed
 	changed = putOrderMetadata(metadata, "walnut_subscription_resume_source", input.Source) || changed
 	changed = putOrderMetadata(metadata, "walnut_subscription_resumed_at", now.UTC().Format(time.RFC3339)) || changed
-	if providerSubscriptionID := currentProviderSubscriptionID(ctx, events, order.OutTradeNo); providerSubscriptionID != "" {
+	if providerSubscriptionID := firstProviderSubscriptionID(providerControl, providerSubscriptionIDForOrder(ctx, events, order)); providerSubscriptionID != "" {
 		changed = putOrderMetadata(metadata, "walnut_provider_subscription_id", providerSubscriptionID) || changed
 	}
+	changed = putProviderControlMetadata(metadata, providerControl) || changed
 	if !changed {
 		return order, nil
 	}
@@ -420,6 +592,20 @@ func currentProviderSubscriptionID(ctx context.Context, events repository.Paymen
 		}
 	}
 	return ""
+}
+
+func providerSubscriptionIDForOrder(ctx context.Context, events repository.PaymentEventRepository, order *domain.Order) string {
+	if order == nil {
+		return ""
+	}
+	metadata := orderMetadataMap(order.Metadata)
+	if id := metadata["walnut_provider_subscription_id"]; id != "" {
+		return id
+	}
+	if id := metadata["provider_subscription_id"]; id != "" {
+		return id
+	}
+	return currentProviderSubscriptionID(ctx, events, order.OutTradeNo)
 }
 
 func orderMetadataMap(raw string) map[string]string {
@@ -459,6 +645,29 @@ func putOrderMetadata(metadata map[string]string, key string, value string) bool
 	return true
 }
 
+func firstProviderSubscriptionID(result *payment.SubscriptionControlResult, fallback string) string {
+	if result != nil && strings.TrimSpace(result.ProviderSubscriptionID) != "" {
+		return strings.TrimSpace(result.ProviderSubscriptionID)
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func putProviderControlMetadata(metadata map[string]string, result *payment.SubscriptionControlResult) bool {
+	if result == nil {
+		return false
+	}
+	changed := false
+	changed = putOrderMetadata(metadata, "walnut_provider_subscription_status", result.Status) || changed
+	changed = putOrderMetadata(metadata, "walnut_provider_subscription_raw_status", result.RawStatus) || changed
+	if result.CurrentPeriodStartAt != nil {
+		changed = putOrderMetadata(metadata, "walnut_provider_period_start_at", result.CurrentPeriodStartAt.UTC().Format(time.RFC3339)) || changed
+	}
+	if result.CurrentPeriodEndsAt != nil {
+		changed = putOrderMetadata(metadata, "walnut_provider_period_end_at", result.CurrentPeriodEndsAt.UTC().Format(time.RFC3339)) || changed
+	}
+	return changed
+}
+
 func providerSubscriptionIDFromRawPayload(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -466,14 +675,31 @@ func providerSubscriptionIDFromRawPayload(raw string) string {
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		if values, parseErr := url.ParseQuery(raw); parseErr == nil {
+			return firstSubscriptionID(
+				values.Get("subscription_id"),
+				values.Get("provider_subscription_id"),
+				values.Get("walnut_provider_subscription_id"),
+			)
+		}
 		return ""
 	}
-	return firstSubscriptionID(
+	if id := firstSubscriptionID(
+		stringAtPath(payload, "subscription_id"),
+		stringAtPath(payload, "provider_subscription_id"),
+		stringAtPath(payload, "walnut_provider_subscription_id"),
 		stringAtPath(payload, "object", "subscription", "id"),
 		stringAtPath(payload, "object", "subscription_id"),
 		stringAtPath(payload, "object", "subscription"),
-		stringAtPath(payload, "object", "id"),
-	)
+		stringAtPath(payload, "object", "metadata", "provider_subscription_id"),
+		stringAtPath(payload, "object", "metadata", "walnut_provider_subscription_id"),
+	); id != "" {
+		return id
+	}
+	if id := stringAtPath(payload, "object", "id"); looksLikeSubscriptionID(id) {
+		return id
+	}
+	return ""
 }
 
 func firstSubscriptionID(values ...string) string {
@@ -484,6 +710,11 @@ func firstSubscriptionID(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func looksLikeSubscriptionID(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(value, "sub_") || strings.HasPrefix(value, "subscription_")
 }
 
 func stringAtPath(value any, path ...string) string {

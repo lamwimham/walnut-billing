@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const defaultCheckoutMockBaseURL = "https://mock.checkout.walnut.local"
@@ -50,6 +51,36 @@ func (m *CheckoutMockAdapter) CreateCheckoutSession(ctx context.Context, req Che
 		ProviderCheckoutID: "mock_chk_" + outTradeNo,
 		ProviderCustomerID: "mock_cus_" + defaultMockCustomer(req.UserID),
 		Status:             "checkout_created",
+	}, nil
+}
+
+func (m *CheckoutMockAdapter) CancelSubscription(ctx context.Context, req SubscriptionControlRequest) (*SubscriptionControlResult, error) {
+	subscriptionID := strings.TrimSpace(req.ProviderSubscriptionID)
+	if subscriptionID == "" {
+		return nil, ErrSubscriptionControlInvalidRequest
+	}
+	periodEnd := time.Now().UTC().AddDate(0, 1, 0)
+	return &SubscriptionControlResult{
+		ProviderSubscriptionID: subscriptionID,
+		Status:                 "cancel_at_period_end",
+		RawStatus:              "scheduled_cancel",
+		CancelAtPeriodEnd:      true,
+		CurrentPeriodEndsAt:    &periodEnd,
+	}, nil
+}
+
+func (m *CheckoutMockAdapter) ResumeSubscription(ctx context.Context, req SubscriptionControlRequest) (*SubscriptionControlResult, error) {
+	subscriptionID := strings.TrimSpace(req.ProviderSubscriptionID)
+	if subscriptionID == "" {
+		return nil, ErrSubscriptionControlInvalidRequest
+	}
+	periodEnd := time.Now().UTC().AddDate(0, 1, 0)
+	return &SubscriptionControlResult{
+		ProviderSubscriptionID: subscriptionID,
+		Status:                 "active",
+		RawStatus:              "active",
+		CancelAtPeriodEnd:      false,
+		CurrentPeriodEndsAt:    &periodEnd,
 	}, nil
 }
 
