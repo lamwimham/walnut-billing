@@ -13,27 +13,28 @@ import (
 )
 
 type applicationHandlers struct {
-	Auth                *handler.AuthHandler
-	Order               *handler.OrderHandler
-	OrderQuery          *handler.OrderQueryHandler
-	Renewal             *handler.RenewalHandler
-	Admin               *handler.AdminHandler
-	PaymentConfig       *handler.PaymentConfigHandler
-	Health              *handler.HealthHandler
-	Dashboard           *handler.DashboardHandler
-	Entitlement         *handler.EntitlementHandler
-	AccessSession       *handler.AccessSessionHandler
-	AccessAdmin         *handler.AccessAdminHandler
-	AccessSnapshot      *handler.AccessSnapshotHandler
-	Credit              *handler.CreditHandler
-	Checkout            *handler.CheckoutHandler
-	Subscription        *handler.SubscriptionHandler
-	PaymentEvent        *handler.PaymentEventHandler
-	MockCheckout        *handler.MockCheckoutHandler
-	PaymentRisk         *handler.PaymentRiskHandler
-	Fulfillment         *handler.FulfillmentHandler
-	CloudStorage        *handler.CloudStorageHandler
-	LicenseDeactivation *handler.DeactivateHandler
+	Auth                 *handler.AuthHandler
+	Order                *handler.OrderHandler
+	OrderQuery           *handler.OrderQueryHandler
+	Renewal              *handler.RenewalHandler
+	Admin                *handler.AdminHandler
+	PaymentConfig        *handler.PaymentConfigHandler
+	Health               *handler.HealthHandler
+	Dashboard            *handler.DashboardHandler
+	Entitlement          *handler.EntitlementHandler
+	AccessSession        *handler.AccessSessionHandler
+	AccessLoginChallenge *handler.AccessLoginChallengeHandler
+	AccessAdmin          *handler.AccessAdminHandler
+	AccessSnapshot       *handler.AccessSnapshotHandler
+	Credit               *handler.CreditHandler
+	Checkout             *handler.CheckoutHandler
+	Subscription         *handler.SubscriptionHandler
+	PaymentEvent         *handler.PaymentEventHandler
+	MockCheckout         *handler.MockCheckoutHandler
+	PaymentRisk          *handler.PaymentRiskHandler
+	Fulfillment          *handler.FulfillmentHandler
+	CloudStorage         *handler.CloudStorageHandler
+	LicenseDeactivation  *handler.DeactivateHandler
 }
 
 type routerDependencies struct {
@@ -115,6 +116,8 @@ type identityAccessModule struct{ handlers applicationHandlers }
 func (m identityAccessModule) RegisterRoutes(routes moduleRoutes) {
 	h := m.handlers
 	routes.Public.POST("/access/registrations", h.AccessSession.RegisterOrRestore)
+	routes.Public.POST("/access/login-challenges", h.AccessLoginChallenge.Create)
+	routes.Public.POST("/access/login-challenges/verify", h.AccessLoginChallenge.Verify)
 	routes.Public.GET("/users/:user_id/access/snapshot", h.AccessSnapshot.GetSnapshot)
 	routes.Public.POST("/registrations", h.Entitlement.SubmitRegistration)
 	routes.Public.GET("/users/:user_id/entitlements/snapshot", h.Entitlement.GetUserEntitlementSnapshot)

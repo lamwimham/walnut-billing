@@ -204,6 +204,10 @@ const (
 	TrialGrantStatusRevoked = "revoked"
 	TrialGrantTypeProOwnAI  = "pro_own_ai_trial"
 
+	AccessLoginChallengeStatusPending  = "pending"
+	AccessLoginChallengeStatusConsumed = "consumed"
+	AccessLoginChallengeStatusExpired  = "expired"
+
 	PlanBasicOwnAI = "basic_own_ai"
 
 	SKUProOwnAIMonthly  = "pro_own_ai_monthly"
@@ -233,6 +237,24 @@ type User struct {
 	Status      string    `json:"status" gorm:"size:16;default:'active';index"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// AccessLoginChallenge records an email login/recovery challenge. The secret
+// token is stored only as a hash so database reads cannot recover OTP values.
+type AccessLoginChallenge struct {
+	ID             string     `json:"id" gorm:"primaryKey;size:40"`
+	Email          string     `json:"email" gorm:"size:255;index"`
+	DeviceID       string     `json:"device_id" gorm:"size:128;index"`
+	TokenHash      string     `json:"-" gorm:"size:128;index"`
+	Status         string     `json:"status" gorm:"size:16;default:'pending';index"`
+	Attempts       int        `json:"attempts" gorm:"default:0"`
+	MaxAttempts    int        `json:"max_attempts" gorm:"default:5"`
+	Source         string     `json:"source" gorm:"size:32;index"`
+	IdempotencyKey string     `json:"idempotency_key" gorm:"uniqueIndex;size:160"`
+	ExpiresAt      time.Time  `json:"expires_at" gorm:"index"`
+	ConsumedAt     *time.Time `json:"consumed_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // RegistrationRequest records a user's request to unlock a capability.

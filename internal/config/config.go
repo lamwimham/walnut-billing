@@ -130,6 +130,10 @@ type AccessConfig struct {
 	MaxDevices                  int
 	CloudStorageQuotaMB         int64
 	TrialDurationDays           int
+	LoginChallengeTTLSeconds    int
+	LoginChallengeMaxAttempts   int
+	LoginChallengeDelivery      string
+	LoginChallengeSecret        string
 }
 
 type CloudStorageConfig struct {
@@ -208,6 +212,10 @@ func Load() (*Config, error) {
 	v.SetDefault("access.max_devices", 2)
 	v.SetDefault("access.cloud_storage_quota_mb", int64(1024))
 	v.SetDefault("access.trial_duration_days", 14)
+	v.SetDefault("access.login_challenge_ttl_seconds", 600)
+	v.SetDefault("access.login_challenge_max_attempts", 5)
+	v.SetDefault("access.login_challenge_delivery", "dev")
+	v.SetDefault("access.login_challenge_secret", "walnut-dev-login-challenge-secret")
 	v.SetDefault("cloudstorage.provider", "")
 
 	// 读取环境变量或配置文件
@@ -311,6 +319,18 @@ func Load() (*Config, error) {
 	}
 	if val := os.Getenv("ACCESS_TRIAL_DURATION_DAYS"); val != "" {
 		cfg.Access.TrialDurationDays = parseIntEnv(val, cfg.Access.TrialDurationDays)
+	}
+	if val := os.Getenv("ACCESS_LOGIN_CHALLENGE_TTL_SECONDS"); val != "" {
+		cfg.Access.LoginChallengeTTLSeconds = parseIntEnv(val, cfg.Access.LoginChallengeTTLSeconds)
+	}
+	if val := os.Getenv("ACCESS_LOGIN_CHALLENGE_MAX_ATTEMPTS"); val != "" {
+		cfg.Access.LoginChallengeMaxAttempts = parseIntEnv(val, cfg.Access.LoginChallengeMaxAttempts)
+	}
+	if val := os.Getenv("ACCESS_LOGIN_CHALLENGE_DELIVERY"); val != "" {
+		cfg.Access.LoginChallengeDelivery = val
+	}
+	if val := os.Getenv("ACCESS_LOGIN_CHALLENGE_SECRET"); val != "" {
+		cfg.Access.LoginChallengeSecret = val
 	}
 	if val := os.Getenv("CLOUD_STORAGE_PROVIDER"); val != "" {
 		cfg.CloudStorage.Provider = val

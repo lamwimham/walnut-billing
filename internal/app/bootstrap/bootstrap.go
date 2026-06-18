@@ -94,6 +94,35 @@ func buildAccessSessionPolicy(cfg *config.Config) service.AccessSessionPolicy {
 	return service.NewConfigurableAccessSessionPolicy(policyConfig)
 }
 
+func buildAccessLoginChallengePolicy(cfg *config.Config) service.AccessLoginChallengePolicy {
+	policyConfig := service.DefaultAccessLoginChallengePolicyConfig()
+	if cfg != nil {
+		policyConfig.TTLSeconds = cfg.Access.LoginChallengeTTLSeconds
+		policyConfig.MaxAttempts = cfg.Access.LoginChallengeMaxAttempts
+	}
+	return service.NewConfigurableAccessLoginChallengePolicy(policyConfig)
+}
+
+func buildAccessLoginChallengeDelivery(cfg *config.Config) (service.AccessLoginChallengeDelivery, error) {
+	delivery := "dev"
+	env := "dev"
+	if cfg != nil {
+		delivery = strings.TrimSpace(cfg.Access.LoginChallengeDelivery)
+		env = strings.TrimSpace(cfg.Server.Env)
+	}
+	switch delivery {
+	case "", "dev":
+		if env == "prod" {
+			return service.DisabledAccessLoginChallengeDelivery{Reason: "prod requires a configured email challenge delivery provider"}, nil
+		}
+		return service.DevAccessLoginChallengeDelivery{}, nil
+	case "email":
+		return service.DisabledAccessLoginChallengeDelivery{Reason: "email challenge delivery provider is not configured"}, nil
+	default:
+		return nil, fmt.Errorf("unsupported access login challenge delivery %q", delivery)
+	}
+}
+
 func buildAccessSnapshotPolicy(cfg *config.Config) service.AccessSnapshotPolicy {
 	policyConfig := service.DefaultAccessSnapshotPolicyConfig()
 	if cfg != nil {
@@ -201,6 +230,7 @@ func Build() (*Application, error) {
 		&domain.EntitlementGrant{},
 		&domain.UserDevice{},
 		&domain.TrialGrant{},
+		&domain.AccessLoginChallenge{},
 		&domain.CreditAccount{},
 		&domain.CreditBucket{},
 		&domain.CreditReservation{},
@@ -227,6 +257,7 @@ func Build() (*Application, error) {
 	grantRepo := &gorm_repo.EntitlementGrantRepo{DB: db}
 	userDeviceRepo := &gorm_repo.UserDeviceRepo{DB: db}
 	trialGrantRepo := &gorm_repo.TrialGrantRepo{DB: db}
+	accessLoginChallengeRepo := &gorm_repo.AccessLoginChallengeRepo{DB: db}
 	accessAccountRepo := &gorm_repo.AccessAccountReadRepo{DB: db}
 	creditAccountRepo := &gorm_repo.CreditAccountRepo{DB: db}
 	creditBucketRepo := &gorm_repo.CreditBucketRepo{DB: db}
@@ -295,6 +326,18 @@ func Build() (*Application, error) {
 		EntitlementCatalog: entitlementCatalog,
 		SnapshotIssuer:     accessSnapshotIssuer,
 		UnitOfWorkFactory:  uowFactory,
+	})
+	accessLoginChallengeDelivery, err := buildAccessLoginChallengeDelivery(cfg)
+	if err != nil {
+		l.Error("Failed to initialize access login challenge delivery", "error", err)
+		return nil, err
+	}
+	accessLoginChallengeSvc := service.NewAccessLoginChallengeService(service.AccessLoginChallengeDependencies{
+		Challenges:    accessLoginChallengeRepo,
+		AccessSession: accessSessionSvc,
+		Delivery:      accessLoginChallengeDelivery,
+		TokenHasher:   service.HMACAccessLoginTokenHasher{Secret: cfg.Access.LoginChallengeSecret},
+		Policy:        buildAccessLoginChallengePolicy(cfg),
 	})
 	cloudObjectProvider, err := buildCloudObjectStorageProvider(cfg)
 	if err != nil {
@@ -472,27 +515,28 @@ func Build() (*Application, error) {
 	// 8. Init HTTP handlers and module route registrars. Handlers remain
 	// transport-only; modules below only declare ownership of routes.
 	appHandlers := applicationHandlers{
-		Auth:                handler.NewAuthHandler(licSvc, auditSvc),
-		Order:               handler.NewOrderHandler(orderSvc, paymentSvc, licSvc, auditSvc),
-		OrderQuery:          handler.NewOrderQueryHandler(orderSvc),
-		Renewal:             handler.NewRenewalHandler(orderSvc, paymentSvc),
-		Admin:               handler.NewAdminHandler(licSvc, auditSvc),
-		PaymentConfig:       handler.NewPaymentConfigHandler(paymentSvc, auditSvc),
-		Health:              handler.NewHealthHandler(db),
-		Dashboard:           handler.NewDashboardHandler(licSvc, paymentSvc),
-		Entitlement:         handler.NewEntitlementHandler(entitlementSvc, auditSvc),
-		AccessSession:       handler.NewAccessSessionHandler(accessSessionSvc, auditSvc),
-		AccessAdmin:         handler.NewAccessAdminHandler(accessAdminSvc),
-		AccessSnapshot:      handler.NewAccessSnapshotHandler(accessSnapshotIssuer),
-		Credit:              handler.NewCreditHandler(creditSvc, auditSvc),
-		Checkout:            handler.NewCheckoutHandler(checkoutSvc),
-		Subscription:        handler.NewSubscriptionHandler(subscriptionCancellationSvc),
-		PaymentEvent:        handler.NewPaymentEventHandler(paymentEventSvc),
-		MockCheckout:        handler.NewMockCheckoutHandler(paymentEventSvc),
-		PaymentRisk:         handler.NewPaymentRiskHandler(paymentRiskSvc, auditSvc),
-		Fulfillment:         handler.NewFulfillmentHandler(fulfillmentSvc),
-		CloudStorage:        handler.NewCloudStorageHandler(cloudStorageSvc),
-		LicenseDeactivation: handler.NewDeactivateHandler(licSvc),
+		Auth:                 handler.NewAuthHandler(licSvc, auditSvc),
+		Order:                handler.NewOrderHandler(orderSvc, paymentSvc, licSvc, auditSvc),
+		OrderQuery:           handler.NewOrderQueryHandler(orderSvc),
+		Renewal:              handler.NewRenewalHandler(orderSvc, paymentSvc),
+		Admin:                handler.NewAdminHandler(licSvc, auditSvc),
+		PaymentConfig:        handler.NewPaymentConfigHandler(paymentSvc, auditSvc),
+		Health:               handler.NewHealthHandler(db),
+		Dashboard:            handler.NewDashboardHandler(licSvc, paymentSvc),
+		Entitlement:          handler.NewEntitlementHandler(entitlementSvc, auditSvc),
+		AccessSession:        handler.NewAccessSessionHandler(accessSessionSvc, auditSvc),
+		AccessLoginChallenge: handler.NewAccessLoginChallengeHandler(accessLoginChallengeSvc, auditSvc),
+		AccessAdmin:          handler.NewAccessAdminHandler(accessAdminSvc),
+		AccessSnapshot:       handler.NewAccessSnapshotHandler(accessSnapshotIssuer),
+		Credit:               handler.NewCreditHandler(creditSvc, auditSvc),
+		Checkout:             handler.NewCheckoutHandler(checkoutSvc),
+		Subscription:         handler.NewSubscriptionHandler(subscriptionCancellationSvc),
+		PaymentEvent:         handler.NewPaymentEventHandler(paymentEventSvc),
+		MockCheckout:         handler.NewMockCheckoutHandler(paymentEventSvc),
+		PaymentRisk:          handler.NewPaymentRiskHandler(paymentRiskSvc, auditSvc),
+		Fulfillment:          handler.NewFulfillmentHandler(fulfillmentSvc),
+		CloudStorage:         handler.NewCloudStorageHandler(cloudStorageSvc),
+		LicenseDeactivation:  handler.NewDeactivateHandler(licSvc),
 	}
 
 	r, err := buildRouter(routerDependencies{

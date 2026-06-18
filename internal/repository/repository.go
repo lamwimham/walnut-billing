@@ -101,6 +101,7 @@ type TransactionalRepositories struct {
 	SubscriptionCancellationRepo SubscriptionCancellationRepository
 	UserDeviceRepo               UserDeviceRepository
 	TrialGrantRepo               TrialGrantRepository
+	AccessLoginChallengeRepo     AccessLoginChallengeRepository
 	CloudProjectRepo             CloudProjectRepository
 	CloudManifestRepo            CloudManifestRepository
 	CloudObjectRepo              CloudObjectRepository
@@ -132,6 +133,15 @@ type SubscriptionCancellationRepository interface {
 	GetByResumeIdempotencyKey(ctx context.Context, key string) (*domain.SubscriptionCancellation, error)
 	FindActive(ctx context.Context, query SubscriptionCancellationQuery) (*domain.SubscriptionCancellation, error)
 	Update(ctx context.Context, cancellation *domain.SubscriptionCancellation) error
+}
+
+// AccessLoginChallengeRepository defines data access for email login/recovery challenges.
+type AccessLoginChallengeRepository interface {
+	Create(ctx context.Context, challenge *domain.AccessLoginChallenge) error
+	GetByID(ctx context.Context, id string) (*domain.AccessLoginChallenge, error)
+	GetByIdempotencyKey(ctx context.Context, key string) (*domain.AccessLoginChallenge, error)
+	Update(ctx context.Context, challenge *domain.AccessLoginChallenge) error
+	ConsumePending(ctx context.Context, id string, consumedAt time.Time) (bool, error)
 }
 
 // AccessAccountQuery defines filters for the admin access-account read model.

@@ -58,6 +58,39 @@ This profile uses:
 
 Use one-off overrides only when needed, for example `SERVER_PORT=8083 scripts/run_deterministic_billing.sh`.
 
+## 1B. Email Login / Recovery Challenge
+
+The deterministic profile uses `ACCESS_LOGIN_CHALLENGE_DELIVERY=dev`, so challenge creation returns a `dev_token`. This is only for local/test verification; production disables dev delivery until a real email provider adapter is configured.
+
+```bash
+BASE_URL=http://127.0.0.1:8082
+EMAIL=recovery+001@example.com
+DEVICE_ID=device-recovery-1
+
+CHALLENGE_RESPONSE=$(curl -sS -X POST "$BASE_URL/api/v1/access/login-challenges" \
+  -H 'Content-Type: application/json' \
+  -d "{\"email\":\"$EMAIL\",\"device_id\":\"$DEVICE_ID\",\"source\":\"desktop\",\"idempotency_key\":\"login:$EMAIL:$DEVICE_ID\"}")
+
+CHALLENGE_ID=$(printf '%s' "$CHALLENGE_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["challenge_id"])')
+TOKEN=$(printf '%s' "$CHALLENGE_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("dev_token", ""))')
+
+curl -sS -X POST "$BASE_URL/api/v1/access/login-challenges/verify" \
+  -H 'Content-Type: application/json' \
+  -d "{\"challenge_id\":\"$CHALLENGE_ID\",\"token\":\"$TOKEN\",\"device_id\":\"$DEVICE_ID\",\"display_name\":\"Recovery Tester\"}" | python3 -m json.tool
+```
+
+Expected behavior:
+
+- `AccessLoginChallenge.token_hash` is persisted, but no plaintext token is stored.
+- Verification consumes the challenge exactly once and delegates to the existing access session service, so trial idempotency, device limits, and signed snapshot issuance stay in one place.
+- Reusing a consumed/expired challenge returns a stable error code such as `login_challenge_failed` or `login_challenge_expired`.
+
+The contract test for this slice is:
+
+```bash
+scripts/verify_access_login_challenge_contract.sh
+```
+
 ## 2. Start Walnut Core Against Billing
 
 From `sagemate-core`:

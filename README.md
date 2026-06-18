@@ -117,8 +117,13 @@ New commerce providers should send payment events to the provider-agnostic webho
 
 These endpoints provide the first entitlement projection for Walnut clients. Grants use stable entitlement IDs such as `editorial.studio`; product names, VIP copy, subscriptions, and credits should project into grants rather than being checked directly by clients.
 
+`/api/v1/access/login-challenges` is the email login/recovery boundary. The service creates an `AccessLoginChallenge`, stores only an HMAC hash of the OTP, enforces TTL/max-attempt policy, and verifies by consuming the pending challenge before delegating to `AccessSessionService.RegisterOrRestore`. Dev delivery returns `dev_token` so local clients can test without email; production must use a real email delivery adapter and must not expose plaintext tokens.
+
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
+| POST | `/api/v1/access/login-challenges` | `{email, device_id, source, idempotency_key}` | `{challenge_id, email, device_id, expires_at, delivery, dev_token?}` |
+| POST | `/api/v1/access/login-challenges/verify` | `{challenge_id, token, device_id, display_name, source}` | Access session with trial/device/signed snapshot |
+| POST | `/api/v1/access/registrations` | `{email, display_name, device_id, source, note}` | Access session with trial/device/signed snapshot |
 | POST | `/api/v1/registrations` | `{email, display_name, requested_entitlement, device_id, source, note}` | `{user, registration}` with pending status |
 | GET | `/api/v1/users/:user_id/entitlements/snapshot` | — | PC Core compatible entitlement snapshot |
 
@@ -199,6 +204,14 @@ All settings via environment variables (see `.env.example`):
 | `ADJUSTMENT_CANCEL_ACTION` | keep_current_period | Action for cancellation events; default keeps the current paid period |
 | `RENEWAL_GRACE_PERIOD_DAYS` | 3 | Grace window after renewal payment failure; grants access only, no period credits |
 | `RENEWAL_EXPIRED_ACTION` | expire_grace | Expiry handling: `expire_grace` or `natural_expiry` |
+| `ACCESS_SNAPSHOT_*` | dev HS256 values | Signed access snapshot policy and signer configuration |
+| `ACCESS_MAX_DEVICES` | 2 | Maximum active devices per access account |
+| `ACCESS_CLOUD_STORAGE_QUOTA_MB` | 1024 | Default cloud storage quota projected into access snapshots |
+| `ACCESS_TRIAL_DURATION_DAYS` | 14 | One-time trial duration keyed by normalized email and trial type |
+| `ACCESS_LOGIN_CHALLENGE_TTL_SECONDS` | 600 | Email login/recovery OTP validity window |
+| `ACCESS_LOGIN_CHALLENGE_MAX_ATTEMPTS` | 5 | Wrong-token/device attempts before the challenge expires |
+| `ACCESS_LOGIN_CHALLENGE_DELIVERY` | dev | `dev` returns `dev_token` outside prod; `email` is currently disabled until a provider adapter is configured |
+| `ACCESS_LOGIN_CHALLENGE_SECRET` | dev secret | HMAC secret for OTP hashing; change in non-dev environments |
 
 Bucket expiry is exposed through `POST /api/v1/admin/credits/buckets/expire` for operator or scheduled jobs.
 

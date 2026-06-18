@@ -51,13 +51,13 @@ func (h *AccessSessionHandler) RegisterOrRestore(c *gin.Context) {
 func writeAccessSessionError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidAccessSession):
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_access_session"})
 	case errors.Is(err, service.ErrDeviceLimitExceeded):
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "device_limit_exceeded"})
 	case errors.Is(err, service.ErrAccessUserDisabled):
-		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error(), "code": "access_user_disabled"})
 	case errors.Is(err, service.ErrUserNotFound), errors.Is(err, service.ErrUnknownEntitlement):
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "access_resource_not_found"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}

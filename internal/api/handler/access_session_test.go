@@ -82,6 +82,13 @@ func TestAccessSessionHandler_DeviceLimitExceeded(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected status 409, got %d: %s", w.Code, w.Body.String())
 	}
+	var response map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["code"] != "device_limit_exceeded" {
+		t.Fatalf("expected stable error code, got %#v", response)
+	}
 }
 
 func TestAccessSessionHandler_InvalidRequest(t *testing.T) {
