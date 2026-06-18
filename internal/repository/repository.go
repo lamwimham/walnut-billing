@@ -140,8 +140,16 @@ type AccessLoginChallengeRepository interface {
 	Create(ctx context.Context, challenge *domain.AccessLoginChallenge) error
 	GetByID(ctx context.Context, id string) (*domain.AccessLoginChallenge, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (*domain.AccessLoginChallenge, error)
+	Count(ctx context.Context, query AccessLoginChallengeQuery) (int64, error)
 	Update(ctx context.Context, challenge *domain.AccessLoginChallenge) error
 	ConsumePending(ctx context.Context, id string, consumedAt time.Time) (bool, error)
+}
+
+type AccessLoginChallengeQuery struct {
+	Email        string
+	ClientIPHash string
+	CreatedAfter time.Time
+	Statuses     []string
 }
 
 // AccessAccountQuery defines filters for the admin access-account read model.

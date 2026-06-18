@@ -249,6 +249,9 @@ type AccessLoginChallenge struct {
 	Status         string     `json:"status" gorm:"size:16;default:'pending';index"`
 	Attempts       int        `json:"attempts" gorm:"default:0"`
 	MaxAttempts    int        `json:"max_attempts" gorm:"default:5"`
+	ClientIPHash   string     `json:"client_ip_hash" gorm:"size:64;index"`
+	UserAgentHash  string     `json:"user_agent_hash" gorm:"size:64;index"`
+	FailureReason  string     `json:"failure_reason" gorm:"size:32;index"`
 	Source         string     `json:"source" gorm:"size:32;index"`
 	IdempotencyKey string     `json:"idempotency_key" gorm:"uniqueIndex;size:160"`
 	ExpiresAt      time.Time  `json:"expires_at" gorm:"index"`

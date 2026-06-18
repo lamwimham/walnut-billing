@@ -37,6 +37,8 @@ func TestAccessLoginChallengeRepo_CRUD(t *testing.T) {
 		TokenHash:      "hash",
 		Status:         domain.AccessLoginChallengeStatusPending,
 		MaxAttempts:    5,
+		ClientIPHash:   "iphash-1",
+		UserAgentHash:  "uahash-1",
 		IdempotencyKey: "login:1",
 		ExpiresAt:      expiresAt,
 		CreatedAt:      time.Now().UTC(),
@@ -54,14 +56,19 @@ func TestAccessLoginChallengeRepo_CRUD(t *testing.T) {
 		t.Fatalf("get by key=%#v err=%v", byKey, err)
 	}
 	byKey.Status = domain.AccessLoginChallengeStatusConsumed
+	byKey.FailureReason = "wrong_token"
 	consumedAt := time.Now().UTC()
 	byKey.ConsumedAt = &consumedAt
 	if err := repo.Update(ctx, byKey); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	updated, err := repo.GetByID(ctx, "alc_1")
-	if err != nil || updated.Status != domain.AccessLoginChallengeStatusConsumed || updated.ConsumedAt == nil {
+	if err != nil || updated.Status != domain.AccessLoginChallengeStatusConsumed || updated.ConsumedAt == nil || updated.FailureReason != "wrong_token" {
 		t.Fatalf("updated=%#v err=%v", updated, err)
+	}
+	count, err := repo.Count(ctx, repository.AccessLoginChallengeQuery{Email: "writer@example.com", ClientIPHash: "iphash-1", CreatedAfter: expiresAt.Add(-time.Hour), Statuses: []string{domain.AccessLoginChallengeStatusConsumed}})
+	if err != nil || count != 1 {
+		t.Fatalf("expected filtered count=1, got %d err=%v", count, err)
 	}
 	if _, err := repo.GetByID(ctx, "missing"); err != repository.ErrNotFound {
 		t.Fatalf("expected not found, got %v", err)

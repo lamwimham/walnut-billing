@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -20,6 +21,14 @@ var (
 	ErrAccessLoginChallengeExpired             = errors.New("access login challenge expired")
 	ErrAccessLoginChallengeFailed              = errors.New("access login challenge verification failed")
 	ErrAccessLoginChallengeDeliveryUnavailable = errors.New("access login challenge delivery unavailable")
+	ErrAccessLoginChallengeRateLimited         = errors.New("access login challenge rate limited")
+)
+
+const (
+	AccessLoginChallengeAbuseReasonRateLimited  = "rate_limited"
+	AccessLoginChallengeAbuseReasonMaxAttempts  = "max_attempts_exceeded"
+	accessLoginChallengeFailureReasonWrongToken = "wrong_token"
+	accessLoginChallengeFailureReasonDevice     = "device_mismatch"
 )
 
 type AccessLoginChallengeService interface {
@@ -32,6 +41,8 @@ type AccessLoginChallengeCreateInput struct {
 	DeviceID       string
 	Source         string
 	IdempotencyKey string
+	ClientIP       string
+	UserAgent      string
 }
 
 type AccessLoginChallengeVerifyInput struct {
@@ -40,6 +51,8 @@ type AccessLoginChallengeVerifyInput struct {
 	DeviceID    string
 	DisplayName string
 	Source      string
+	ClientIP    string
+	UserAgent   string
 }
 
 type AccessLoginChallengeCreateResult struct {
@@ -58,6 +71,7 @@ type AccessLoginChallengeDependencies struct {
 	TokenHasher    AccessLoginTokenHasher
 	Delivery       AccessLoginChallengeDelivery
 	Policy         AccessLoginChallengePolicy
+	AbuseObserver  AccessLoginChallengeAbuseObserver
 	Now            func() time.Time
 }
 
@@ -86,11 +100,38 @@ type AccessLoginChallengeDeliveryResult struct {
 type AccessLoginChallengePolicy interface {
 	TTL(ctx context.Context, input AccessLoginChallengeCreateInput) time.Duration
 	MaxAttempts(ctx context.Context, input AccessLoginChallengeCreateInput) int
+	RateLimit(ctx context.Context, input AccessLoginChallengeCreateInput) AccessLoginChallengeRateLimit
+}
+
+type AccessLoginChallengeRateLimit struct {
+	Window      time.Duration
+	MaxPerEmail int
+	MaxPerIP    int
+}
+
+type AccessLoginChallengeAbuseObserver interface {
+	ObserveAccessLoginChallengeAbuse(ctx context.Context, event AccessLoginChallengeAbuseEvent)
+}
+
+type AccessLoginChallengeAbuseEvent struct {
+	ChallengeID         string `json:"challenge_id,omitempty"`
+	EmailFingerprint    string `json:"email_fingerprint,omitempty"`
+	DeviceIDFingerprint string `json:"device_id_fingerprint,omitempty"`
+	ClientIPHash        string `json:"client_ip_hash,omitempty"`
+	UserAgentHash       string `json:"user_agent_hash,omitempty"`
+	Reason              string `json:"reason"`
+	Attempts            int    `json:"attempts,omitempty"`
+	MaxAttempts         int    `json:"max_attempts,omitempty"`
+	LimitWindowSeconds  int64  `json:"limit_window_seconds,omitempty"`
+	Limit               int    `json:"limit,omitempty"`
 }
 
 type AccessLoginChallengePolicyConfig struct {
-	TTLSeconds  int
-	MaxAttempts int
+	TTLSeconds             int
+	MaxAttempts            int
+	RateLimitWindowSeconds int
+	MaxCreatesPerEmail     int
+	MaxCreatesPerIP        int
 }
 
 type configurableAccessLoginChallengePolicy struct {
@@ -98,7 +139,13 @@ type configurableAccessLoginChallengePolicy struct {
 }
 
 func DefaultAccessLoginChallengePolicyConfig() AccessLoginChallengePolicyConfig {
-	return AccessLoginChallengePolicyConfig{TTLSeconds: 10 * 60, MaxAttempts: 5}
+	return AccessLoginChallengePolicyConfig{
+		TTLSeconds:             10 * 60,
+		MaxAttempts:            5,
+		RateLimitWindowSeconds: 10 * 60,
+		MaxCreatesPerEmail:     5,
+		MaxCreatesPerIP:        20,
+	}
 }
 
 func NewConfigurableAccessLoginChallengePolicy(config AccessLoginChallengePolicyConfig) AccessLoginChallengePolicy {
@@ -108,6 +155,15 @@ func NewConfigurableAccessLoginChallengePolicy(config AccessLoginChallengePolicy
 	}
 	if config.MaxAttempts <= 0 {
 		config.MaxAttempts = defaults.MaxAttempts
+	}
+	if config.RateLimitWindowSeconds <= 0 {
+		config.RateLimitWindowSeconds = defaults.RateLimitWindowSeconds
+	}
+	if config.MaxCreatesPerEmail <= 0 {
+		config.MaxCreatesPerEmail = defaults.MaxCreatesPerEmail
+	}
+	if config.MaxCreatesPerIP <= 0 {
+		config.MaxCreatesPerIP = defaults.MaxCreatesPerIP
 	}
 	return &configurableAccessLoginChallengePolicy{config: config}
 }
@@ -124,6 +180,16 @@ func (p *configurableAccessLoginChallengePolicy) MaxAttempts(ctx context.Context
 	return p.config.MaxAttempts
 }
 
+func (p *configurableAccessLoginChallengePolicy) RateLimit(ctx context.Context, input AccessLoginChallengeCreateInput) AccessLoginChallengeRateLimit {
+	_ = ctx
+	_ = input
+	return AccessLoginChallengeRateLimit{
+		Window:      time.Duration(p.config.RateLimitWindowSeconds) * time.Second,
+		MaxPerEmail: p.config.MaxCreatesPerEmail,
+		MaxPerIP:    p.config.MaxCreatesPerIP,
+	}
+}
+
 type accessLoginChallengeService struct {
 	challenges     repository.AccessLoginChallengeRepository
 	accessSession  AccessSessionService
@@ -131,6 +197,7 @@ type accessLoginChallengeService struct {
 	tokenHasher    AccessLoginTokenHasher
 	delivery       AccessLoginChallengeDelivery
 	policy         AccessLoginChallengePolicy
+	abuseObserver  AccessLoginChallengeAbuseObserver
 	now            func() time.Time
 }
 
@@ -162,6 +229,7 @@ func NewAccessLoginChallengeService(deps AccessLoginChallengeDependencies) Acces
 		tokenHasher:    hasher,
 		delivery:       delivery,
 		policy:         policy,
+		abuseObserver:  deps.AbuseObserver,
 		now:            now,
 	}
 }
@@ -174,6 +242,8 @@ func (s *accessLoginChallengeService) Create(ctx context.Context, input AccessLo
 	input.DeviceID = strings.TrimSpace(input.DeviceID)
 	input.Source = defaultString(strings.TrimSpace(input.Source), "desktop")
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
+	input.ClientIP = strings.TrimSpace(input.ClientIP)
+	input.UserAgent = strings.TrimSpace(input.UserAgent)
 	if input.Email == "" || input.DeviceID == "" {
 		return nil, ErrInvalidAccessLoginChallenge
 	}
@@ -187,11 +257,15 @@ func (s *accessLoginChallengeService) Create(ctx context.Context, input AccessLo
 			return nil, err
 		}
 	}
+	now := s.currentTime()
+	metadata := newAccessLoginChallengeRequestMetadata(input.Email, input.DeviceID, input.ClientIP, input.UserAgent, s.tokenHasher)
+	if err := s.enforceCreateRateLimit(ctx, input, metadata, now); err != nil {
+		return nil, err
+	}
 	token, err := s.tokenGenerator.Generate(ctx)
 	if err != nil {
 		return nil, err
 	}
-	now := s.currentTime()
 	challengeID, err := generateEntityID("alc_")
 	if err != nil {
 		return nil, err
@@ -203,6 +277,8 @@ func (s *accessLoginChallengeService) Create(ctx context.Context, input AccessLo
 		TokenHash:      s.tokenHasher.Hash(token),
 		Status:         domain.AccessLoginChallengeStatusPending,
 		MaxAttempts:    s.policy.MaxAttempts(ctx, input),
+		ClientIPHash:   metadata.ClientIPHash,
+		UserAgentHash:  metadata.UserAgentHash,
 		Source:         input.Source,
 		IdempotencyKey: input.IdempotencyKey,
 		ExpiresAt:      now.Add(s.policy.TTL(ctx, input)).UTC(),
@@ -249,6 +325,8 @@ func (s *accessLoginChallengeService) Verify(ctx context.Context, input AccessLo
 	input.Token = strings.TrimSpace(input.Token)
 	input.DeviceID = strings.TrimSpace(input.DeviceID)
 	input.Source = defaultString(strings.TrimSpace(input.Source), "desktop")
+	input.ClientIP = strings.TrimSpace(input.ClientIP)
+	input.UserAgent = strings.TrimSpace(input.UserAgent)
 	if input.ChallengeID == "" || input.Token == "" || input.DeviceID == "" {
 		return nil, ErrInvalidAccessLoginChallenge
 	}
@@ -265,15 +343,16 @@ func (s *accessLoginChallengeService) Verify(ctx context.Context, input AccessLo
 	}
 	if !challenge.ExpiresAt.IsZero() && !challenge.ExpiresAt.After(now) {
 		challenge.Status = domain.AccessLoginChallengeStatusExpired
+		challenge.FailureReason = "expired"
 		challenge.UpdatedAt = now
 		_ = s.challenges.Update(ctx, challenge)
 		return nil, ErrAccessLoginChallengeExpired
 	}
 	if strings.TrimSpace(challenge.DeviceID) != input.DeviceID {
-		return nil, s.recordFailedAttempt(ctx, challenge, now)
+		return nil, s.recordFailedAttempt(ctx, challenge, now, accessLoginChallengeFailureReasonDevice)
 	}
 	if !s.tokenHasher.Verify(input.Token, challenge.TokenHash) {
-		return nil, s.recordFailedAttempt(ctx, challenge, now)
+		return nil, s.recordFailedAttempt(ctx, challenge, now, accessLoginChallengeFailureReasonWrongToken)
 	}
 	consumedAt := now
 	consumed, err := s.challenges.ConsumePending(ctx, challenge.ID, consumedAt)
@@ -309,16 +388,83 @@ func (s *accessLoginChallengeService) createResult(ctx context.Context, challeng
 	}, nil
 }
 
-func (s *accessLoginChallengeService) recordFailedAttempt(ctx context.Context, challenge *domain.AccessLoginChallenge, now time.Time) error {
+func (s *accessLoginChallengeService) enforceCreateRateLimit(ctx context.Context, input AccessLoginChallengeCreateInput, metadata accessLoginChallengeRequestMetadata, now time.Time) error {
+	limit := s.policy.RateLimit(ctx, input)
+	if limit.Window <= 0 {
+		return nil
+	}
+	createdAfter := now.Add(-limit.Window)
+	if limit.MaxPerEmail > 0 {
+		count, err := s.challenges.Count(ctx, repository.AccessLoginChallengeQuery{Email: input.Email, CreatedAfter: createdAfter})
+		if err != nil {
+			return err
+		}
+		if count >= int64(limit.MaxPerEmail) {
+			s.observeAbuse(ctx, AccessLoginChallengeAbuseEvent{
+				EmailFingerprint:    metadata.EmailFingerprint,
+				DeviceIDFingerprint: metadata.DeviceIDFingerprint,
+				ClientIPHash:        shortFingerprint(metadata.ClientIPHash),
+				UserAgentHash:       shortFingerprint(metadata.UserAgentHash),
+				Reason:              AccessLoginChallengeAbuseReasonRateLimited,
+				LimitWindowSeconds:  int64(limit.Window.Seconds()),
+				Limit:               limit.MaxPerEmail,
+			})
+			return ErrAccessLoginChallengeRateLimited
+		}
+	}
+	if limit.MaxPerIP > 0 && metadata.ClientIPHash != "" {
+		count, err := s.challenges.Count(ctx, repository.AccessLoginChallengeQuery{ClientIPHash: metadata.ClientIPHash, CreatedAfter: createdAfter})
+		if err != nil {
+			return err
+		}
+		if count >= int64(limit.MaxPerIP) {
+			s.observeAbuse(ctx, AccessLoginChallengeAbuseEvent{
+				EmailFingerprint:    metadata.EmailFingerprint,
+				DeviceIDFingerprint: metadata.DeviceIDFingerprint,
+				ClientIPHash:        shortFingerprint(metadata.ClientIPHash),
+				UserAgentHash:       shortFingerprint(metadata.UserAgentHash),
+				Reason:              AccessLoginChallengeAbuseReasonRateLimited,
+				LimitWindowSeconds:  int64(limit.Window.Seconds()),
+				Limit:               limit.MaxPerIP,
+			})
+			return ErrAccessLoginChallengeRateLimited
+		}
+	}
+	return nil
+}
+
+func (s *accessLoginChallengeService) recordFailedAttempt(ctx context.Context, challenge *domain.AccessLoginChallenge, now time.Time, reason string) error {
 	challenge.Attempts++
+	challenge.FailureReason = strings.TrimSpace(reason)
 	challenge.UpdatedAt = now
+	var abuseEvent *AccessLoginChallengeAbuseEvent
 	if challenge.MaxAttempts > 0 && challenge.Attempts >= challenge.MaxAttempts {
 		challenge.Status = domain.AccessLoginChallengeStatusExpired
+		abuseEvent = &AccessLoginChallengeAbuseEvent{
+			ChallengeID:         challenge.ID,
+			EmailFingerprint:    emailFingerprint(challenge.Email),
+			DeviceIDFingerprint: deviceFingerprint(challenge.DeviceID),
+			ClientIPHash:        shortFingerprint(challenge.ClientIPHash),
+			UserAgentHash:       shortFingerprint(challenge.UserAgentHash),
+			Reason:              AccessLoginChallengeAbuseReasonMaxAttempts,
+			Attempts:            challenge.Attempts,
+			MaxAttempts:         challenge.MaxAttempts,
+		}
 	}
 	if err := s.challenges.Update(ctx, challenge); err != nil {
 		return err
 	}
+	if abuseEvent != nil {
+		s.observeAbuse(ctx, *abuseEvent)
+	}
 	return ErrAccessLoginChallengeFailed
+}
+
+func (s *accessLoginChallengeService) observeAbuse(ctx context.Context, event AccessLoginChallengeAbuseEvent) {
+	if s == nil || s.abuseObserver == nil {
+		return
+	}
+	s.abuseObserver.ObserveAccessLoginChallengeAbuse(ctx, event)
 }
 
 func (s *accessLoginChallengeService) currentTime() time.Time {
@@ -340,6 +486,67 @@ func ensureAccessLoginChallengeDeliveryAvailable(ctx context.Context, delivery A
 		return err
 	}
 	return nil
+}
+
+type accessLoginChallengeRequestMetadata struct {
+	EmailFingerprint    string
+	DeviceIDFingerprint string
+	ClientIPHash        string
+	UserAgentHash       string
+}
+
+func newAccessLoginChallengeRequestMetadata(email, deviceID, clientIP, userAgent string, hasher AccessLoginTokenHasher) accessLoginChallengeRequestMetadata {
+	return accessLoginChallengeRequestMetadata{
+		EmailFingerprint:    emailFingerprint(email),
+		DeviceIDFingerprint: deviceFingerprint(deviceID),
+		ClientIPHash:        accessLoginChallengeHash("client_ip", clientIP, hasher),
+		UserAgentHash:       accessLoginChallengeHash("user_agent", userAgent, hasher),
+	}
+}
+
+func accessLoginChallengeHash(scope, value string, hasher AccessLoginTokenHasher) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	scopedValue := "metadata:" + strings.TrimSpace(scope) + ":" + value
+	if hasher != nil {
+		return hasher.Hash(scopedValue)
+	}
+	digest := sha256.Sum256([]byte("walnut-access-login-challenge-v1:" + strings.TrimSpace(scope) + ":" + value))
+	return hex.EncodeToString(digest[:])
+}
+
+func shortFingerprint(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
+}
+
+type accessLoginChallengeAuditObserver struct {
+	audit AuditService
+}
+
+func NewAccessLoginChallengeAuditObserver(audit AuditService) AccessLoginChallengeAbuseObserver {
+	return accessLoginChallengeAuditObserver{audit: audit}
+}
+
+func (o accessLoginChallengeAuditObserver) ObserveAccessLoginChallengeAbuse(ctx context.Context, event AccessLoginChallengeAbuseEvent) {
+	if o.audit == nil {
+		return
+	}
+	details, _ := json.Marshal(event)
+	o.audit.Record(ctx, &domain.AuditEntry{
+		Timestamp: time.Now().UTC(),
+		Actor:     defaultString(event.EmailFingerprint, "unknown"),
+		Action:    domain.AuditActionAccessLoginChallengeAbuse,
+		Target:    defaultString(event.ChallengeID, "access_login_challenge"),
+		Success:   false,
+		Details:   string(details),
+		IPAddress: defaultString(event.ClientIPHash, "redacted"),
+	})
 }
 
 type NumericAccessLoginTokenGenerator struct {

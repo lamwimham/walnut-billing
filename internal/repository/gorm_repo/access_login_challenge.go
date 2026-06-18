@@ -2,6 +2,7 @@ package gorm_repo
 
 import (
 	"context"
+	"strings"
 	"time"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/repository"
@@ -35,6 +36,28 @@ func (r *AccessLoginChallengeRepo) GetByIdempotencyKey(ctx context.Context, key 
 	return &challenge, nil
 }
 
+func (r *AccessLoginChallengeRepo) Count(ctx context.Context, query repository.AccessLoginChallengeQuery) (int64, error) {
+	db := r.DB.WithContext(ctx).Model(&domain.AccessLoginChallenge{})
+	if email := strings.TrimSpace(query.Email); email != "" {
+		db = db.Where("email = ?", email)
+	}
+	if clientIPHash := strings.TrimSpace(query.ClientIPHash); clientIPHash != "" {
+		db = db.Where("client_ip_hash = ?", clientIPHash)
+	}
+	if !query.CreatedAfter.IsZero() {
+		db = db.Where("created_at >= ?", query.CreatedAfter.UTC())
+	}
+	statuses := normalizeAccessLoginChallengeStatuses(query.Statuses)
+	if len(statuses) > 0 {
+		db = db.Where("status IN ?", statuses)
+	}
+	var count int64
+	if err := db.Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (r *AccessLoginChallengeRepo) Update(ctx context.Context, challenge *domain.AccessLoginChallenge) error {
 	return r.DB.WithContext(ctx).Save(challenge).Error
 }
@@ -55,4 +78,18 @@ func (r *AccessLoginChallengeRepo) ConsumePending(ctx context.Context, id string
 
 func (r *AccessLoginChallengeRepo) WithTx(tx *gorm.DB) *AccessLoginChallengeRepo {
 	return &AccessLoginChallengeRepo{DB: tx}
+}
+
+func normalizeAccessLoginChallengeStatuses(statuses []string) []string {
+	result := make([]string, 0, len(statuses))
+	seen := map[string]bool{}
+	for _, status := range statuses {
+		status = strings.TrimSpace(status)
+		if status == "" || seen[status] {
+			continue
+		}
+		seen[status] = true
+		result = append(result, status)
+	}
+	return result
 }

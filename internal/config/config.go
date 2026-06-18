@@ -121,19 +121,22 @@ type RenewalConfig struct {
 }
 
 type AccessConfig struct {
-	SnapshotSignatureAlgorithm  string
-	SnapshotSecret              string
-	SnapshotPrivateKey          string
-	SnapshotKeyID               string
-	SnapshotTTLSeconds          int
-	SnapshotOfflineGraceSeconds int
-	MaxDevices                  int
-	CloudStorageQuotaMB         int64
-	TrialDurationDays           int
-	LoginChallengeTTLSeconds    int
-	LoginChallengeMaxAttempts   int
-	LoginChallengeDelivery      string
-	LoginChallengeSecret        string
+	SnapshotSignatureAlgorithm           string
+	SnapshotSecret                       string
+	SnapshotPrivateKey                   string
+	SnapshotKeyID                        string
+	SnapshotTTLSeconds                   int
+	SnapshotOfflineGraceSeconds          int
+	MaxDevices                           int
+	CloudStorageQuotaMB                  int64
+	TrialDurationDays                    int
+	LoginChallengeTTLSeconds             int
+	LoginChallengeMaxAttempts            int
+	LoginChallengeRateLimitWindowSeconds int
+	LoginChallengeMaxCreatesPerEmail     int
+	LoginChallengeMaxCreatesPerIP        int
+	LoginChallengeDelivery               string
+	LoginChallengeSecret                 string
 }
 
 type CloudStorageConfig struct {
@@ -214,6 +217,9 @@ func Load() (*Config, error) {
 	v.SetDefault("access.trial_duration_days", 14)
 	v.SetDefault("access.login_challenge_ttl_seconds", 600)
 	v.SetDefault("access.login_challenge_max_attempts", 5)
+	v.SetDefault("access.login_challenge_rate_limit_window_seconds", 600)
+	v.SetDefault("access.login_challenge_max_creates_per_email", 5)
+	v.SetDefault("access.login_challenge_max_creates_per_ip", 20)
 	v.SetDefault("access.login_challenge_delivery", "dev")
 	v.SetDefault("access.login_challenge_secret", "walnut-dev-login-challenge-secret")
 	v.SetDefault("cloudstorage.provider", "")
@@ -325,6 +331,15 @@ func Load() (*Config, error) {
 	}
 	if val := os.Getenv("ACCESS_LOGIN_CHALLENGE_MAX_ATTEMPTS"); val != "" {
 		cfg.Access.LoginChallengeMaxAttempts = parseIntEnv(val, cfg.Access.LoginChallengeMaxAttempts)
+	}
+	if val := os.Getenv("ACCESS_LOGIN_CHALLENGE_RATE_LIMIT_WINDOW_SECONDS"); val != "" {
+		cfg.Access.LoginChallengeRateLimitWindowSeconds = parseIntEnv(val, cfg.Access.LoginChallengeRateLimitWindowSeconds)
+	}
+	if val := os.Getenv("ACCESS_LOGIN_CHALLENGE_MAX_CREATES_PER_EMAIL"); val != "" {
+		cfg.Access.LoginChallengeMaxCreatesPerEmail = parseIntEnv(val, cfg.Access.LoginChallengeMaxCreatesPerEmail)
+	}
+	if val := os.Getenv("ACCESS_LOGIN_CHALLENGE_MAX_CREATES_PER_IP"); val != "" {
+		cfg.Access.LoginChallengeMaxCreatesPerIP = parseIntEnv(val, cfg.Access.LoginChallengeMaxCreatesPerIP)
 	}
 	if val := os.Getenv("ACCESS_LOGIN_CHALLENGE_DELIVERY"); val != "" {
 		cfg.Access.LoginChallengeDelivery = val

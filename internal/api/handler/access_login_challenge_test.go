@@ -70,6 +70,9 @@ func TestAccessLoginChallengeHandler_Create(t *testing.T) {
 	if svc.createInput.Email != "writer@example.com" || svc.createInput.DeviceID != "device-1" || svc.createInput.IdempotencyKey != "login:1" {
 		t.Fatalf("unexpected service input: %#v", svc.createInput)
 	}
+	if svc.createInput.ClientIP == "" {
+		t.Fatalf("expected request metadata to be passed to service, got %#v", svc.createInput)
+	}
 	var response map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -92,6 +95,9 @@ func TestAccessLoginChallengeHandler_Verify(t *testing.T) {
 	}
 	if svc.verifyInput.ChallengeID != "alc_1" || svc.verifyInput.Token != "123456" || svc.verifyInput.DeviceID != "device-1" || svc.verifyInput.DisplayName != "Writer" {
 		t.Fatalf("unexpected service input: %#v", svc.verifyInput)
+	}
+	if svc.verifyInput.ClientIP == "" {
+		t.Fatalf("expected request metadata to be passed to service, got %#v", svc.verifyInput)
 	}
 }
 
@@ -138,6 +144,7 @@ func TestAccessLoginChallengeHandler_MapsErrors(t *testing.T) {
 		{name: "expired", err: service.ErrAccessLoginChallengeExpired, want: http.StatusGone, code: "login_challenge_expired"},
 		{name: "failed", err: service.ErrAccessLoginChallengeFailed, want: http.StatusUnauthorized, code: "login_challenge_failed"},
 		{name: "delivery", err: service.ErrAccessLoginChallengeDeliveryUnavailable, want: http.StatusServiceUnavailable, code: "login_challenge_delivery_unavailable"},
+		{name: "rate_limited", err: service.ErrAccessLoginChallengeRateLimited, want: http.StatusTooManyRequests, code: "login_challenge_rate_limited"},
 		{name: "revoked_device", err: service.ErrAccessDeviceRevoked, want: http.StatusForbidden, code: "access_device_revoked"},
 		{name: "device", err: service.ErrDeviceLimitExceeded, want: http.StatusConflict, code: "device_limit_exceeded"},
 		{name: "unknown", err: errors.New("boom"), want: http.StatusInternalServerError},

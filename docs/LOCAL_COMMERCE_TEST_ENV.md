@@ -82,8 +82,10 @@ curl -sS -X POST "$BASE_URL/api/v1/access/login-challenges/verify" \
 Expected behavior:
 
 - `AccessLoginChallenge.token_hash` is persisted, but no plaintext token is stored.
+- Client IP and User-Agent are stored as hashes only; raw IP/User-Agent do not enter the challenge row or abuse audit details.
 - Verification consumes the challenge exactly once and delegates to the existing access session service, so trial idempotency, device limits, and signed snapshot issuance stay in one place.
 - Reusing a consumed/expired challenge returns a stable error code such as `login_challenge_failed` or `login_challenge_expired`.
+- Excess challenge creation returns `login_challenge_rate_limited` and records `access.login_challenge.abuse` with only fingerprints/hashes.
 
 The contract test for this slice is:
 

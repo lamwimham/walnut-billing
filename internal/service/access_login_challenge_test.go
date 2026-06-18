@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 	"walnut-billing/internal/domain"
@@ -37,6 +38,34 @@ func (m *mockAccessLoginChallengeRepo) GetByIdempotencyKey(ctx context.Context, 
 		return nil, repository.ErrNotFound
 	}
 	return challenge, nil
+}
+func (m *mockAccessLoginChallengeRepo) Count(ctx context.Context, query repository.AccessLoginChallengeQuery) (int64, error) {
+	var count int64
+	for _, challenge := range m.byID {
+		if query.Email != "" && challenge.Email != query.Email {
+			continue
+		}
+		if query.ClientIPHash != "" && challenge.ClientIPHash != query.ClientIPHash {
+			continue
+		}
+		if !query.CreatedAfter.IsZero() && challenge.CreatedAt.Before(query.CreatedAfter) {
+			continue
+		}
+		if len(query.Statuses) > 0 {
+			matched := false
+			for _, status := range query.Statuses {
+				if challenge.Status == status {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		count++
+	}
+	return count, nil
 }
 func (m *mockAccessLoginChallengeRepo) Update(ctx context.Context, challenge *domain.AccessLoginChallenge) error {
 	m.byID[challenge.ID] = challenge
@@ -76,6 +105,26 @@ func (s *fakeAccessSessionService) RegisterOrRestore(ctx context.Context, input 
 	return &AccessSessionResult{User: &domain.User{ID: "usr_1", Email: input.Email}, Device: &domain.UserDevice{DeviceID: input.DeviceID}}, nil
 }
 
+type recordingAccessLoginAbuseObserver struct {
+	events []AccessLoginChallengeAbuseEvent
+}
+
+func (o *recordingAccessLoginAbuseObserver) ObserveAccessLoginChallengeAbuse(ctx context.Context, event AccessLoginChallengeAbuseEvent) {
+	o.events = append(o.events, event)
+}
+
+type recordingAuditService struct {
+	entries []domain.AuditEntry
+}
+
+func (s *recordingAuditService) Record(ctx context.Context, entry *domain.AuditEntry) {
+	s.entries = append(s.entries, *entry)
+}
+
+func (s *recordingAuditService) Query(ctx context.Context, query repository.AuditQuery) ([]domain.AuditEntry, int64, error) {
+	return s.entries, int64(len(s.entries)), nil
+}
+
 type unavailableAccessLoginDelivery struct{}
 
 func (unavailableAccessLoginDelivery) EnsureAvailable(ctx context.Context) error {
@@ -111,7 +160,7 @@ func TestAccessLoginChallengeService_CreateHashesTokenAndReturnsDevDelivery(t *t
 		Policy:         NewConfigurableAccessLoginChallengePolicy(AccessLoginChallengePolicyConfig{TTLSeconds: 60, MaxAttempts: 2}),
 		Now:            func() time.Time { return now },
 	})
-	result, err := svc.Create(context.Background(), AccessLoginChallengeCreateInput{Email: " Writer@Example.COM ", DeviceID: "device-1", IdempotencyKey: "login:1"})
+	result, err := svc.Create(context.Background(), AccessLoginChallengeCreateInput{Email: " Writer@Example.COM ", DeviceID: "device-1", IdempotencyKey: "login:1", ClientIP: "127.0.0.1", UserAgent: "walnut-test"})
 	if err != nil {
 		t.Fatalf("create challenge: %v", err)
 	}
@@ -121,6 +170,9 @@ func TestAccessLoginChallengeService_CreateHashesTokenAndReturnsDevDelivery(t *t
 	}
 	if challenge.TokenHash == "123456" || !hasher.Verify("123456", challenge.TokenHash) {
 		t.Fatalf("expected hashed token, got %q", challenge.TokenHash)
+	}
+	if challenge.ClientIPHash == "" || challenge.ClientIPHash == "127.0.0.1" || challenge.UserAgentHash == "" || challenge.UserAgentHash == "walnut-test" {
+		t.Fatalf("expected hashed request metadata, got %#v", challenge)
 	}
 	if result.DevToken != "123456" || result.Delivery != "dev" || !result.ExpiresAt.Equal(now.Add(time.Minute)) {
 		t.Fatalf("unexpected create result: %#v", result)
@@ -245,17 +297,105 @@ func TestAccessLoginChallengeService_CreateIdempotentReplayRejectsConsumedChalle
 	}
 }
 
+func TestAccessLoginChallengeService_CreateRateLimitsByEmailAndAuditsAbuse(t *testing.T) {
+	repo := newMockAccessLoginChallengeRepo()
+	observer := &recordingAccessLoginAbuseObserver{}
+	now := time.Date(2026, 6, 18, 8, 0, 0, 0, time.UTC)
+	svc := NewAccessLoginChallengeService(AccessLoginChallengeDependencies{
+		Challenges:     repo,
+		AccessSession:  &fakeAccessSessionService{},
+		TokenGenerator: fixedLoginTokenGenerator{token: "123456"},
+		TokenHasher:    HMACAccessLoginTokenHasher{Secret: "test-secret"},
+		Policy: NewConfigurableAccessLoginChallengePolicy(AccessLoginChallengePolicyConfig{
+			TTLSeconds:             60,
+			MaxAttempts:            2,
+			RateLimitWindowSeconds: 300,
+			MaxCreatesPerEmail:     1,
+			MaxCreatesPerIP:        20,
+		}),
+		AbuseObserver: observer,
+		Now:           func() time.Time { return now },
+	})
+	if _, err := svc.Create(context.Background(), AccessLoginChallengeCreateInput{Email: "writer@example.com", DeviceID: "device-1", ClientIP: "127.0.0.1"}); err != nil {
+		t.Fatalf("create challenge: %v", err)
+	}
+	_, err := svc.Create(context.Background(), AccessLoginChallengeCreateInput{Email: "writer@example.com", DeviceID: "device-2", ClientIP: "127.0.0.2"})
+	if !errors.Is(err, ErrAccessLoginChallengeRateLimited) {
+		t.Fatalf("expected rate limit, got %v", err)
+	}
+	if len(observer.events) != 1 || observer.events[0].Reason != AccessLoginChallengeAbuseReasonRateLimited || observer.events[0].EmailFingerprint == "" {
+		t.Fatalf("expected rate-limit abuse event, got %#v", observer.events)
+	}
+	if len(repo.byID) != 1 {
+		t.Fatalf("rate-limited create should not persist challenge, got %#v", repo.byID)
+	}
+}
+
+func TestAccessLoginChallengeService_CreateRateLimitsByClientIP(t *testing.T) {
+	repo := newMockAccessLoginChallengeRepo()
+	now := time.Date(2026, 6, 18, 8, 0, 0, 0, time.UTC)
+	svc := NewAccessLoginChallengeService(AccessLoginChallengeDependencies{
+		Challenges:     repo,
+		AccessSession:  &fakeAccessSessionService{},
+		TokenGenerator: fixedLoginTokenGenerator{token: "123456"},
+		TokenHasher:    HMACAccessLoginTokenHasher{Secret: "test-secret"},
+		Policy: NewConfigurableAccessLoginChallengePolicy(AccessLoginChallengePolicyConfig{
+			TTLSeconds:             60,
+			MaxAttempts:            2,
+			RateLimitWindowSeconds: 300,
+			MaxCreatesPerEmail:     10,
+			MaxCreatesPerIP:        1,
+		}),
+		Now: func() time.Time { return now },
+	})
+	if _, err := svc.Create(context.Background(), AccessLoginChallengeCreateInput{Email: "writer-1@example.com", DeviceID: "device-1", ClientIP: "127.0.0.1"}); err != nil {
+		t.Fatalf("create challenge: %v", err)
+	}
+	_, err := svc.Create(context.Background(), AccessLoginChallengeCreateInput{Email: "writer-2@example.com", DeviceID: "device-2", ClientIP: "127.0.0.1"})
+	if !errors.Is(err, ErrAccessLoginChallengeRateLimited) {
+		t.Fatalf("expected client IP rate limit, got %v", err)
+	}
+}
+
+func TestAccessLoginChallengeAuditObserverRecordsPrivacySafeAbuse(t *testing.T) {
+	audit := &recordingAuditService{}
+	observer := NewAccessLoginChallengeAuditObserver(audit)
+	observer.ObserveAccessLoginChallengeAbuse(context.Background(), AccessLoginChallengeAbuseEvent{
+		ChallengeID:         "alc_1",
+		EmailFingerprint:    "emailfp123456",
+		DeviceIDFingerprint: "devicefp1234",
+		ClientIPHash:        "iphash123456",
+		UserAgentHash:       "uafp12345678",
+		Reason:              AccessLoginChallengeAbuseReasonMaxAttempts,
+		Attempts:            3,
+		MaxAttempts:         3,
+	})
+
+	if len(audit.entries) != 1 {
+		t.Fatalf("expected one audit entry, got %#v", audit.entries)
+	}
+	entry := audit.entries[0]
+	if entry.Action != domain.AuditActionAccessLoginChallengeAbuse || entry.Actor != "emailfp123456" || entry.Target != "alc_1" || entry.Success {
+		t.Fatalf("unexpected audit entry: %#v", entry)
+	}
+	if strings.Contains(entry.Details, "writer@example.com") || strings.Contains(entry.Details, "127.0.0.1") || strings.Contains(entry.Details, "device-1") {
+		t.Fatalf("abuse audit leaked raw identifiers: %s", entry.Details)
+	}
+}
+
 func TestAccessLoginChallengeService_VerifyWrongTokenExpiresAfterMaxAttempts(t *testing.T) {
 	repo := newMockAccessLoginChallengeRepo()
+	observer := &recordingAccessLoginAbuseObserver{}
 	svc := NewAccessLoginChallengeService(AccessLoginChallengeDependencies{
 		Challenges:     repo,
 		AccessSession:  &fakeAccessSessionService{},
 		TokenGenerator: fixedLoginTokenGenerator{token: "123456"},
 		TokenHasher:    HMACAccessLoginTokenHasher{Secret: "test-secret"},
 		Policy:         NewConfigurableAccessLoginChallengePolicy(AccessLoginChallengePolicyConfig{TTLSeconds: 60, MaxAttempts: 2}),
+		AbuseObserver:  observer,
 		Now:            func() time.Time { return time.Date(2026, 6, 18, 8, 0, 0, 0, time.UTC) },
 	})
-	created, err := svc.Create(context.Background(), AccessLoginChallengeCreateInput{Email: "writer@example.com", DeviceID: "device-1"})
+	created, err := svc.Create(context.Background(), AccessLoginChallengeCreateInput{Email: "writer@example.com", DeviceID: "device-1", ClientIP: "127.0.0.1", UserAgent: "walnut-test"})
 	if err != nil {
 		t.Fatalf("create challenge: %v", err)
 	}
@@ -268,6 +408,12 @@ func TestAccessLoginChallengeService_VerifyWrongTokenExpiresAfterMaxAttempts(t *
 	challenge := repo.byID[created.ChallengeID]
 	if challenge.Attempts != 2 || challenge.Status != domain.AccessLoginChallengeStatusExpired {
 		t.Fatalf("expected expired after max attempts, got %#v", challenge)
+	}
+	if challenge.FailureReason != accessLoginChallengeFailureReasonWrongToken {
+		t.Fatalf("expected failure reason, got %#v", challenge)
+	}
+	if len(observer.events) != 1 || observer.events[0].Reason != AccessLoginChallengeAbuseReasonMaxAttempts || observer.events[0].Attempts != 2 {
+		t.Fatalf("expected max-attempt abuse event, got %#v", observer.events)
 	}
 }
 

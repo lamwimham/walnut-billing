@@ -48,6 +48,8 @@ func (h *AccessLoginChallengeHandler) Create(c *gin.Context) {
 		DeviceID:       req.DeviceID,
 		Source:         req.Source,
 		IdempotencyKey: req.IdempotencyKey,
+		ClientIP:       clientIP(c),
+		UserAgent:      c.GetHeader("User-Agent"),
 	})
 	if err != nil {
 		h.recordAudit(c, "email", domain.AuditActionAccessLoginChallengeCreate, "access_login_challenge", false, "access_login_challenge_create_failed")
@@ -74,6 +76,8 @@ func (h *AccessLoginChallengeHandler) Verify(c *gin.Context) {
 		DeviceID:    req.DeviceID,
 		DisplayName: req.DisplayName,
 		Source:      req.Source,
+		ClientIP:    clientIP(c),
+		UserAgent:   c.GetHeader("User-Agent"),
 	})
 	if err != nil {
 		h.recordAudit(c, "unknown", domain.AuditActionAccessLoginChallengeVerify, defaultStringForHandler(req.ChallengeID, "access_login_challenge"), false, "access_login_challenge_verify_failed")
@@ -94,6 +98,8 @@ func writeAccessLoginChallengeError(c *gin.Context, err error) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error(), "code": "login_challenge_failed"})
 	case errors.Is(err, service.ErrAccessLoginChallengeDeliveryUnavailable):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": "login_challenge_delivery_unavailable"})
+	case errors.Is(err, service.ErrAccessLoginChallengeRateLimited):
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error(), "code": "login_challenge_rate_limited"})
 	case errors.Is(err, service.ErrAccessDeviceRevoked):
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error(), "code": "access_device_revoked"})
 	case errors.Is(err, service.ErrDeviceLimitExceeded):

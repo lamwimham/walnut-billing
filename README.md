@@ -119,6 +119,8 @@ These endpoints provide the first entitlement projection for Walnut clients. Gra
 
 `/api/v1/access/login-challenges` is the email login/recovery boundary. The service creates an `AccessLoginChallenge`, stores only an HMAC hash of the OTP, enforces TTL/max-attempt policy, and verifies by consuming the pending challenge before delegating to `AccessSessionService.RegisterOrRestore`. Dev delivery returns `dev_token` so local clients can test without email; production must use a real email delivery adapter and must not expose plaintext tokens.
 
+Login challenge abuse controls are persisted at the identity boundary: challenge creates are limited per normalized email and hashed client IP, failed verify attempts expire the challenge after the configured threshold, and rate-limit/max-attempt events write privacy-safe audit records without raw email, IP, user-agent, device id, or OTP values.
+
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
 | POST | `/api/v1/access/login-challenges` | `{email, device_id, source, idempotency_key}` | `{challenge_id, email, device_id, expires_at, delivery, dev_token?}` |
@@ -211,6 +213,9 @@ All settings via environment variables (see `.env.example`):
 | `ACCESS_TRIAL_DURATION_DAYS` | 14 | One-time trial duration keyed by normalized email and trial type |
 | `ACCESS_LOGIN_CHALLENGE_TTL_SECONDS` | 600 | Email login/recovery OTP validity window |
 | `ACCESS_LOGIN_CHALLENGE_MAX_ATTEMPTS` | 5 | Wrong-token/device attempts before the challenge expires |
+| `ACCESS_LOGIN_CHALLENGE_RATE_LIMIT_WINDOW_SECONDS` | 600 | Sliding window for persisted login challenge create limits |
+| `ACCESS_LOGIN_CHALLENGE_MAX_CREATES_PER_EMAIL` | 5 | Max challenge creates per normalized email within the rate-limit window |
+| `ACCESS_LOGIN_CHALLENGE_MAX_CREATES_PER_IP` | 20 | Max challenge creates per hashed client IP within the rate-limit window |
 | `ACCESS_LOGIN_CHALLENGE_DELIVERY` | dev | `dev` returns `dev_token` outside prod; `email` is currently disabled until a provider adapter is configured |
 | `ACCESS_LOGIN_CHALLENGE_SECRET` | dev secret | HMAC secret for OTP hashing; change in non-dev environments |
 

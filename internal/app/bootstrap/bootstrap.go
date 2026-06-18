@@ -99,6 +99,9 @@ func buildAccessLoginChallengePolicy(cfg *config.Config) service.AccessLoginChal
 	if cfg != nil {
 		policyConfig.TTLSeconds = cfg.Access.LoginChallengeTTLSeconds
 		policyConfig.MaxAttempts = cfg.Access.LoginChallengeMaxAttempts
+		policyConfig.RateLimitWindowSeconds = cfg.Access.LoginChallengeRateLimitWindowSeconds
+		policyConfig.MaxCreatesPerEmail = cfg.Access.LoginChallengeMaxCreatesPerEmail
+		policyConfig.MaxCreatesPerIP = cfg.Access.LoginChallengeMaxCreatesPerIP
 	}
 	return service.NewConfigurableAccessLoginChallengePolicy(policyConfig)
 }
@@ -339,6 +342,7 @@ func Build() (*Application, error) {
 		Delivery:      accessLoginChallengeDelivery,
 		TokenHasher:   service.HMACAccessLoginTokenHasher{Secret: cfg.Access.LoginChallengeSecret},
 		Policy:        buildAccessLoginChallengePolicy(cfg),
+		AbuseObserver: service.NewAccessLoginChallengeAuditObserver(auditSvc),
 	})
 	cloudObjectProvider, err := buildCloudObjectStorageProvider(cfg)
 	if err != nil {

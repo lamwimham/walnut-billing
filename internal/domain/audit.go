@@ -33,6 +33,7 @@ const (
 	AuditActionRegistrationReview         = "registration.review"
 	AuditActionAccessLoginChallengeCreate = "access.login_challenge.create"
 	AuditActionAccessLoginChallengeVerify = "access.login_challenge.verify"
+	AuditActionAccessLoginChallengeAbuse  = "access.login_challenge.abuse"
 	AuditActionAccessDeviceRevoke         = "access.device.revoke"
 	AuditActionEntitlementGrant           = "entitlement.grant"
 	AuditActionCreditGrant                = "credit.grant"
