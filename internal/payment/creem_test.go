@@ -33,6 +33,7 @@ func TestCreemAdapter_CreateCheckoutSessionBuildsProviderRequest(t *testing.T) {
 	adapter, err := NewCreemAdapter(CreemConfig{
 		APIKey:        "creem_test_key",
 		WebhookSecret: "whsec_test",
+		SandboxMode:   true,
 		APIBaseURL:    server.URL,
 		ProductIDs:    map[string]string{"editorial_studio_monthly": "prod_studio"},
 		SuccessURL:    "https://walnut.local/success",
@@ -77,6 +78,7 @@ func TestCreemAdapter_VerifyCheckoutCompletedWebhook(t *testing.T) {
 	adapter, err := NewCreemAdapter(CreemConfig{
 		APIKey:        "creem_test_key",
 		WebhookSecret: "whsec_test",
+		SandboxMode:   true,
 		ProductIDs:    map[string]string{"editorial_studio_monthly": "prod_studio"},
 	})
 	if err != nil {
@@ -101,6 +103,7 @@ func TestCreemAdapter_VerifyDisputeWebhookMapsToPaymentDisputed(t *testing.T) {
 	adapter, err := NewCreemAdapter(CreemConfig{
 		APIKey:        "creem_test_key",
 		WebhookSecret: "whsec_test",
+		SandboxMode:   true,
 		ProductIDs:    map[string]string{"editorial_studio_monthly": "prod_studio"},
 	})
 	if err != nil {
@@ -125,6 +128,7 @@ func TestCreemAdapter_VerifySubscriptionWebhooksMapToRenewalEvents(t *testing.T)
 	adapter, err := NewCreemAdapter(CreemConfig{
 		APIKey:        "creem_test_key",
 		WebhookSecret: "whsec_test",
+		SandboxMode:   true,
 		ProductIDs:    map[string]string{"editorial_studio_monthly": "prod_studio"},
 	})
 	if err != nil {
@@ -160,6 +164,7 @@ func TestCreemAdapter_RejectsBadWebhookSignature(t *testing.T) {
 	adapter, err := NewCreemAdapter(CreemConfig{
 		APIKey:        "creem_test_key",
 		WebhookSecret: "whsec_test",
+		SandboxMode:   true,
 		ProductIDs:    map[string]string{"credits_600": "prod_credits"},
 	})
 	if err != nil {
@@ -171,6 +176,80 @@ func TestCreemAdapter_RejectsBadWebhookSignature(t *testing.T) {
 	})
 	if !errors.Is(err, ErrWebhookSignatureVerificationFailed) || !errors.Is(err, ErrCreemWebhookUnverified) {
 		t.Fatalf("expected wrapped bad signature error, got %v", err)
+	}
+}
+
+func TestCreemAdapter_ValidatesRequiredProductMappings(t *testing.T) {
+	_, err := NewCreemAdapter(CreemConfig{
+		APIKey:           "creem_test_key",
+		WebhookSecret:    "whsec_test",
+		SandboxMode:      true,
+		ProductIDs:       map[string]string{"pro_own_ai_monthly": "prod_monthly"},
+		RequiredSKUCodes: []string{"pro_own_ai_monthly", "pro_own_ai_lifetime"},
+	})
+	if !errors.Is(err, ErrCreemProductNotMapped) {
+		t.Fatalf("expected missing required sku mapping error, got %v", err)
+	}
+}
+
+func TestCreemAdapter_RejectsEnvironmentMixing(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  CreemConfig
+	}{
+		{
+			name: "sandbox with production endpoint",
+			cfg: CreemConfig{
+				APIKey:        "creem_test_key",
+				WebhookSecret: "whsec_test",
+				SandboxMode:   true,
+				APIBaseURL:    "https://api.creem.io",
+				ProductIDs:    map[string]string{"pro_own_ai_monthly": "prod_monthly"},
+			},
+		},
+		{
+			name: "production with test endpoint",
+			cfg: CreemConfig{
+				APIKey:        "creem_live_key",
+				WebhookSecret: "whsec_live",
+				SandboxMode:   false,
+				APIBaseURL:    "https://test-api.creem.io",
+				ProductIDs:    map[string]string{"pro_own_ai_monthly": "prod_monthly"},
+			},
+		},
+		{
+			name: "production with test key",
+			cfg: CreemConfig{
+				APIKey:        "creem_test_key",
+				WebhookSecret: "whsec_live",
+				SandboxMode:   false,
+				ProductIDs:    map[string]string{"pro_own_ai_monthly": "prod_monthly"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewCreemAdapter(tt.cfg)
+			if !errors.Is(err, ErrCreemEnvironmentMismatch) {
+				t.Fatalf("expected environment mismatch, got %v", err)
+			}
+		})
+	}
+}
+
+func TestCreemAdapter_AcceptsTestModeDefaults(t *testing.T) {
+	adapter, err := NewCreemAdapter(CreemConfig{
+		APIKey:           "creem_test_key",
+		WebhookSecret:    "whsec_test",
+		SandboxMode:      true,
+		ProductIDs:       map[string]string{"pro_own_ai_monthly": "prod_monthly"},
+		RequiredSKUCodes: []string{"pro_own_ai_monthly"},
+	})
+	if err != nil {
+		t.Fatalf("expected test mode config to pass: %v", err)
+	}
+	if adapter.apiBaseURL != creemDefaultTestBaseURL {
+		t.Fatalf("expected default test endpoint %s, got %s", creemDefaultTestBaseURL, adapter.apiBaseURL)
 	}
 }
 

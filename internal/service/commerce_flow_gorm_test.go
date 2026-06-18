@@ -403,6 +403,7 @@ func newCommerceFlowPaymentService(t *testing.T, creemBaseURL string, orders rep
 	creemAdapter, err := payment.NewCreemAdapter(payment.CreemConfig{
 		APIKey:        "creem_test_key",
 		WebhookSecret: "whsec_test",
+		SandboxMode:   true,
 		APIBaseURL:    creemBaseURL,
 		ProductIDs:    map[string]string{"editorial_studio_monthly": "prod_studio"},
 	})

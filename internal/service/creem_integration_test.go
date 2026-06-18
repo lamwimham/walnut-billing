@@ -65,6 +65,7 @@ func newCommerceFlowHarness(t *testing.T) (*commerceFlowHarness, func()) {
 	creemAdapter, err := payment.NewCreemAdapter(payment.CreemConfig{
 		APIKey:        "creem_test_key",
 		WebhookSecret: "whsec_test",
+		SandboxMode:   true,
 		APIBaseURL:    creemServer.URL,
 		ProductIDs:    map[string]string{"editorial_studio_monthly": "prod_studio"},
 	})

@@ -105,6 +105,19 @@ func buildAccessSnapshotPolicy(cfg *config.Config) service.AccessSnapshotPolicy 
 	return service.NewConfigurableAccessSnapshotPolicy(policyConfig)
 }
 
+func checkoutVisibleSKUCodes(catalog service.ProductCatalog) []string {
+	if catalog == nil {
+		return nil
+	}
+	skus := make([]string, 0)
+	for _, definition := range catalog.Definitions() {
+		if definition.CheckoutVisible {
+			skus = append(skus, definition.Code)
+		}
+	}
+	return skus
+}
+
 func buildCloudObjectStorageProvider(cfg *config.Config) (service.ObjectStorageProvider, error) {
 	providerID := ""
 	if cfg != nil {
@@ -344,7 +357,9 @@ func Build() (*Application, error) {
 
 	// Creem hosted checkout. Creem stays behind the provider adapter boundary:
 	// checkout/webhook mapping live here, while fulfillment owns Walnut grants.
-	if creemAdapter, err := payment.NewCreemAdapter(cfg.Payment.CreemConfig()); err == nil {
+	creemConfig := cfg.Payment.CreemConfig()
+	creemConfig.RequiredSKUCodes = checkoutVisibleSKUCodes(commerceCatalog.Products())
+	if creemAdapter, err := payment.NewCreemAdapter(creemConfig); err == nil {
 		registry.Register("creem", creemAdapter, payment.ProviderStatus{
 			IsMock:      false,
 			SandboxMode: cfg.Payment.CreemSandbox,

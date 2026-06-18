@@ -25,21 +25,23 @@ const (
 var (
 	ErrCreemInvalidConfig       = errors.New("invalid creem config")
 	ErrCreemProductNotMapped    = errors.New("creem product not mapped")
+	ErrCreemEnvironmentMismatch = errors.New("creem environment mismatch")
 	ErrCreemWebhookUnverified   = errors.New("creem webhook signature verification failed")
 	ErrCreemInvalidWebhook      = errors.New("invalid creem webhook")
 	ErrCreemCheckoutUnsupported = errors.New("creem legacy payment URL is unsupported; use checkout sessions")
 )
 
 type CreemConfig struct {
-	APIKey         string
-	WebhookSecret  string
-	APIBaseURL     string
-	SuccessURL     string
-	CancelURL      string
-	SandboxMode    bool
-	ProductIDs     map[string]string
-	ProductMapJSON string
-	HTTPClient     *http.Client
+	APIKey           string
+	WebhookSecret    string
+	APIBaseURL       string
+	SuccessURL       string
+	CancelURL        string
+	SandboxMode      bool
+	ProductIDs       map[string]string
+	ProductMapJSON   string
+	RequiredSKUCodes []string
+	HTTPClient       *http.Client
 }
 
 // CreemAdapter keeps Creem-specific checkout and webhook behavior behind the
@@ -69,6 +71,13 @@ func NewCreemAdapter(cfg CreemConfig) (*CreemAdapter, error) {
 	if apiKey == "" || webhookSecret == "" || len(products) == 0 {
 		return nil, ErrCreemInvalidConfig
 	}
+	if err := validateCreemRequiredProducts(products, cfg.RequiredSKUCodes); err != nil {
+		return nil, err
+	}
+	apiBaseURL := normalizeCreemAPIBaseURL(cfg.APIBaseURL, cfg.SandboxMode)
+	if err := validateCreemEnvironment(apiBaseURL, apiKey, cfg.SandboxMode); err != nil {
+		return nil, err
+	}
 	client := cfg.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -76,7 +85,7 @@ func NewCreemAdapter(cfg CreemConfig) (*CreemAdapter, error) {
 	return &CreemAdapter{
 		apiKey:        apiKey,
 		webhookSecret: webhookSecret,
-		apiBaseURL:    normalizeCreemAPIBaseURL(cfg.APIBaseURL, cfg.SandboxMode),
+		apiBaseURL:    apiBaseURL,
 		successURL:    strings.TrimSpace(cfg.SuccessURL),
 		cancelURL:     strings.TrimSpace(cfg.CancelURL),
 		sandboxMode:   cfg.SandboxMode,
@@ -222,6 +231,41 @@ type creemCheckoutResponse struct {
 	} `json:"customer"`
 }
 
+func validateCreemRequiredProducts(products map[string]string, requiredSKUCodes []string) error {
+	missing := make([]string, 0)
+	seen := map[string]bool{}
+	for _, sku := range requiredSKUCodes {
+		sku = strings.TrimSpace(sku)
+		if sku == "" || seen[sku] {
+			continue
+		}
+		seen[sku] = true
+		if strings.TrimSpace(products[sku]) == "" {
+			missing = append(missing, sku)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: missing product mapping for sku(s): %s", ErrCreemProductNotMapped, strings.Join(missing, ","))
+	}
+	return nil
+}
+
+func validateCreemEnvironment(apiBaseURL string, apiKey string, sandbox bool) error {
+	base := strings.ToLower(strings.TrimSpace(apiBaseURL))
+	key := strings.ToLower(strings.TrimSpace(apiKey))
+	switch {
+	case sandbox && strings.Contains(base, "api.creem.io") && !strings.Contains(base, "test-api.creem.io"):
+		return fmt.Errorf("%w: sandbox mode requires %s", ErrCreemEnvironmentMismatch, creemDefaultTestBaseURL)
+	case !sandbox && strings.Contains(base, "test-api.creem.io"):
+		return fmt.Errorf("%w: production mode requires %s", ErrCreemEnvironmentMismatch, creemDefaultProdBaseURL)
+	case sandbox && strings.HasPrefix(key, "creem_live"):
+		return fmt.Errorf("%w: live API key cannot be used in sandbox mode", ErrCreemEnvironmentMismatch)
+	case !sandbox && strings.HasPrefix(key, "creem_test"):
+		return fmt.Errorf("%w: test API key cannot be used in production mode", ErrCreemEnvironmentMismatch)
+	}
+	return nil
+}
+
 func creemProductMap(rawMap map[string]string, rawJSON string) (map[string]string, error) {
 	result := make(map[string]string)
 	for sku, productID := range rawMap {
@@ -359,6 +403,10 @@ func mapCreemEventType(eventType string, payload map[string]any) string {
 	case "subscription.expired":
 		if creemOutTradeNo(payload) != "" {
 			return domain.PaymentEventTypeSubscriptionExpired
+		}
+	case "subscription.cancelled", "subscription.canceled":
+		if creemOutTradeNo(payload) != "" {
+			return domain.PaymentEventTypeCancelled
 		}
 	}
 	return strings.TrimSpace(eventType)

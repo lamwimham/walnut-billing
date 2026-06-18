@@ -502,6 +502,8 @@ go test ./internal/service ./internal/api/handler ./internal/repository/gorm_rep
 
 ### WCP-1：Creem test mode 与真实 checkout 闭环（P0）
 
+WCP-1 进展（2026-06-18）：第一切片已开始。Creem adapter contract 已增加 sandbox/prod endpoint/key 防混用、checkout-visible SKU product map 校验，以及本地 webhook fixture runner；真实 dashboard 支付仍需后续凭证环境验证。
+
 目标：在 mock provider 保持确定性的同时，能用 Creem sandbox 跑通真实 hosted checkout + webhook + fulfillment。
 
 任务：

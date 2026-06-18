@@ -109,13 +109,27 @@ Use `support-key` to verify read-only views and `ops-key` to verify management a
 
 ## 5. Creem Test Mode Profile
 
+Creem test mode must stay isolated from production:
+
+- Test API base URL: `https://test-api.creem.io` (leave `PAYMENT_CREEM_API_BASE_URL` empty when `PAYMENT_CREEM_SANDBOX=true`).
+- Test and production API keys are separate; never use a `creem_live...` key with sandbox mode or a `creem_test...` key with production mode.
+- Test products are separate from production products. Map every checkout-visible Walnut SKU before enabling Creem (`pro_own_ai_monthly` and `pro_own_ai_lifetime` today).
+- Test webhooks must point to the test webhook URL in the Creem dashboard; production webhooks use a different endpoint/secret.
+
+First run the local adapter/fixture contract; it does not call Creem:
+
+```bash
+scripts/verify_creem_sandbox_contract.sh
+```
+
 Set these before `scripts/run_local_billing_test_env.sh`:
 
 ```bash
 export PAYMENT_CREEM_API_KEY='creem_test_...'
 export PAYMENT_CREEM_WEBHOOK_SECRET='whsec_...'
 export PAYMENT_CREEM_SANDBOX=true
-export PAYMENT_CREEM_PRODUCT_MAP_JSON='{"pro_own_ai_monthly":"prod_4MS4IC77zjEobSHExt0gcr"}'
+export PAYMENT_CREEM_API_BASE_URL=
+export PAYMENT_CREEM_PRODUCT_MAP_JSON='{"pro_own_ai_monthly":"prod_test_monthly","pro_own_ai_lifetime":"prod_test_lifetime"}'
 export PAYMENT_CREEM_SUCCESS_URL='walnut://checkout/success'
 export PAYMENT_CREEM_CANCEL_URL='walnut://checkout/cancel'
 ```
@@ -126,10 +140,10 @@ Then start Walnut Core with:
 WALNUT_ACCESS_CHECKOUT_PROVIDER=creem
 ```
 
-For local webhook delivery, expose billing with `ngrok`/`cloudflared` and point the Creem dashboard webhook to:
+For local webhook delivery, expose billing with `ngrok`/`cloudflared` and point the Creem test-mode dashboard webhook to:
 
 ```text
 https://<public-test-host>/api/v1/webhooks/creem
 ```
 
-Keep mock checkout as the deterministic CI/local regression path; use Creem test mode for provider-contract validation.
+Use Creem's successful test card `4242 4242 4242 4242` for paid checkout validation; keep mock checkout as the deterministic CI/local regression path. The adapter refuses obvious sandbox/production endpoint or key mixing before registering the provider.
