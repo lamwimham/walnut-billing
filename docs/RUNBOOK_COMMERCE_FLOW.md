@@ -642,7 +642,9 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 
 | 现象 | 可能原因 | 检查 | 处理 |
 |---|---|---|---|
-| providers 中没有 Creem | 缺少 API key、webhook secret 或 product map | 启动日志；`/admin/payment/providers` | 设置 `PAYMENT_CREEM_*`，重启或使用 hot-reload |
+| Creem provider `disabled` | 未配置 Creem，当前只跑 mock profile | `/admin/payment/providers` | 如需 Creem test mode，设置 test API key、webhook secret 和完整 product map |
+| Creem provider `error` | 缺少 product map、test/prod endpoint/key 混用、webhook secret 缺失 | `/admin/payment/providers` 的 `error` 字段；启动日志 | 修正 `PAYMENT_CREEM_*`，确保 sandbox 使用 `https://test-api.creem.io` 与 test key |
+| checkout 返回 `payment provider not found: creem` | Creem 当前不是 active provider | `/admin/payment/providers` | 先消除 `disabled/error` 状态，再重试 checkout |
 | checkout 返回 `checkout_provider_failed` | provider 请求失败或 SKU 未映射 | 服务日志；响应 body | 检查 product map、API base URL、网络、Creem credentials |
 | checkout 返回 `checkout_blocked_by_payment_risk` | 存在 open high/critical `PaymentRiskFlag` | `/admin/payment-risk-flags?user_id=...&status=open` | 仅在人工审核后 resolve |
 | webhook 返回 bad request | 签名或 payload 无效 | `creem-signature`、raw payload、secret | 重算签名；核对 dashboard secret |

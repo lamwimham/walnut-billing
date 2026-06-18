@@ -2,6 +2,7 @@ package payment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -401,5 +402,25 @@ func TestCheckoutMockAdapter_UsesConfiguredBaseURLAndCheckoutContext(t *testing.
 	}
 	if !strings.Contains(session.CheckoutURL, "success_url=walnut%3A%2F%2Fcheckout%2Fsuccess") || !strings.Contains(session.CheckoutURL, "sku_code=pro_own_ai_monthly") {
 		t.Fatalf("expected checkout context query in url, got %s", session.CheckoutURL)
+	}
+}
+
+func TestProviderRegistry_RegisterStatusDoesNotExposeProvider(t *testing.T) {
+	registry := NewProviderRegistry()
+	registry.RegisterStatus("creem", ProviderStatus{Status: "error", Error: "missing product map", SandboxMode: true})
+
+	statuses := registry.Status()
+	status, ok := statuses["creem"]
+	if !ok {
+		t.Fatalf("expected creem status")
+	}
+	if status.Status != "error" || status.Error != "missing product map" || !status.SandboxMode {
+		t.Fatalf("unexpected provider status: %#v", status)
+	}
+	if registry.HasProvider("creem") {
+		t.Fatalf("metadata-only provider must not be usable")
+	}
+	if _, err := registry.Get("creem"); !errors.Is(err, ErrProviderNotFound) {
+		t.Fatalf("expected provider not found, got %v", err)
 	}
 }

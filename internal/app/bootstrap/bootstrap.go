@@ -105,6 +105,12 @@ func buildAccessSnapshotPolicy(cfg *config.Config) service.AccessSnapshotPolicy 
 	return service.NewConfigurableAccessSnapshotPolicy(policyConfig)
 }
 
+func creemConfigured(cfg config.PaymentConfig) bool {
+	return strings.TrimSpace(cfg.CreemAPIKey) != "" ||
+		strings.TrimSpace(cfg.CreemWebhookSecret) != "" ||
+		strings.TrimSpace(cfg.CreemProductMapJSON) != ""
+}
+
 func checkoutVisibleSKUCodes(catalog service.ProductCatalog) []string {
 	if catalog == nil {
 		return nil
@@ -359,15 +365,19 @@ func Build() (*Application, error) {
 	// checkout/webhook mapping live here, while fulfillment owns Walnut grants.
 	creemConfig := cfg.Payment.CreemConfig()
 	creemConfig.RequiredSKUCodes = checkoutVisibleSKUCodes(commerceCatalog.Products())
+	creemStatus := payment.ProviderStatus{SandboxMode: cfg.Payment.CreemSandbox, NotifyURL: webhookURL + "/creem"}
 	if creemAdapter, err := payment.NewCreemAdapter(creemConfig); err == nil {
-		registry.Register("creem", creemAdapter, payment.ProviderStatus{
-			IsMock:      false,
-			SandboxMode: cfg.Payment.CreemSandbox,
-			NotifyURL:   webhookURL + "/creem",
-		})
+		registry.Register("creem", creemAdapter, creemStatus)
 		l.Info("Creem checkout adapter initialized", "sandbox", cfg.Payment.CreemSandbox)
-	} else if cfg.Payment.CreemAPIKey != "" || cfg.Payment.CreemWebhookSecret != "" || cfg.Payment.CreemProductMapJSON != "" {
+	} else if creemConfigured(cfg.Payment) {
+		creemStatus.Status = "error"
+		creemStatus.Error = err.Error()
+		registry.RegisterStatus("creem", creemStatus)
 		l.Warn("Creem checkout adapter not initialized", "error", err)
+	} else {
+		creemStatus.Status = "disabled"
+		creemStatus.Error = "set PAYMENT_CREEM_API_KEY, PAYMENT_CREEM_WEBHOOK_SECRET, and PAYMENT_CREEM_PRODUCT_MAP_JSON to enable"
+		registry.RegisterStatus("creem", creemStatus)
 	}
 
 	// Alipay

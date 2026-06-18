@@ -147,3 +147,16 @@ https://<public-test-host>/api/v1/webhooks/creem
 ```
 
 Use Creem's successful test card `4242 4242 4242 4242` for paid checkout validation; keep mock checkout as the deterministic CI/local regression path. The adapter refuses obvious sandbox/production endpoint or key mixing before registering the provider.
+
+The admin provider status endpoint also reports unavailable Creem state:
+
+```bash
+curl -H 'Authorization: Bearer local-admin-key' \
+  'http://127.0.0.1:8082/api/v1/admin/payment/providers' | python3 -m json.tool
+```
+
+Expected states:
+
+- `active`: Creem checkout/webhook adapter is registered.
+- `disabled`: no Creem credentials/product map were provided; mock flow can still run.
+- `error`: some Creem settings exist but are incomplete, mixed between test/prod, or missing required SKU mappings.

@@ -20,7 +20,8 @@ type ProviderStatus struct {
 	IsMock      bool   `json:"is_mock"`
 	SandboxMode bool   `json:"sandbox_mode"`
 	NotifyURL   string `json:"notify_url"`
-	Status      string `json:"status"` // "active", "error"
+	Status      string `json:"status"` // "active", "disabled", "error"
+	Error       string `json:"error,omitempty"`
 }
 
 // NewProviderRegistry creates an empty registry.
@@ -31,13 +32,26 @@ func NewProviderRegistry() *ProviderRegistry {
 	}
 }
 
-// Register adds or replaces a provider in the registry.
+// Register adds or replaces an active provider in the registry.
 func (r *ProviderRegistry) Register(name string, provider PaymentProvider, status ProviderStatus) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.providers[name] = provider
 	status.Name = name
 	status.Status = "active"
+	status.Error = ""
+	r.metadata[name] = status
+}
+
+// RegisterStatus records an unavailable provider status without making it usable for checkout.
+func (r *ProviderRegistry) RegisterStatus(name string, status ProviderStatus) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.providers, name)
+	status.Name = name
+	if status.Status == "" {
+		status.Status = "disabled"
+	}
 	r.metadata[name] = status
 }
 

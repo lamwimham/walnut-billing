@@ -74,6 +74,31 @@ func TestConfigHandler_GetProviderStatus(t *testing.T) {
 	}
 }
 
+func TestConfigHandler_GetProviderStatusIncludesUnavailableProviders(t *testing.T) {
+	registry := payment.NewProviderRegistry()
+	registry.RegisterStatus("creem", payment.ProviderStatus{Status: "error", Error: "missing product map", SandboxMode: true})
+	svc := payment.NewPaymentService(nil, nil, registry)
+	router := setupConfigTestRouter(svc)
+
+	req, _ := http.NewRequest("GET", "/admin/payment/providers", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	var response struct {
+		Providers map[string]payment.ProviderStatus `json:"providers"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	creem := response.Providers["creem"]
+	if creem.Status != "error" || creem.Error != "missing product map" || !creem.SandboxMode {
+		t.Fatalf("expected unavailable creem status in response, got %#v", creem)
+	}
+}
+
 func TestConfigHandler_SwitchToMock(t *testing.T) {
 	registry := payment.NewProviderRegistry()
 	svc := payment.NewPaymentService(nil, nil, registry)
