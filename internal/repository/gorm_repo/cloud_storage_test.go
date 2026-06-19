@@ -19,7 +19,7 @@ func openCloudStorageRepoTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&domain.CloudProject{}, &domain.CloudManifest{}, &domain.CloudObject{}); err != nil {
+	if err := db.AutoMigrate(&domain.CloudProject{}, &domain.CloudSyncSession{}, &domain.CloudManifest{}, &domain.CloudObject{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
@@ -30,6 +30,7 @@ func TestCloudStorageRepositoriesPersistManifestAndObjectUsage(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	projects := &CloudProjectRepo{DB: db}
+	sessions := &CloudSyncSessionRepo{DB: db}
 	manifests := &CloudManifestRepo{DB: db}
 	objects := &CloudObjectRepo{DB: db}
 
@@ -55,6 +56,33 @@ func TestCloudStorageRepositoriesPersistManifestAndObjectUsage(t *testing.T) {
 	}
 
 	committedAt := now.Add(time.Minute)
+	session := &domain.CloudSyncSession{
+		ID:                  "csy_1",
+		UserID:              "usr_1",
+		CloudProjectID:      "cpr_1",
+		ClientProjectID:     "local-project",
+		Provider:            "test-provider",
+		ResourceFingerprint: "fingerprint",
+		RequestedBytes:      300,
+		UsedBytes:           0,
+		QuotaBytes:          1000,
+		Status:              domain.CloudSyncSessionStatusAuthorized,
+		ExpiresAt:           now.Add(15 * time.Minute),
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+	if err := sessions.Create(ctx, session); err != nil {
+		t.Fatalf("create sync session: %v", err)
+	}
+	loadedSession, err := sessions.GetByID(ctx, "csy_1")
+	if err != nil || loadedSession.Status != domain.CloudSyncSessionStatusAuthorized {
+		t.Fatalf("load sync session: %#v err=%v", loadedSession, err)
+	}
+	loadedSession.Status = domain.CloudSyncSessionStatusCommitted
+	loadedSession.ManifestID = "cmf_1"
+	if err := sessions.Update(ctx, loadedSession); err != nil {
+		t.Fatalf("update sync session: %v", err)
+	}
 	manifest := &domain.CloudManifest{
 		ID:              "cmf_1",
 		UserID:          "usr_1",
@@ -65,6 +93,7 @@ func TestCloudStorageRepositoriesPersistManifestAndObjectUsage(t *testing.T) {
 		ObjectCount:     2,
 		TotalBytes:      300,
 		Status:          domain.CloudManifestStatusCommitted,
+		SyncSessionID:   "csy_1",
 		IdempotencyKey:  "idem-1",
 		CreatedAt:       now,
 		CommittedAt:     &committedAt,
@@ -148,5 +177,8 @@ func TestCloudStorageRepositoriesReturnNotFound(t *testing.T) {
 	}
 	if _, err := (&CloudManifestRepo{DB: db}).GetByIdempotencyKey(ctx, "missing"); err != repository.ErrNotFound {
 		t.Fatalf("expected manifest not found, got %v", err)
+	}
+	if _, err := (&CloudSyncSessionRepo{DB: db}).GetByID(ctx, "missing"); err != repository.ErrNotFound {
+		t.Fatalf("expected sync session not found, got %v", err)
 	}
 }

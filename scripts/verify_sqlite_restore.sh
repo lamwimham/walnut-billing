@@ -58,6 +58,10 @@ required_tables=(
   fulfillment_executions
   entitlement_grants
   subscription_cancellations
+  cloud_projects
+  cloud_sync_sessions
+  cloud_manifests
+  cloud_objects
 )
 sqlite_require_tables "$RESTORED_DB" "${required_tables[@]}"
 

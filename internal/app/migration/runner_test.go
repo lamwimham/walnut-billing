@@ -20,6 +20,9 @@ func TestRunVersionedAppliesBaselineAndRecordsMetadata(t *testing.T) {
 	if !db.Migrator().HasTable(&domain.Order{}) {
 		t.Fatalf("expected baseline domain schema to be created")
 	}
+	if !db.Migrator().HasTable(&domain.CloudSyncSession{}) {
+		t.Fatalf("expected cloud sync session schema to be created")
+	}
 
 	var records []SchemaMigration
 	if err := db.Order("version").Find(&records).Error; err != nil {

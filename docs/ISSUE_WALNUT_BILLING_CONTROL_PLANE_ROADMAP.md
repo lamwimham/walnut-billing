@@ -438,11 +438,11 @@ Admin 页面分区：
 | `POST` | `/api/v1/commerce/checkout-sessions` | commerce | 已有，需补 checkout policy reason |
 | `POST` | `/api/v1/commerce/subscriptions/cancel` | commerce | 已接 provider subscription control |
 | `POST` | `/api/v1/commerce/subscriptions/resume` | commerce | 已接 provider subscription control |
-| `POST` | `/api/v1/cloud-storage/sync-sessions` | cloud_storage | 已有，待 provider ADR 后启用 |
-| `POST` | `/api/v1/cloud-storage/manifests` | cloud_storage | 已有，需 sync session 校验 |
+| `POST` | `/api/v1/cloud-storage/sync-sessions` | cloud_storage | 已有，provider 未配置时明确失败；配置 provider 后创建持久化 sync session |
+| `POST` | `/api/v1/cloud-storage/manifests` | cloud_storage | 已有，已绑定 `CloudSyncSession` 与资源 fingerprint |
 | `GET` | `/api/v1/users/:user_id/cloud-storage/usage` | cloud_storage | 已有 |
-| `GET` | `/api/v1/users/:user_id/cloud-storage/projects` | cloud_storage | 新增 |
-| `GET` | `/api/v1/cloud-storage/projects/:id/manifests/latest` | cloud_storage | 新增 |
+| `GET` | `/api/v1/users/:user_id/cloud-storage/projects` | cloud_storage | 已有，restore project metadata |
+| `GET` | `/api/v1/cloud-storage/projects/:id/manifests/latest` | cloud_storage | 已有，restore latest manifest/object metadata |
 
 ### 6.2 Provider / Webhook API
 
@@ -624,20 +624,22 @@ WCP-4 进展（2026-06-19）：第四切片已完成。新增 `AdminSubscription
 
 目标：在云厂商未确定前不写假实现；先把控制面和 contract tests 准备好。
 
+WCP-5 进展（2026-06-19）：第一切片已完成。新增 `CloudSyncSession` domain/repository/GORM adapter，并纳入 UnitOfWork 与 migration schema；`AuthorizeSync` 现在持久化授权会话、provider、quota 快照、requested bytes 和资源 fingerprint，`CommitManifest` 必须携带 matching `sync_session_id`，校验 user/project/provider/resources/expiry 后才写 `CloudManifest` 与 `CloudObject` metadata，同一 session 被消费后不能再次提交。`ObjectStorageProvider` contract 扩展为 upload/download/head/delete/lifecycle tags，但仍保留 `UnconfiguredObjectStorageProvider` 明确失败，避免在未决策 provider 前写假实现。新增 client restore metadata API：`GET /api/v1/users/:user_id/cloud-storage/projects` 与 `GET /api/v1/cloud-storage/projects/:project_id/manifests/latest?user_id=...`。新增 `docs/ADR_CLOUD_STORAGE_PROVIDER.md`、`docs/RUNBOOK_CLOUD_STORAGE_CONTROL_PLANE.md` 与 `scripts/verify_cloud_storage_control_contract.sh` 固化 provider 策略、同步会话、manifest 绑定和 restore 元数据合同。
+
 任务：
 
-- 编写 ADR：评估 OSS、S3/R2、MinIO、managed storage，明确第一实现。
-- 完善 `ObjectStorageProvider` contract：upload target、download target、delete、head object、lifecycle tags。
-- 新增 `CloudSyncSession`，保证 upload session 与 manifest commit 绑定。
-- 增加 restore APIs：project list、latest manifest、object download target。
+- 编写 ADR：评估 OSS、S3/R2、MinIO、managed storage，明确第一实现。（第一切片已完成：首选 S3-compatible / Cloudflare R2，provider adapter 后续落地）
+- 完善 `ObjectStorageProvider` contract：upload target、download target、delete、head object、lifecycle tags。（第一切片已完成：port 已扩展，真实 adapter 后续实现）
+- 新增 `CloudSyncSession`，保证 upload session 与 manifest commit 绑定。（第一切片已完成：session 持久化、fingerprint/expiry/commit 绑定）
+- 增加 restore APIs：project list、latest manifest、object download target。（第一切片已完成：project/latest manifest metadata；download target 待真实 provider adapter）
 - Quota policy 从固定 MB 演进为基于 access plan：trial/monthly/lifetime 可配置。
 
 验收标准：
 
 - provider 未配置时 cloud API 明确失败，不影响软件授权其他闭环。
-- provider 配置后，App 可直传对象并 commit manifest。
+- provider 配置后，App 可直传对象并用未过期 `CloudSyncSession` commit manifest。
 - quota 计算基于 latest active objects，不重复计算被替换对象。
-- restore 能在新设备上列出项目和最新 manifest。
+- restore 能在新设备上列出项目和最新 manifest metadata。
 - 云存储 admin 页面只展示 metadata，不展示正文或原文件内容。
 
 ### WCP-6：生产安全和可运维性（P1）

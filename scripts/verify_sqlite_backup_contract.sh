@@ -19,6 +19,10 @@ CREATE TABLE payment_event_inboxes(id TEXT PRIMARY KEY);
 CREATE TABLE fulfillment_executions(id TEXT PRIMARY KEY);
 CREATE TABLE entitlement_grants(id TEXT PRIMARY KEY);
 CREATE TABLE subscription_cancellations(id TEXT PRIMARY KEY);
+CREATE TABLE cloud_projects(id TEXT PRIMARY KEY);
+CREATE TABLE cloud_sync_sessions(id TEXT PRIMARY KEY);
+CREATE TABLE cloud_manifests(id TEXT PRIMARY KEY);
+CREATE TABLE cloud_objects(id TEXT PRIMARY KEY);
 INSERT INTO users(id) VALUES('usr_fixture');
 SQL
 

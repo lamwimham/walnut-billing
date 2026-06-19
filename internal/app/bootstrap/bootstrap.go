@@ -256,6 +256,7 @@ func Build() (*Application, error) {
 	paymentRiskFlagRepo := &gorm_repo.PaymentRiskFlagRepo{DB: db}
 	subscriptionCancellationRepo := &gorm_repo.SubscriptionCancellationRepo{DB: db}
 	cloudProjectRepo := &gorm_repo.CloudProjectRepo{DB: db}
+	cloudSyncSessionRepo := &gorm_repo.CloudSyncSessionRepo{DB: db}
 	cloudManifestRepo := &gorm_repo.CloudManifestRepo{DB: db}
 	cloudObjectRepo := &gorm_repo.CloudObjectRepo{DB: db}
 
@@ -346,6 +347,7 @@ func Build() (*Application, error) {
 		Users:             userRepo,
 		Grants:            grantRepo,
 		Projects:          cloudProjectRepo,
+		SyncSessions:      cloudSyncSessionRepo,
 		Manifests:         cloudManifestRepo,
 		Objects:           cloudObjectRepo,
 		Policy:            cloudQuotaPolicy,

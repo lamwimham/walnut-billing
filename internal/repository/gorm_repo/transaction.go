@@ -55,6 +55,7 @@ func (u *GormUnitOfWork) Repos() repository.TransactionalRepositories {
 			TrialGrantRepo:               &TrialGrantRepo{DB: u.db},
 			AccessLoginChallengeRepo:     &AccessLoginChallengeRepo{DB: u.db},
 			CloudProjectRepo:             &CloudProjectRepo{DB: u.db},
+			CloudSyncSessionRepo:         &CloudSyncSessionRepo{DB: u.db},
 			CloudManifestRepo:            &CloudManifestRepo{DB: u.db},
 			CloudObjectRepo:              &CloudObjectRepo{DB: u.db},
 		}
@@ -76,6 +77,7 @@ func (u *GormUnitOfWork) Repos() repository.TransactionalRepositories {
 		TrialGrantRepo:               (&TrialGrantRepo{DB: u.db}).WithTx(u.tx),
 		AccessLoginChallengeRepo:     (&AccessLoginChallengeRepo{DB: u.db}).WithTx(u.tx),
 		CloudProjectRepo:             (&CloudProjectRepo{DB: u.db}).WithTx(u.tx),
+		CloudSyncSessionRepo:         (&CloudSyncSessionRepo{DB: u.db}).WithTx(u.tx),
 		CloudManifestRepo:            (&CloudManifestRepo{DB: u.db}).WithTx(u.tx),
 		CloudObjectRepo:              (&CloudObjectRepo{DB: u.db}).WithTx(u.tx),
 	}

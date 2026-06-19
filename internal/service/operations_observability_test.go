@@ -58,6 +58,14 @@ func (s *stubCloudStorageService) Usage(ctx context.Context, userID string) (*Cl
 	return s.usageResult, s.err
 }
 
+func (s *stubCloudStorageService) ListProjects(ctx context.Context, query CloudStorageProjectQuery) (*CloudStorageProjectList, error) {
+	return &CloudStorageProjectList{UserID: query.UserID}, s.err
+}
+
+func (s *stubCloudStorageService) LatestManifest(ctx context.Context, query CloudStorageLatestManifestQuery) (*CloudStorageLatestManifest, error) {
+	return &CloudStorageLatestManifest{}, s.err
+}
+
 type stubAccessSnapshotIssuer struct {
 	result *domain.AccessSnapshotV2
 	err    error

@@ -10,6 +10,7 @@ import (
 )
 
 var _ repository.CloudProjectRepository = (*CloudProjectRepo)(nil)
+var _ repository.CloudSyncSessionRepository = (*CloudSyncSessionRepo)(nil)
 var _ repository.CloudManifestRepository = (*CloudManifestRepo)(nil)
 var _ repository.CloudObjectRepository = (*CloudObjectRepo)(nil)
 
@@ -61,6 +62,30 @@ func (r *CloudProjectRepo) Update(ctx context.Context, project *domain.CloudProj
 
 func (r *CloudProjectRepo) WithTx(tx *gorm.DB) *CloudProjectRepo {
 	return &CloudProjectRepo{DB: tx}
+}
+
+type CloudSyncSessionRepo struct {
+	DB *gorm.DB
+}
+
+func (r *CloudSyncSessionRepo) Create(ctx context.Context, session *domain.CloudSyncSession) error {
+	return r.DB.WithContext(ctx).Create(session).Error
+}
+
+func (r *CloudSyncSessionRepo) GetByID(ctx context.Context, id string) (*domain.CloudSyncSession, error) {
+	var session domain.CloudSyncSession
+	if err := r.DB.WithContext(ctx).Where("id = ?", id).First(&session).Error; err != nil {
+		return nil, mapGormNotFound(err)
+	}
+	return &session, nil
+}
+
+func (r *CloudSyncSessionRepo) Update(ctx context.Context, session *domain.CloudSyncSession) error {
+	return r.DB.WithContext(ctx).Save(session).Error
+}
+
+func (r *CloudSyncSessionRepo) WithTx(tx *gorm.DB) *CloudSyncSessionRepo {
+	return &CloudSyncSessionRepo{DB: tx}
 }
 
 type CloudManifestRepo struct {

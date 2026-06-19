@@ -149,6 +149,18 @@ Access session responses include a service-owned `device_capacity` projection wi
 | POST | `/api/v1/registrations` | `{email, display_name, requested_entitlement, device_id, source, note}` | `{user, registration}` with pending status |
 | GET | `/api/v1/users/:user_id/entitlements/snapshot` | — | PC Core compatible entitlement snapshot |
 
+### Cloud Storage Control Plane
+
+Cloud storage remains control-plane only. Billing authorizes upload sessions, records metadata, enforces quota, and returns restore metadata; object bytes are uploaded/downloaded directly through the configured object storage provider.
+
+| Method | Path | Request | Response |
+|--------|------|---------|----------|
+| POST | `/api/v1/cloud-storage/sync-sessions` | `{user_id, client_project_id, project_name, resources[]}` | `{sync_session:{id, upload_targets[], quota_bytes, used_bytes, requested_bytes, expires_at}}` |
+| POST | `/api/v1/cloud-storage/manifests` | `{user_id, client_project_id, sync_session_id, manifest_hash, manifest_version, resources[], idempotency_key}` | `{project, manifest, usage}` |
+| GET | `/api/v1/users/:user_id/cloud-storage/usage` | — | `{usage:{used_bytes, quota_bytes, remaining_bytes, over_quota}}` |
+| GET | `/api/v1/users/:user_id/cloud-storage/projects?status=&limit=` | — | User-owned project metadata and latest manifest summaries |
+| GET | `/api/v1/cloud-storage/projects/:project_id/manifests/latest?user_id=` | — | Latest manifest and active object metadata for restore |
+
 ### Legacy Webhooks (called by domestic payment providers)
 
 | Method | Path | Notes |
@@ -199,6 +211,8 @@ Access session responses include a service-owned `device_capacity` projection wi
 - `docs/RUNBOOK_WEBHOOK_OPERATIONS.md`: webhook retry, dead-letter, admin reprocess, and alert triage runbook.
 - `docs/RUNBOOK_SECURITY_AUDIT.md`: secret redaction, raw payload retention, PII projection, and admin action review runbook.
 - `docs/RUNBOOK_MONITORING_ALERTS.md`: WCP-6 monitoring, alert rules, owner routing, and production triage runbook.
+- `docs/ADR_CLOUD_STORAGE_PROVIDER.md`: WCP-5 object-storage provider decision and adapter boundary.
+- `docs/RUNBOOK_CLOUD_STORAGE_CONTROL_PLANE.md`: WCP-5 sync session, manifest, quota, and restore metadata runbook.
 - `scripts/verify_subscription_control_contract.sh`: local contract for the provider subscription-control port, subscription service, handler errors, and architecture boundaries.
 - `scripts/verify_admin_user_access_summary_contract.sh`: local contract for the WCP-4 admin read model, privacy projection, route errors, scoped permission, and architecture boundaries.
 - `scripts/verify_admin_order_contract.sh`: local contract for the WCP-4 admin order read model, route errors, scoped permission, and architecture boundaries.
@@ -210,6 +224,7 @@ Access session responses include a service-owned `device_capacity` projection wi
 - `scripts/verify_webhook_operations_contract.sh`: local contract for webhook retry/dead-letter semantics, reprocess permissions, and handler mappings.
 - `scripts/verify_security_audit_contract.sh`: local contract for provider ID redaction, safe config audit details, privacy projections, and scoped admin permissions.
 - `scripts/verify_monitoring_contract.sh`: local contract for WCP-6 metrics coverage, observer/decorator wiring, alert runbook, and architecture boundaries.
+- `scripts/verify_cloud_storage_control_contract.sh`: local contract for WCP-5 cloud sync sessions, restore metadata routes, provider port shape, and architecture boundaries.
 
 ## Configuration
 
@@ -315,7 +330,7 @@ Database schema changes are owned by `internal/app/migration`. Development can k
 | Pattern | Application |
 |---------|-------------|
 | Factory | License key generation (product-specific formats) |
-| Adapter | Creem hosted checkout, webhook verifier, and subscription control; legacy WeChat/Alipay remain behind the same interface |
+| Adapter | Creem hosted checkout/webhook/subscription control and cloud object storage upload/download/head/delete targets stay behind provider ports |
 | Facade | Commerce checkout entry point hides provider details from PC/mobile clients |
 | Repository | Data access abstraction (interface → GORM implementation) |
 | UnitOfWork | Database transactions for license creation and commerce fulfillment |

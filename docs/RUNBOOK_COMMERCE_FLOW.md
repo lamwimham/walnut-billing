@@ -752,6 +752,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 - 签名失败事件可能不会入 inbox，但会产生 `payment_event_observed`，用于定位 provider secret / proxy 问题。
 - 更完整的 secret redaction、raw payload retention、PII retention 与 admin action review 见 `docs/RUNBOOK_SECURITY_AUDIT.md`。
 - 生产监控面板、告警阈值和 owner 分流见 `docs/RUNBOOK_MONITORING_ALERTS.md`。
+- 云存储 sync session、manifest commit 和 restore metadata 见 `docs/RUNBOOK_CLOUD_STORAGE_CONTROL_PLANE.md`。
 
 ## 排障矩阵
 
@@ -811,6 +812,7 @@ scripts/verify_sqlite_backup_contract.sh
 scripts/verify_webhook_operations_contract.sh
 scripts/verify_security_audit_contract.sh
 scripts/verify_monitoring_contract.sh
+scripts/verify_cloud_storage_control_contract.sh
 go test ./...
 git diff --check
 rg -n "creem|Creem|PaymentRiskFlag|payment\\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true

@@ -11,6 +11,10 @@ const (
 	CloudObjectStatusActive   = "active"
 	CloudObjectStatusReplaced = "replaced"
 	CloudObjectStatusDeleted  = "deleted"
+
+	CloudSyncSessionStatusAuthorized = "authorized"
+	CloudSyncSessionStatusCommitted  = "committed"
+	CloudSyncSessionStatusExpired    = "expired"
 )
 
 // CloudProject is the server-side anchor for one Walnut project in cloud storage.
@@ -37,6 +41,7 @@ type CloudManifest struct {
 	ObjectCount     int        `json:"object_count"`
 	TotalBytes      int64      `json:"total_bytes" gorm:"index"`
 	Status          string     `json:"status" gorm:"size:16;default:'committed';index"`
+	SyncSessionID   string     `json:"sync_session_id" gorm:"size:40;index"`
 	IdempotencyKey  string     `json:"idempotency_key" gorm:"uniqueIndex;size:160"`
 	CreatedAt       time.Time  `json:"created_at"`
 	CommittedAt     *time.Time `json:"committed_at"`
@@ -59,4 +64,25 @@ type CloudObject struct {
 	Status          string    `json:"status" gorm:"size:16;default:'active';index"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// CloudSyncSession records an upload authorization that must be consumed by a
+// later manifest commit. It keeps billing as the control plane while object
+// bytes stay with the object storage provider.
+type CloudSyncSession struct {
+	ID                  string     `json:"id" gorm:"primaryKey;size:40"`
+	UserID              string     `json:"user_id" gorm:"size:40;index"`
+	CloudProjectID      string     `json:"cloud_project_id" gorm:"size:40;index"`
+	ClientProjectID     string     `json:"client_project_id" gorm:"size:128;index"`
+	Provider            string     `json:"provider" gorm:"size:64;index"`
+	ResourceFingerprint string     `json:"resource_fingerprint" gorm:"size:128;index"`
+	RequestedBytes      int64      `json:"requested_bytes" gorm:"index"`
+	UsedBytes           int64      `json:"used_bytes"`
+	QuotaBytes          int64      `json:"quota_bytes"`
+	Status              string     `json:"status" gorm:"size:16;default:'authorized';index"`
+	ManifestID          string     `json:"manifest_id" gorm:"size:40;index"`
+	ExpiresAt           time.Time  `json:"expires_at" gorm:"index"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+	CommittedAt         *time.Time `json:"committed_at"`
 }

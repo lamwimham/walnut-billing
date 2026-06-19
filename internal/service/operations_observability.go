@@ -123,6 +123,14 @@ func (s *observedCloudStorageService) Usage(ctx context.Context, userID string) 
 	return s.next.Usage(ctx, userID)
 }
 
+func (s *observedCloudStorageService) ListProjects(ctx context.Context, query CloudStorageProjectQuery) (*CloudStorageProjectList, error) {
+	return s.next.ListProjects(ctx, query)
+}
+
+func (s *observedCloudStorageService) LatestManifest(ctx context.Context, query CloudStorageLatestManifestQuery) (*CloudStorageLatestManifest, error) {
+	return s.next.LatestManifest(ctx, query)
+}
+
 type observedAccessSnapshotIssuer struct {
 	next     AccessSnapshotIssuer
 	observer AccessSnapshotObserver
@@ -302,6 +310,12 @@ func cloudSyncErrorKind(err error) string {
 		return "invalid_request"
 	case errors.Is(err, ErrCloudProjectNotFound):
 		return "project_not_found"
+	case errors.Is(err, ErrCloudSyncSessionNotFound):
+		return "sync_session_not_found"
+	case errors.Is(err, ErrCloudSyncSessionExpired):
+		return "sync_session_expired"
+	case errors.Is(err, ErrCloudSyncSessionAlreadyCommitted):
+		return "sync_session_committed"
 	case errors.Is(err, ErrUserNotFound):
 		return "user_not_found"
 	case errors.Is(err, context.DeadlineExceeded):

@@ -22,6 +22,10 @@ type fakeCloudStorageService struct {
 	commitResult    *service.CloudManifestCommitResult
 	usageUserID     string
 	usageResult     *service.CloudStorageUsage
+	projectQuery    service.CloudStorageProjectQuery
+	projectResult   *service.CloudStorageProjectList
+	manifestQuery   service.CloudStorageLatestManifestQuery
+	manifestResult  *service.CloudStorageLatestManifest
 	err             error
 }
 
@@ -38,6 +42,16 @@ func (f *fakeCloudStorageService) CommitManifest(ctx context.Context, input serv
 func (f *fakeCloudStorageService) Usage(ctx context.Context, userID string) (*service.CloudStorageUsage, error) {
 	f.usageUserID = userID
 	return f.usageResult, f.err
+}
+
+func (f *fakeCloudStorageService) ListProjects(ctx context.Context, query service.CloudStorageProjectQuery) (*service.CloudStorageProjectList, error) {
+	f.projectQuery = query
+	return f.projectResult, f.err
+}
+
+func (f *fakeCloudStorageService) LatestManifest(ctx context.Context, query service.CloudStorageLatestManifestQuery) (*service.CloudStorageLatestManifest, error) {
+	f.manifestQuery = query
+	return f.manifestResult, f.err
 }
 
 func TestCloudStorageHandler_AuthorizeSync(t *testing.T) {
@@ -99,7 +113,7 @@ func TestCloudStorageHandler_CommitManifestAndUsage(t *testing.T) {
 	r := gin.New()
 	r.POST("/cloud-storage/manifests", h.CommitManifest)
 
-	body := bytes.NewBufferString(`{"user_id":"usr_1","client_project_id":"project-local","manifest_hash":"hash","manifest_version":1,"idempotency_key":"idem-1","resources":[{"resource_id":"wiki/page.md","content_hash":"hash","size_bytes":200}]}`)
+	body := bytes.NewBufferString(`{"user_id":"usr_1","client_project_id":"project-local","sync_session_id":"csy_1","manifest_hash":"hash","manifest_version":1,"idempotency_key":"idem-1","resources":[{"resource_id":"wiki/page.md","content_hash":"hash","size_bytes":200}]}`)
 	req, _ := http.NewRequest(http.MethodPost, "/cloud-storage/manifests", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -108,7 +122,7 @@ func TestCloudStorageHandler_CommitManifestAndUsage(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if fake.commitInput.IdempotencyKey != "idem-1" || fake.commitInput.ManifestHash != "hash" || len(fake.commitInput.Resources) != 1 {
+	if fake.commitInput.IdempotencyKey != "idem-1" || fake.commitInput.SyncSessionID != "csy_1" || fake.commitInput.ManifestHash != "hash" || len(fake.commitInput.Resources) != 1 {
 		t.Fatalf("unexpected commit input: %#v", fake.commitInput)
 	}
 
@@ -126,6 +140,51 @@ func TestCloudStorageHandler_CommitManifestAndUsage(t *testing.T) {
 	}
 }
 
+func TestCloudStorageHandler_ListProjectsAndLatestManifest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCloudStorageService{
+		projectResult: &service.CloudStorageProjectList{
+			UserID: "usr_1",
+			Projects: []service.CloudStorageProjectSummary{{
+				ID:              "cpr_1",
+				ClientProjectID: "project-local",
+				Status:          domain.CloudProjectStatusActive,
+			}},
+		},
+		manifestResult: &service.CloudStorageLatestManifest{
+			Project: service.CloudStorageProjectSummary{ID: "cpr_1", ClientProjectID: "project-local"},
+			Manifest: &service.CloudManifestSummary{
+				ID:           "cmf_1",
+				ManifestHash: "sha256:manifest",
+			},
+		},
+	}
+	h := NewCloudStorageHandler(fake)
+	r := gin.New()
+	r.GET("/users/:user_id/cloud-storage/projects", h.ListProjects)
+	r.GET("/cloud-storage/projects/:project_id/manifests/latest", h.LatestManifest)
+
+	req, _ := http.NewRequest(http.MethodGet, "/users/usr_1/cloud-storage/projects?status=active&limit=5&offset=1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if fake.projectQuery.UserID != "usr_1" || fake.projectQuery.Status != "active" || fake.projectQuery.Limit != 5 || fake.projectQuery.Offset != 1 {
+		t.Fatalf("unexpected project query: %#v", fake.projectQuery)
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, "/cloud-storage/projects/cpr_1/manifests/latest?user_id=usr_1", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if fake.manifestQuery.UserID != "usr_1" || fake.manifestQuery.CloudProjectID != "cpr_1" {
+		t.Fatalf("unexpected manifest query: %#v", fake.manifestQuery)
+	}
+}
+
 func TestCloudStorageHandler_MapsErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -137,6 +196,9 @@ func TestCloudStorageHandler_MapsErrors(t *testing.T) {
 		{"denied", service.ErrCloudStorageAccessDenied, http.StatusForbidden},
 		{"provider_not_configured", service.ErrCloudStorageProviderNotConfigured, http.StatusConflict},
 		{"over_quota", service.ErrCloudStorageOverQuota, http.StatusPaymentRequired},
+		{"sync_session_missing", service.ErrCloudSyncSessionNotFound, http.StatusNotFound},
+		{"sync_session_expired", service.ErrCloudSyncSessionExpired, http.StatusConflict},
+		{"sync_session_committed", service.ErrCloudSyncSessionAlreadyCommitted, http.StatusConflict},
 		{"other", errors.New("boom"), http.StatusInternalServerError},
 	}
 	for _, tt := range tests {

@@ -67,7 +67,7 @@ The restore verifier checks:
 - `.sha256` checksum when present.
 - `PRAGMA integrity_check`.
 - `PRAGMA foreign_key_check`.
-- Core production tables: `schema_migrations`, `users`, `orders`, `payment_event_inboxes`, `fulfillment_executions`, `entitlement_grants`, `subscription_cancellations`.
+- Core production tables: `schema_migrations`, `users`, `orders`, `payment_event_inboxes`, `fulfillment_executions`, `entitlement_grants`, `subscription_cancellations`, `cloud_projects`, `cloud_sync_sessions`, `cloud_manifests`, `cloud_objects`.
 
 Expected success output includes table counts and the disposable restored DB path.
 

@@ -36,6 +36,7 @@ type CloudManifestCommitRequest struct {
 	UserID          string                        `json:"user_id" binding:"required"`
 	ClientProjectID string                        `json:"client_project_id" binding:"required"`
 	ProjectName     string                        `json:"project_name"`
+	SyncSessionID   string                        `json:"sync_session_id" binding:"required"`
 	ManifestHash    string                        `json:"manifest_hash" binding:"required"`
 	ManifestVersion int                           `json:"manifest_version"`
 	Resources       []CloudStorageResourceRequest `json:"resources" binding:"required"`
@@ -71,6 +72,7 @@ func (h *CloudStorageHandler) CommitManifest(c *gin.Context) {
 		UserID:          req.UserID,
 		ClientProjectID: req.ClientProjectID,
 		ProjectName:     req.ProjectName,
+		SyncSessionID:   req.SyncSessionID,
 		ManifestHash:    req.ManifestHash,
 		ManifestVersion: req.ManifestVersion,
 		Resources:       cloudResourceDescriptors(req.Resources),
@@ -92,6 +94,33 @@ func (h *CloudStorageHandler) Usage(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"usage": usage})
 }
 
+func (h *CloudStorageHandler) ListProjects(c *gin.Context) {
+	result, err := h.CloudStorage.ListProjects(c.Request.Context(), service.CloudStorageProjectQuery{
+		UserID: c.Param("user_id"),
+		Status: c.Query("status"),
+		Limit:  parseQueryInt(c, "limit"),
+		Offset: parseQueryInt(c, "offset"),
+	})
+	if err != nil {
+		writeCloudStorageError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *CloudStorageHandler) LatestManifest(c *gin.Context) {
+	result, err := h.CloudStorage.LatestManifest(c.Request.Context(), service.CloudStorageLatestManifestQuery{
+		UserID:          c.Query("user_id"),
+		CloudProjectID:  c.Param("project_id"),
+		ClientProjectID: c.Query("client_project_id"),
+	})
+	if err != nil {
+		writeCloudStorageError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func cloudResourceDescriptors(resources []CloudStorageResourceRequest) []service.CloudResourceDescriptor {
 	result := make([]service.CloudResourceDescriptor, 0, len(resources))
 	for _, resource := range resources {
@@ -111,7 +140,7 @@ func writeCloudStorageError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidCloudStorage):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	case errors.Is(err, service.ErrUserNotFound), errors.Is(err, service.ErrCloudProjectNotFound):
+	case errors.Is(err, service.ErrUserNotFound), errors.Is(err, service.ErrCloudProjectNotFound), errors.Is(err, service.ErrCloudSyncSessionNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrCloudStorageAccessDenied):
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
@@ -119,6 +148,8 @@ func writeCloudStorageError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrCloudStorageOverQuota):
 		c.JSON(http.StatusPaymentRequired, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrCloudSyncSessionExpired), errors.Is(err, service.ErrCloudSyncSessionAlreadyCommitted):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}

@@ -34,11 +34,30 @@ func (p fakeObjectStorageProvider) BuildUploadTarget(ctx context.Context, reques
 	}, nil
 }
 
+func (p fakeObjectStorageProvider) BuildDownloadTarget(ctx context.Context, request CloudObjectDownloadRequest) (CloudObjectDownloadTarget, error) {
+	return CloudObjectDownloadTarget{
+		ObjectKey:   request.ObjectKey,
+		DownloadURL: "test-provider://" + request.ObjectKey,
+		Method:      "GET",
+		Provider:    p.providerID,
+		ExpiresAt:   time.Now().UTC().Add(15 * time.Minute),
+	}, nil
+}
+
+func (p fakeObjectStorageProvider) DeleteObject(ctx context.Context, request CloudObjectDeleteRequest) error {
+	return nil
+}
+
+func (p fakeObjectStorageProvider) HeadObject(ctx context.Context, request CloudObjectHeadRequest) (CloudObjectHeadResult, error) {
+	return CloudObjectHeadResult{ObjectKey: request.ObjectKey, Exists: true, Provider: p.providerID}, nil
+}
+
 type cloudStorageServiceTestDeps struct {
 	db        *gorm.DB
 	users     *gorm_repo.UserRepo
 	grants    *gorm_repo.EntitlementGrantRepo
 	projects  *gorm_repo.CloudProjectRepo
+	sessions  *gorm_repo.CloudSyncSessionRepo
 	manifests *gorm_repo.CloudManifestRepo
 	objects   *gorm_repo.CloudObjectRepo
 }
@@ -54,6 +73,7 @@ func newCloudStorageServiceTestDeps(t *testing.T) cloudStorageServiceTestDeps {
 		&domain.User{},
 		&domain.EntitlementGrant{},
 		&domain.CloudProject{},
+		&domain.CloudSyncSession{},
 		&domain.CloudManifest{},
 		&domain.CloudObject{},
 	); err != nil {
@@ -64,6 +84,7 @@ func newCloudStorageServiceTestDeps(t *testing.T) cloudStorageServiceTestDeps {
 		users:     &gorm_repo.UserRepo{DB: db},
 		grants:    &gorm_repo.EntitlementGrantRepo{DB: db},
 		projects:  &gorm_repo.CloudProjectRepo{DB: db},
+		sessions:  &gorm_repo.CloudSyncSessionRepo{DB: db},
 		manifests: &gorm_repo.CloudManifestRepo{DB: db},
 		objects:   &gorm_repo.CloudObjectRepo{DB: db},
 	}
@@ -74,6 +95,7 @@ func (d cloudStorageServiceTestDeps) serviceWithQuota(quotaBytes int64) CloudSto
 		Users:             d.users,
 		Grants:            d.grants,
 		Projects:          d.projects,
+		SyncSessions:      d.sessions,
 		Manifests:         d.manifests,
 		Objects:           d.objects,
 		Policy:            NewStaticCloudStorageQuotaPolicy(quotaBytes),
@@ -136,6 +158,7 @@ func TestCloudStorageService_AuthorizeCommitAndReplaceProjectManifest(t *testing
 		UserID:          "usr_1",
 		ClientProjectID: "project-local",
 		ProjectName:     "Local Project",
+		SyncSessionID:   authorization.ID,
 		ManifestHash:    "sha256:manifest-v1",
 		ManifestVersion: 1,
 		Resources:       initialResources,
@@ -152,6 +175,7 @@ func TestCloudStorageService_AuthorizeCommitAndReplaceProjectManifest(t *testing
 		UserID:          "usr_1",
 		ClientProjectID: "project-local",
 		ProjectName:     "Local Project",
+		SyncSessionID:   authorization.ID,
 		ManifestHash:    "sha256:manifest-v1",
 		ManifestVersion: 1,
 		Resources:       initialResources,
@@ -184,6 +208,7 @@ func TestCloudStorageService_AuthorizeCommitAndReplaceProjectManifest(t *testing
 		UserID:          "usr_1",
 		ClientProjectID: "project-local",
 		ProjectName:     "Renamed Project",
+		SyncSessionID:   replacementAuthorization.ID,
 		ManifestHash:    "sha256:manifest-v2",
 		ManifestVersion: 2,
 		Resources:       replacementResources,
@@ -222,6 +247,125 @@ func TestCloudStorageService_AuthorizeCommitAndReplaceProjectManifest(t *testing
 	}
 }
 
+func TestCloudStorageService_CommitRequiresMatchingSyncSession(t *testing.T) {
+	deps := newCloudStorageServiceTestDeps(t)
+	deps.seedUser(t, true)
+	svc := deps.serviceWithQuota(1000)
+	ctx := context.Background()
+
+	resources := []CloudResourceDescriptor{
+		{ResourceID: "wiki/page.md", ResourceKind: "wiki_markdown", ContentHash: "sha256:page", SizeBytes: 100, ContentType: "text/markdown", Filename: "page.md"},
+	}
+	authorization, err := svc.AuthorizeSync(ctx, CloudSyncAuthorizationInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		Resources:       resources,
+	})
+	if err != nil {
+		t.Fatalf("authorize sync: %v", err)
+	}
+
+	_, err = svc.CommitManifest(ctx, CloudManifestCommitInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		SyncSessionID:   "csy_missing",
+		ManifestHash:    "sha256:manifest",
+		Resources:       resources,
+		IdempotencyKey:  "project-local:v1",
+	})
+	if !errors.Is(err, ErrCloudSyncSessionNotFound) {
+		t.Fatalf("expected missing sync session, got %v", err)
+	}
+
+	_, err = svc.CommitManifest(ctx, CloudManifestCommitInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		SyncSessionID:   authorization.ID,
+		ManifestHash:    "sha256:manifest",
+		Resources: []CloudResourceDescriptor{
+			{ResourceID: "wiki/page.md", ResourceKind: "wiki_markdown", ContentHash: "sha256:changed", SizeBytes: 100, ContentType: "text/markdown", Filename: "page.md"},
+		},
+		IdempotencyKey: "project-local:v1",
+	})
+	if !errors.Is(err, ErrInvalidCloudStorage) {
+		t.Fatalf("expected fingerprint mismatch, got %v", err)
+	}
+
+	committed, err := svc.CommitManifest(ctx, CloudManifestCommitInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		SyncSessionID:   authorization.ID,
+		ManifestHash:    "sha256:manifest",
+		Resources:       resources,
+		IdempotencyKey:  "project-local:v1",
+	})
+	if err != nil {
+		t.Fatalf("commit manifest: %v", err)
+	}
+	if committed.Manifest.SyncSessionID != authorization.ID {
+		t.Fatalf("expected manifest to bind sync session, got %#v", committed.Manifest)
+	}
+
+	_, err = svc.CommitManifest(ctx, CloudManifestCommitInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		SyncSessionID:   authorization.ID,
+		ManifestHash:    "sha256:manifest-duplicate",
+		Resources:       resources,
+		IdempotencyKey:  "project-local:v2",
+	})
+	if !errors.Is(err, ErrCloudSyncSessionAlreadyCommitted) {
+		t.Fatalf("expected committed sync session rejection, got %v", err)
+	}
+}
+
+func TestCloudStorageService_RestoreMetadataListsProjectsAndLatestManifest(t *testing.T) {
+	deps := newCloudStorageServiceTestDeps(t)
+	deps.seedUser(t, true)
+	svc := deps.serviceWithQuota(1000)
+	ctx := context.Background()
+	resources := []CloudResourceDescriptor{
+		{ResourceID: "wiki/page.md", ResourceKind: "wiki_markdown", ContentHash: "sha256:page", SizeBytes: 100, ContentType: "text/markdown", Filename: "page.md"},
+	}
+	authorization, err := svc.AuthorizeSync(ctx, CloudSyncAuthorizationInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		ProjectName:     "Local Project",
+		Resources:       resources,
+	})
+	if err != nil {
+		t.Fatalf("authorize sync: %v", err)
+	}
+	committed, err := svc.CommitManifest(ctx, CloudManifestCommitInput{
+		UserID:          "usr_1",
+		ClientProjectID: "project-local",
+		SyncSessionID:   authorization.ID,
+		ManifestHash:    "sha256:manifest",
+		ManifestVersion: 3,
+		Resources:       resources,
+		IdempotencyKey:  "project-local:v3",
+	})
+	if err != nil {
+		t.Fatalf("commit manifest: %v", err)
+	}
+
+	projects, err := svc.ListProjects(ctx, CloudStorageProjectQuery{UserID: "usr_1"})
+	if err != nil {
+		t.Fatalf("list projects: %v", err)
+	}
+	if len(projects.Projects) != 1 || projects.Projects[0].LatestManifest == nil || projects.Projects[0].LatestManifest.ID != committed.Manifest.ID {
+		t.Fatalf("unexpected project list: %#v", projects)
+	}
+
+	latest, err := svc.LatestManifest(ctx, CloudStorageLatestManifestQuery{UserID: "usr_1", CloudProjectID: committed.Project.ID})
+	if err != nil {
+		t.Fatalf("latest manifest: %v", err)
+	}
+	if latest.Manifest == nil || latest.Manifest.ManifestVersion != 3 || len(latest.Objects) != 1 || latest.Objects[0].ObjectKey == "" {
+		t.Fatalf("unexpected latest manifest: %#v", latest)
+	}
+}
+
 func TestCloudStorageService_DeniesSyncWithoutGrantButReportsUsage(t *testing.T) {
 	deps := newCloudStorageServiceTestDeps(t)
 	deps.seedUser(t, false)
@@ -251,12 +395,13 @@ func TestCloudStorageService_DefaultProviderIsUnconfigured(t *testing.T) {
 	deps := newCloudStorageServiceTestDeps(t)
 	deps.seedUser(t, true)
 	svc := NewCloudStorageService(CloudStorageDependencies{
-		Users:     deps.users,
-		Grants:    deps.grants,
-		Projects:  deps.projects,
-		Manifests: deps.manifests,
-		Objects:   deps.objects,
-		Policy:    NewStaticCloudStorageQuotaPolicy(1000),
+		Users:        deps.users,
+		Grants:       deps.grants,
+		Projects:     deps.projects,
+		SyncSessions: deps.sessions,
+		Manifests:    deps.manifests,
+		Objects:      deps.objects,
+		Policy:       NewStaticCloudStorageQuotaPolicy(1000),
 	})
 
 	_, err := svc.AuthorizeSync(context.Background(), CloudSyncAuthorizationInput{

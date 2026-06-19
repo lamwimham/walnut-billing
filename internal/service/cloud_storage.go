@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path"
@@ -19,6 +21,9 @@ var (
 	ErrCloudStorageProviderNotConfigured = errors.New("cloud storage provider not configured")
 	ErrInvalidCloudStorage               = errors.New("invalid cloud storage request")
 	ErrCloudProjectNotFound              = errors.New("cloud project not found")
+	ErrCloudSyncSessionNotFound          = errors.New("cloud sync session not found")
+	ErrCloudSyncSessionExpired           = errors.New("cloud sync session expired")
+	ErrCloudSyncSessionAlreadyCommitted  = errors.New("cloud sync session already committed")
 )
 
 type CloudStorageQuotaPolicy interface {
@@ -49,13 +54,22 @@ func (p StaticCloudStorageQuotaPolicy) QuotaBytes(ctx context.Context, user *dom
 type ObjectStorageProvider interface {
 	ProviderID() string
 	BuildUploadTarget(ctx context.Context, request CloudObjectUploadRequest) (CloudObjectUploadTarget, error)
+	BuildDownloadTarget(ctx context.Context, request CloudObjectDownloadRequest) (CloudObjectDownloadTarget, error)
+	DeleteObject(ctx context.Context, request CloudObjectDeleteRequest) error
+	HeadObject(ctx context.Context, request CloudObjectHeadRequest) (CloudObjectHeadResult, error)
+}
+
+type CloudObjectLifecycleTag struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 type CloudObjectUploadRequest struct {
-	ObjectKey   string
-	ContentType string
-	SizeBytes   int64
-	ContentHash string
+	ObjectKey     string
+	ContentType   string
+	SizeBytes     int64
+	ContentHash   string
+	LifecycleTags []CloudObjectLifecycleTag
 }
 
 type CloudObjectUploadTarget struct {
@@ -64,6 +78,36 @@ type CloudObjectUploadTarget struct {
 	Method    string            `json:"method"`
 	Headers   map[string]string `json:"headers"`
 	Provider  string            `json:"provider"`
+}
+
+type CloudObjectDownloadRequest struct {
+	ObjectKey string
+}
+
+type CloudObjectDownloadTarget struct {
+	ObjectKey   string            `json:"object_key"`
+	DownloadURL string            `json:"download_url"`
+	Method      string            `json:"method"`
+	Headers     map[string]string `json:"headers"`
+	Provider    string            `json:"provider"`
+	ExpiresAt   time.Time         `json:"expires_at"`
+}
+
+type CloudObjectDeleteRequest struct {
+	ObjectKey string
+}
+
+type CloudObjectHeadRequest struct {
+	ObjectKey string
+}
+
+type CloudObjectHeadResult struct {
+	ObjectKey   string `json:"object_key"`
+	Exists      bool   `json:"exists"`
+	SizeBytes   int64  `json:"size_bytes"`
+	ContentHash string `json:"content_hash"`
+	ContentType string `json:"content_type"`
+	Provider    string `json:"provider"`
 }
 
 type UnconfiguredObjectStorageProvider struct{}
@@ -82,10 +126,29 @@ func (p UnconfiguredObjectStorageProvider) BuildUploadTarget(ctx context.Context
 	return CloudObjectUploadTarget{}, ErrCloudStorageProviderNotConfigured
 }
 
+func (p UnconfiguredObjectStorageProvider) BuildDownloadTarget(ctx context.Context, request CloudObjectDownloadRequest) (CloudObjectDownloadTarget, error) {
+	_ = ctx
+	_ = request
+	return CloudObjectDownloadTarget{}, ErrCloudStorageProviderNotConfigured
+}
+
+func (p UnconfiguredObjectStorageProvider) DeleteObject(ctx context.Context, request CloudObjectDeleteRequest) error {
+	_ = ctx
+	_ = request
+	return ErrCloudStorageProviderNotConfigured
+}
+
+func (p UnconfiguredObjectStorageProvider) HeadObject(ctx context.Context, request CloudObjectHeadRequest) (CloudObjectHeadResult, error) {
+	_ = ctx
+	_ = request
+	return CloudObjectHeadResult{}, ErrCloudStorageProviderNotConfigured
+}
+
 type CloudStorageDependencies struct {
 	Users             repository.UserRepository
 	Grants            repository.EntitlementGrantRepository
 	Projects          repository.CloudProjectRepository
+	SyncSessions      repository.CloudSyncSessionRepository
 	Manifests         repository.CloudManifestRepository
 	Objects           repository.CloudObjectRepository
 	Policy            CloudStorageQuotaPolicy
@@ -97,6 +160,8 @@ type CloudStorageService interface {
 	AuthorizeSync(ctx context.Context, input CloudSyncAuthorizationInput) (*CloudSyncAuthorization, error)
 	CommitManifest(ctx context.Context, input CloudManifestCommitInput) (*CloudManifestCommitResult, error)
 	Usage(ctx context.Context, userID string) (*CloudStorageUsage, error)
+	ListProjects(ctx context.Context, query CloudStorageProjectQuery) (*CloudStorageProjectList, error)
+	LatestManifest(ctx context.Context, query CloudStorageLatestManifestQuery) (*CloudStorageLatestManifest, error)
 }
 
 type CloudResourceDescriptor struct {
@@ -132,6 +197,7 @@ type CloudManifestCommitInput struct {
 	UserID          string                    `json:"user_id"`
 	ClientProjectID string                    `json:"client_project_id"`
 	ProjectName     string                    `json:"project_name"`
+	SyncSessionID   string                    `json:"sync_session_id"`
 	ManifestHash    string                    `json:"manifest_hash"`
 	ManifestVersion int                       `json:"manifest_version"`
 	Resources       []CloudResourceDescriptor `json:"resources"`
@@ -152,16 +218,73 @@ type CloudStorageUsage struct {
 	OverQuota      bool   `json:"over_quota"`
 }
 
+type CloudStorageProjectQuery struct {
+	UserID string `json:"user_id"`
+	Status string `json:"status"`
+	Limit  int    `json:"limit"`
+	Offset int    `json:"offset"`
+}
+
+type CloudStorageProjectList struct {
+	UserID   string                       `json:"user_id"`
+	Projects []CloudStorageProjectSummary `json:"projects"`
+}
+
+type CloudStorageProjectSummary struct {
+	ID              string                `json:"id"`
+	ClientProjectID string                `json:"client_project_id"`
+	Name            string                `json:"name"`
+	Status          string                `json:"status"`
+	LastManifestID  string                `json:"last_manifest_id,omitempty"`
+	UpdatedAt       time.Time             `json:"updated_at"`
+	LatestManifest  *CloudManifestSummary `json:"latest_manifest,omitempty"`
+}
+
+type CloudStorageLatestManifestQuery struct {
+	UserID          string `json:"user_id"`
+	CloudProjectID  string `json:"cloud_project_id"`
+	ClientProjectID string `json:"client_project_id"`
+}
+
+type CloudStorageLatestManifest struct {
+	Project  CloudStorageProjectSummary `json:"project"`
+	Manifest *CloudManifestSummary      `json:"manifest,omitempty"`
+	Objects  []CloudObjectSummary       `json:"objects"`
+}
+
+type CloudManifestSummary struct {
+	ID              string     `json:"id"`
+	ManifestHash    string     `json:"manifest_hash"`
+	ManifestVersion int        `json:"manifest_version"`
+	ObjectCount     int        `json:"object_count"`
+	TotalBytes      int64      `json:"total_bytes"`
+	Status          string     `json:"status"`
+	CommittedAt     *time.Time `json:"committed_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+}
+
+type CloudObjectSummary struct {
+	ResourceID   string `json:"resource_id"`
+	ResourceKind string `json:"resource_kind"`
+	ObjectKey    string `json:"object_key"`
+	ContentHash  string `json:"content_hash"`
+	SizeBytes    int64  `json:"size_bytes"`
+	ContentType  string `json:"content_type"`
+	Status       string `json:"status"`
+}
+
 type cloudStorageRepositories struct {
-	projects  repository.CloudProjectRepository
-	manifests repository.CloudManifestRepository
-	objects   repository.CloudObjectRepository
+	projects     repository.CloudProjectRepository
+	syncSessions repository.CloudSyncSessionRepository
+	manifests    repository.CloudManifestRepository
+	objects      repository.CloudObjectRepository
 }
 
 type cloudStorageService struct {
 	users             repository.UserRepository
 	grants            repository.EntitlementGrantRepository
 	projects          repository.CloudProjectRepository
+	syncSessions      repository.CloudSyncSessionRepository
 	manifests         repository.CloudManifestRepository
 	objects           repository.CloudObjectRepository
 	policy            CloudStorageQuotaPolicy
@@ -182,6 +305,7 @@ func NewCloudStorageService(deps CloudStorageDependencies) CloudStorageService {
 		users:             deps.Users,
 		grants:            deps.Grants,
 		projects:          deps.Projects,
+		syncSessions:      deps.SyncSessions,
 		manifests:         deps.Manifests,
 		objects:           deps.Objects,
 		policy:            policy,
@@ -198,7 +322,7 @@ func (s *cloudStorageService) AuthorizeSync(ctx context.Context, input CloudSync
 	if err != nil {
 		return nil, err
 	}
-	repos := cloudStorageRepositories{projects: s.projects, manifests: s.manifests, objects: s.objects}
+	repos := cloudStorageRepositories{projects: s.projects, syncSessions: s.syncSessions, manifests: s.manifests, objects: s.objects}
 	if err := validateCloudRepos(repos); err != nil {
 		return nil, err
 	}
@@ -222,10 +346,11 @@ func (s *cloudStorageService) AuthorizeSync(ctx context.Context, input CloudSync
 	for _, resource := range resources {
 		objectKey := objectKeyFor(user.ID, input.ClientProjectID, resource)
 		target, err := s.provider.BuildUploadTarget(ctx, CloudObjectUploadRequest{
-			ObjectKey:   objectKey,
-			ContentType: resource.ContentType,
-			SizeBytes:   resource.SizeBytes,
-			ContentHash: resource.ContentHash,
+			ObjectKey:     objectKey,
+			ContentType:   resource.ContentType,
+			SizeBytes:     resource.SizeBytes,
+			ContentHash:   resource.ContentHash,
+			LifecycleTags: cloudObjectLifecycleTags(user.ID, project.ID, input.ClientProjectID, resource),
 		})
 		if err != nil {
 			return nil, err
@@ -235,6 +360,26 @@ func (s *cloudStorageService) AuthorizeSync(ctx context.Context, input CloudSync
 	sort.Slice(targets, func(i, j int) bool { return targets[i].ObjectKey < targets[j].ObjectKey })
 	sessionID, err := generateEntityID("csy_")
 	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	expiresAt := now.Add(15 * time.Minute)
+	session := &domain.CloudSyncSession{
+		ID:                  sessionID,
+		UserID:              user.ID,
+		CloudProjectID:      project.ID,
+		ClientProjectID:     strings.TrimSpace(input.ClientProjectID),
+		Provider:            s.provider.ProviderID(),
+		ResourceFingerprint: cloudResourceFingerprint(resources),
+		RequestedBytes:      requestedBytes,
+		UsedBytes:           usedBytes,
+		QuotaBytes:          quotaBytes,
+		Status:              domain.CloudSyncSessionStatusAuthorized,
+		ExpiresAt:           expiresAt,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+	if err := repos.syncSessions.Create(ctx, session); err != nil {
 		return nil, err
 	}
 	return &CloudSyncAuthorization{
@@ -247,7 +392,7 @@ func (s *cloudStorageService) AuthorizeSync(ctx context.Context, input CloudSync
 		UsedBytes:       usedBytes,
 		RequestedBytes:  requestedBytes,
 		UploadTargets:   targets,
-		ExpiresAt:       time.Now().UTC().Add(15 * time.Minute),
+		ExpiresAt:       expiresAt,
 	}, nil
 }
 
@@ -255,7 +400,7 @@ func (s *cloudStorageService) CommitManifest(ctx context.Context, input CloudMan
 	if err := s.requireConfiguredProvider(); err != nil {
 		return nil, err
 	}
-	repos := cloudStorageRepositories{projects: s.projects, manifests: s.manifests, objects: s.objects}
+	repos := cloudStorageRepositories{projects: s.projects, syncSessions: s.syncSessions, manifests: s.manifests, objects: s.objects}
 	if err := validateCloudRepos(repos); err != nil {
 		return nil, err
 	}
@@ -264,7 +409,7 @@ func (s *cloudStorageService) CommitManifest(ctx context.Context, input CloudMan
 		return nil, err
 	}
 	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
-	if idempotencyKey == "" || strings.TrimSpace(input.ManifestHash) == "" {
+	if idempotencyKey == "" || strings.TrimSpace(input.ManifestHash) == "" || strings.TrimSpace(input.SyncSessionID) == "" {
 		return nil, ErrInvalidCloudStorage
 	}
 
@@ -273,7 +418,7 @@ func (s *cloudStorageService) CommitManifest(ctx context.Context, input CloudMan
 		return nil, err
 	}
 	if existing, err := repos.manifests.GetByIdempotencyKey(ctx, idempotencyKey); err == nil {
-		if existing.UserID != user.ID {
+		if existing.UserID != user.ID || (strings.TrimSpace(existing.SyncSessionID) != "" && existing.SyncSessionID != strings.TrimSpace(input.SyncSessionID)) {
 			return nil, ErrInvalidCloudStorage
 		}
 		project, projectErr := repos.projects.GetByID(ctx, existing.CloudProjectID)
@@ -318,9 +463,95 @@ func (s *cloudStorageService) Usage(ctx context.Context, userID string) (*CloudS
 	return usageFor(user.ID, usedBytes, quotaBytes), nil
 }
 
+func (s *cloudStorageService) ListProjects(ctx context.Context, query CloudStorageProjectQuery) (*CloudStorageProjectList, error) {
+	if s.projects == nil || s.manifests == nil {
+		return nil, ErrInvalidCloudStorage
+	}
+	user, err := s.loadActiveUser(ctx, query.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if hasGrant, err := s.hasCloudStorageGrant(ctx, user.ID); err != nil {
+		return nil, err
+	} else if !hasGrant {
+		return nil, ErrCloudStorageAccessDenied
+	}
+	limit := query.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	projects, err := s.projects.ListByUser(ctx, user.ID, strings.TrimSpace(query.Status), limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	result := &CloudStorageProjectList{UserID: user.ID, Projects: make([]CloudStorageProjectSummary, 0, len(projects))}
+	for _, project := range projects {
+		summary := cloudStorageProjectSummary(project, nil)
+		if strings.TrimSpace(project.LastManifestID) != "" {
+			if manifest, err := s.manifests.GetByID(ctx, project.LastManifestID); err == nil {
+				summary.LatestManifest = cloudManifestSummary(manifest)
+			} else if !errors.Is(err, repository.ErrNotFound) {
+				return nil, err
+			}
+		}
+		result.Projects = append(result.Projects, summary)
+	}
+	return result, nil
+}
+
+func (s *cloudStorageService) LatestManifest(ctx context.Context, query CloudStorageLatestManifestQuery) (*CloudStorageLatestManifest, error) {
+	if s.projects == nil || s.manifests == nil || s.objects == nil {
+		return nil, ErrInvalidCloudStorage
+	}
+	user, err := s.loadActiveUser(ctx, query.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if hasGrant, err := s.hasCloudStorageGrant(ctx, user.ID); err != nil {
+		return nil, err
+	} else if !hasGrant {
+		return nil, ErrCloudStorageAccessDenied
+	}
+	project, err := s.projectForLatestManifest(ctx, user.ID, query)
+	if err != nil {
+		return nil, err
+	}
+	var manifest *domain.CloudManifest
+	if strings.TrimSpace(project.LastManifestID) != "" {
+		manifest, err = s.manifests.GetByID(ctx, project.LastManifestID)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return &CloudStorageLatestManifest{Project: cloudStorageProjectSummary(*project, nil), Objects: []CloudObjectSummary{}}, nil
+			}
+			return nil, err
+		}
+	} else {
+		manifests, err := s.manifests.ListByProject(ctx, project.ID, 1, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(manifests) > 0 {
+			manifest = &manifests[0]
+		}
+	}
+	objects, err := s.objects.ListByProject(ctx, project.ID, domain.CloudObjectStatusActive)
+	if err != nil {
+		return nil, err
+	}
+	return &CloudStorageLatestManifest{
+		Project:  cloudStorageProjectSummary(*project, manifest),
+		Manifest: cloudManifestSummary(manifest),
+		Objects:  cloudObjectSummaries(objects),
+	}, nil
+}
+
 func (s *cloudStorageService) commitWithTransaction(ctx context.Context, user *domain.User, quotaBytes int64, usedBytes int64, input CloudManifestCommitInput, resources []CloudResourceDescriptor) (*CloudManifestCommitResult, error) {
 	if s.unitOfWorkFactory == nil {
-		return s.commitWithRepos(ctx, user, quotaBytes, usedBytes, input, resources, cloudStorageRepositories{projects: s.projects, manifests: s.manifests, objects: s.objects})
+		return s.commitWithRepos(ctx, user, quotaBytes, usedBytes, input, resources, cloudStorageRepositories{projects: s.projects, syncSessions: s.syncSessions, manifests: s.manifests, objects: s.objects})
 	}
 	uow := s.unitOfWorkFactory()
 	if err := uow.Begin(ctx); err != nil {
@@ -329,9 +560,10 @@ func (s *cloudStorageService) commitWithTransaction(ctx context.Context, user *d
 	defer uow.Rollback()
 	repos := uow.Repos()
 	result, err := s.commitWithRepos(ctx, user, quotaBytes, usedBytes, input, resources, cloudStorageRepositories{
-		projects:  repos.CloudProjectRepo,
-		manifests: repos.CloudManifestRepo,
-		objects:   repos.CloudObjectRepo,
+		projects:     repos.CloudProjectRepo,
+		syncSessions: repos.CloudSyncSessionRepo,
+		manifests:    repos.CloudManifestRepo,
+		objects:      repos.CloudObjectRepo,
 	})
 	if err != nil {
 		return nil, err
@@ -346,9 +578,16 @@ func (s *cloudStorageService) commitWithRepos(ctx context.Context, user *domain.
 	if err := validateCloudRepos(repos); err != nil {
 		return nil, err
 	}
-	project, err := s.ensureProject(ctx, repos, user.ID, input.ClientProjectID, input.ProjectName)
+	session, project, err := s.authorizedCommitSession(ctx, repos, user.ID, input, resources)
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(input.ProjectName) != "" && project.Name != strings.TrimSpace(input.ProjectName) {
+		project.Name = strings.TrimSpace(input.ProjectName)
+		project.UpdatedAt = time.Now().UTC()
+		if err := repos.projects.Update(ctx, project); err != nil {
+			return nil, err
+		}
 	}
 	existingObjects, err := repos.objects.ListByProject(ctx, project.ID, domain.CloudObjectStatusActive)
 	if err != nil {
@@ -383,6 +622,7 @@ func (s *cloudStorageService) commitWithRepos(ctx context.Context, user *domain.
 		ObjectCount:     len(resources),
 		TotalBytes:      newProjectBytes,
 		Status:          domain.CloudManifestStatusCommitted,
+		SyncSessionID:   strings.TrimSpace(input.SyncSessionID),
 		IdempotencyKey:  strings.TrimSpace(input.IdempotencyKey),
 		CreatedAt:       now,
 		CommittedAt:     &now,
@@ -433,6 +673,13 @@ func (s *cloudStorageService) commitWithRepos(ctx context.Context, user *domain.
 	project.LastManifestID = manifest.ID
 	project.UpdatedAt = now
 	if err := repos.projects.Update(ctx, project); err != nil {
+		return nil, err
+	}
+	session.Status = domain.CloudSyncSessionStatusCommitted
+	session.ManifestID = manifest.ID
+	session.UpdatedAt = now
+	session.CommittedAt = &now
+	if err := repos.syncSessions.Update(ctx, session); err != nil {
 		return nil, err
 	}
 	return &CloudManifestCommitResult{
@@ -529,7 +776,7 @@ func projectedUsageForResources(ctx context.Context, objects repository.CloudObj
 }
 
 func validateCloudRepos(repos cloudStorageRepositories) error {
-	if repos.projects == nil || repos.manifests == nil || repos.objects == nil {
+	if repos.projects == nil || repos.syncSessions == nil || repos.manifests == nil || repos.objects == nil {
 		return ErrInvalidCloudStorage
 	}
 	return nil
@@ -612,6 +859,169 @@ func objectKeyFor(userID string, clientProjectID string, resource CloudResourceD
 		sanitizePathSegment(resource.ContentHash),
 		sanitizeFilename(resource.Filename),
 	)
+}
+
+func cloudObjectLifecycleTags(userID string, cloudProjectID string, clientProjectID string, resource CloudResourceDescriptor) []CloudObjectLifecycleTag {
+	return []CloudObjectLifecycleTag{
+		{Key: "walnut.user_id", Value: sanitizePathSegment(userID)},
+		{Key: "walnut.cloud_project_id", Value: sanitizePathSegment(cloudProjectID)},
+		{Key: "walnut.client_project_id", Value: sanitizePathSegment(clientProjectID)},
+		{Key: "walnut.resource_kind", Value: sanitizePathSegment(resource.ResourceKind)},
+	}
+}
+
+func (s *cloudStorageService) authorizedCommitSession(ctx context.Context, repos cloudStorageRepositories, userID string, input CloudManifestCommitInput, resources []CloudResourceDescriptor) (*domain.CloudSyncSession, *domain.CloudProject, error) {
+	session, err := validateCloudSyncSession(ctx, repos.syncSessions, input.SyncSessionID, userID, strings.TrimSpace(input.ClientProjectID), s.provider.ProviderID(), resources)
+	if err != nil {
+		return nil, nil, err
+	}
+	project, err := repos.projects.GetByID(ctx, session.CloudProjectID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, nil, ErrCloudProjectNotFound
+		}
+		return nil, nil, err
+	}
+	if project.UserID != userID || project.ClientProjectID != strings.TrimSpace(input.ClientProjectID) {
+		return nil, nil, ErrInvalidCloudStorage
+	}
+	return session, project, nil
+}
+
+func validateCloudSyncSession(ctx context.Context, repo repository.CloudSyncSessionRepository, sessionID string, userID string, clientProjectID string, provider string, resources []CloudResourceDescriptor) (*domain.CloudSyncSession, error) {
+	if repo == nil {
+		return nil, ErrInvalidCloudStorage
+	}
+	session, err := repo.GetByID(ctx, strings.TrimSpace(sessionID))
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrCloudSyncSessionNotFound
+		}
+		return nil, err
+	}
+	if session.UserID != userID || session.ClientProjectID != strings.TrimSpace(clientProjectID) || session.Provider != provider {
+		return nil, ErrInvalidCloudStorage
+	}
+	if session.Status == domain.CloudSyncSessionStatusCommitted || strings.TrimSpace(session.ManifestID) != "" {
+		return nil, ErrCloudSyncSessionAlreadyCommitted
+	}
+	if session.Status != "" && session.Status != domain.CloudSyncSessionStatusAuthorized {
+		return nil, ErrInvalidCloudStorage
+	}
+	if time.Now().UTC().After(session.ExpiresAt) {
+		session.Status = domain.CloudSyncSessionStatusExpired
+		session.UpdatedAt = time.Now().UTC()
+		_ = repo.Update(ctx, session)
+		return nil, ErrCloudSyncSessionExpired
+	}
+	if session.ResourceFingerprint != cloudResourceFingerprint(resources) || session.RequestedBytes != sumResourceBytes(resources) {
+		return nil, ErrInvalidCloudStorage
+	}
+	return session, nil
+}
+
+func cloudResourceFingerprint(resources []CloudResourceDescriptor) string {
+	normalized := append([]CloudResourceDescriptor(nil), resources...)
+	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i].ResourceKind == normalized[j].ResourceKind {
+			return normalized[i].ResourceID < normalized[j].ResourceID
+		}
+		return normalized[i].ResourceKind < normalized[j].ResourceKind
+	})
+	h := sha256.New()
+	for _, resource := range normalized {
+		fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d\x00%s\x00%s\n",
+			resource.ResourceKind,
+			resource.ResourceID,
+			resource.ContentHash,
+			resource.SizeBytes,
+			resource.ContentType,
+			resource.Filename,
+		)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (s *cloudStorageService) projectForLatestManifest(ctx context.Context, userID string, query CloudStorageLatestManifestQuery) (*domain.CloudProject, error) {
+	cloudProjectID := strings.TrimSpace(query.CloudProjectID)
+	if cloudProjectID != "" {
+		project, err := s.projects.GetByID(ctx, cloudProjectID)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return nil, ErrCloudProjectNotFound
+			}
+			return nil, err
+		}
+		if project.UserID != userID {
+			return nil, ErrCloudProjectNotFound
+		}
+		return project, nil
+	}
+	clientProjectID := strings.TrimSpace(query.ClientProjectID)
+	if clientProjectID == "" {
+		return nil, ErrInvalidCloudStorage
+	}
+	project, err := s.projects.GetByUserAndClientProject(ctx, userID, clientProjectID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrCloudProjectNotFound
+		}
+		return nil, err
+	}
+	return project, nil
+}
+
+func cloudStorageProjectSummary(project domain.CloudProject, manifest *domain.CloudManifest) CloudStorageProjectSummary {
+	summary := CloudStorageProjectSummary{
+		ID:              project.ID,
+		ClientProjectID: project.ClientProjectID,
+		Name:            project.Name,
+		Status:          project.Status,
+		LastManifestID:  project.LastManifestID,
+		UpdatedAt:       project.UpdatedAt,
+	}
+	if manifest != nil {
+		summary.LatestManifest = cloudManifestSummary(manifest)
+	}
+	return summary
+}
+
+func cloudManifestSummary(manifest *domain.CloudManifest) *CloudManifestSummary {
+	if manifest == nil {
+		return nil
+	}
+	return &CloudManifestSummary{
+		ID:              manifest.ID,
+		ManifestHash:    manifest.ManifestHash,
+		ManifestVersion: manifest.ManifestVersion,
+		ObjectCount:     manifest.ObjectCount,
+		TotalBytes:      manifest.TotalBytes,
+		Status:          manifest.Status,
+		CommittedAt:     manifest.CommittedAt,
+		CreatedAt:       manifest.CreatedAt,
+	}
+}
+
+func cloudObjectSummaries(objects []domain.CloudObject) []CloudObjectSummary {
+	result := make([]CloudObjectSummary, 0, len(objects))
+	for _, object := range objects {
+		result = append(result, CloudObjectSummary{
+			ResourceID:   object.ResourceID,
+			ResourceKind: object.ResourceKind,
+			ObjectKey:    object.ObjectKey,
+			ContentHash:  object.ContentHash,
+			SizeBytes:    object.SizeBytes,
+			ContentType:  object.ContentType,
+			Status:       object.Status,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ResourceKind == result[j].ResourceKind {
+			return result[i].ResourceID < result[j].ResourceID
+		}
+		return result[i].ResourceKind < result[j].ResourceKind
+	})
+	return result
 }
 
 var unsafePathSegmentRE = regexp.MustCompile(`[^a-zA-Z0-9_.:-]+`)

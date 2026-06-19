@@ -174,6 +174,7 @@ func schemaModels() []any {
 		&domain.PaymentRiskFlag{},
 		&domain.SubscriptionCancellation{},
 		&domain.CloudProject{},
+		&domain.CloudSyncSession{},
 		&domain.CloudManifest{},
 		&domain.CloudObject{},
 	}

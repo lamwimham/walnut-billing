@@ -141,6 +141,14 @@ type CloudManifestRepository interface {
 	ListByProject(ctx context.Context, cloudProjectID string, limit int, offset int) ([]domain.CloudManifest, error)
 }
 
+// CloudSyncSessionRepository defines data access for cloud upload
+// authorization sessions that gate manifest commits.
+type CloudSyncSessionRepository interface {
+	Create(ctx context.Context, session *domain.CloudSyncSession) error
+	GetByID(ctx context.Context, id string) (*domain.CloudSyncSession, error)
+	Update(ctx context.Context, session *domain.CloudSyncSession) error
+}
+
 // CloudObjectRepository defines data access for cloud object metadata.
 type CloudObjectRepository interface {
 	Upsert(ctx context.Context, object *domain.CloudObject) error
@@ -224,6 +232,7 @@ type TransactionalRepositories struct {
 	TrialGrantRepo               TrialGrantRepository
 	AccessLoginChallengeRepo     AccessLoginChallengeRepository
 	CloudProjectRepo             CloudProjectRepository
+	CloudSyncSessionRepo         CloudSyncSessionRepository
 	CloudManifestRepo            CloudManifestRepository
 	CloudObjectRepo              CloudObjectRepository
 }
