@@ -262,6 +262,7 @@ func Build() (*Application, error) {
 	accessLoginChallengeRepo := &gorm_repo.AccessLoginChallengeRepo{DB: db}
 	accessAccountRepo := &gorm_repo.AccessAccountReadRepo{DB: db}
 	adminUserAccessSummaryRepo := &gorm_repo.AdminUserAccessSummaryReadRepo{DB: db}
+	adminOrderRepo := &gorm_repo.AdminOrderReadRepo{DB: db}
 	creditAccountRepo := &gorm_repo.CreditAccountRepo{DB: db}
 	creditBucketRepo := &gorm_repo.CreditBucketRepo{DB: db}
 	creditReservationRepo := &gorm_repo.CreditReservationRepo{DB: db}
@@ -469,6 +470,7 @@ func Build() (*Application, error) {
 	}
 
 	paymentSvc := payment.NewPaymentService(orderRepo, licRepo, registry)
+	adminOrderSvc := service.NewAdminOrderService(adminOrderRepo)
 	commerceObserver := observability.NewCommerceObserver(l)
 	checkoutPolicies := buildCheckoutPolicies(cfg, paymentRiskFlagRepo, softwareSubscriptions)
 	var checkoutSvc service.CheckoutService = service.NewCheckoutServiceWithPolicies(orderRepo, productRepo, userRepo, paymentSvc, checkoutPolicies...)
@@ -549,6 +551,7 @@ func Build() (*Application, error) {
 		AccessSnapshot:       handler.NewAccessSnapshotHandler(accessSnapshotIssuer),
 		Credit:               handler.NewCreditHandler(creditSvc, auditSvc),
 		Checkout:             handler.NewCheckoutHandler(checkoutSvc),
+		AdminOrder:           handler.NewAdminOrderHandler(adminOrderSvc),
 		Subscription:         handler.NewSubscriptionHandler(subscriptionCancellationSvc),
 		PaymentEvent:         handler.NewPaymentEventHandler(paymentEventSvc),
 		MockCheckout:         handler.NewMockCheckoutHandler(paymentEventSvc),

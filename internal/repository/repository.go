@@ -27,6 +27,36 @@ type OrderRepository interface {
 	Update(ctx context.Context, order *domain.Order) error
 }
 
+// AdminOrderQuery defines filters for the privacy-safe admin commerce order
+// read model. It intentionally uses Walnut-owned identifiers and stable fields.
+type AdminOrderQuery struct {
+	UserID     string
+	SKUCode    string
+	Status     string
+	Provider   string
+	OrderType  string
+	OutTradeNo string
+	Limit      int
+	Offset     int
+}
+
+// AdminOrderRecord combines an order with small diagnostic counters from
+// webhook inbox, fulfillment, and risk tables. Provider payloads remain out of
+// the read model and are inspected through payment-event APIs when needed.
+type AdminOrderRecord struct {
+	Order                  domain.Order
+	PaymentEventCount      int
+	LatestPaymentEvent     *domain.PaymentEventInbox
+	FulfillmentCount       int
+	FailedFulfillmentCount int
+	OpenRiskFlagCount      int
+}
+
+// AdminOrderReadRepository defines a read-only admin order list source.
+type AdminOrderReadRepository interface {
+	List(ctx context.Context, query AdminOrderQuery) ([]AdminOrderRecord, int64, error)
+}
+
 // SubscriptionOrderQuery locates the Walnut-owned order anchoring a software subscription.
 type SubscriptionOrderQuery struct {
 	UserID  string

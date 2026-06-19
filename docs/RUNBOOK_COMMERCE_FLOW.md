@@ -226,6 +226,9 @@ curl -sS "$BASE_URL/api/v1/admin/fulfillments?out_trade_no=$OUT_TRADE_NO" \
 curl -sS "$BASE_URL/api/v1/admin/users/$USER_ID/access?recent_limit=10" \
   -H "$AUTH_HEADER"
 
+curl -sS "$BASE_URL/api/v1/admin/orders?user_id=$USER_ID&limit=10" \
+  -H "$AUTH_HEADER"
+
 curl -sS "$BASE_URL/api/v1/users/$USER_ID/entitlements/snapshot"
 ```
 
@@ -234,6 +237,7 @@ curl -sS "$BASE_URL/api/v1/users/$USER_ID/entitlements/snapshot"
 - Payment event 为 `processed`，`signature_verified` 为 true。
 - Fulfillment 包含 `pro_own_ai_monthly` 的当前真实高级权益 executions：editorial-studio 与 cloud-storage。
 - Admin user access summary 使用同一 `SoftwareSubscriptionProjector`，可同时查看 device capacity、trial/grants、orders、payment event `payload_hash`、risk counters、cloud quota metadata；不得展示 raw email、raw device id、checkout URL、provider subscription id 或 webhook raw payload。
+- Admin order list 能按 `user_id` / `out_trade_no` 定位 checkout 订单，并显示 payment event count/latest `payload_hash`、fulfillment failures、open risk count；不得展示 checkout URL、provider customer id、provider subscription id 或 idempotency key。
 - Snapshot 的 license state 进入 subscription，且 entitlements 包含 `editorial.studio`、`cloud.storage`。
 - Signed access snapshot 的 `license.subscription_status` 来源于 `SoftwareSubscriptionProjector`；月付 active 时应为 `active` 或空，`current_period_ends_at` 与当前 Walnut period 一致。
 

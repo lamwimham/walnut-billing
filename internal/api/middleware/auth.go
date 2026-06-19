@@ -16,6 +16,7 @@ const (
 	PermissionDashboardRead          = "admin.dashboard.read"
 	PermissionLicensesRead           = "admin.licenses.read"
 	PermissionLicensesWrite          = "admin.licenses.write"
+	PermissionOrdersRead             = "admin.orders.read"
 	PermissionPaymentRead            = "admin.payment.read"
 	PermissionPaymentWrite           = "admin.payment.write"
 	PermissionAuditRead              = "admin.audit.read"

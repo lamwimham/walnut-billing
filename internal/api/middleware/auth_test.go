@@ -77,6 +77,17 @@ func TestUsersReadPermissionIsScopedSeparatelyFromAccessAccounts(t *testing.T) {
 	}
 }
 
+func TestOrdersReadPermissionIsScopedSeparatelyFromPaymentEvents(t *testing.T) {
+	finance := AdminPrincipal{Name: "finance", Permissions: []string{PermissionPaymentEventsRead}}
+	if PrincipalHasPermission(finance, PermissionOrdersRead) {
+		t.Fatalf("payment event read permission must not imply admin orders read permission")
+	}
+	orders := AdminPrincipal{Name: "orders", Permissions: []string{PermissionOrdersRead}}
+	if !PrincipalHasPermission(orders, PermissionOrdersRead) {
+		t.Fatalf("expected orders read permission to match itself")
+	}
+}
+
 func TestAPIKeyAuthPrincipalsRejectsMissingAndInvalidKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
