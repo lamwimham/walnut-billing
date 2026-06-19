@@ -166,6 +166,7 @@ Access session responses include a service-owned `device_capacity` projection wi
 | GET | `/api/v1/admin/stats` | Stats: total, active, inactive, expired |
 | POST | `/api/v1/admin/licenses/check-expiry` | Deactivate expired subscriptions |
 | GET | `/api/v1/admin/access-accounts?email=&status=&limit=` | Masked access-account view for emails registered through `/api/v1/access/registrations` |
+| GET | `/api/v1/admin/users/:user_id/access?recent_limit=` | Privacy-safe user troubleshooting summary: devices, trial, grants, subscription projection, recent orders/payment events, risk counts, and cloud quota metadata |
 | POST | `/api/v1/admin/devices/:id/revoke` | Revoke one access device; future login/snapshot refresh for that device returns `access_device_revoked` |
 | GET | `/api/v1/admin/audit?limit=` | Privacy-projected audit logs; email actors are masked and fingerprinted |
 | GET | `/api/v1/admin/registrations?status=` | List legacy entitlement registration requests |
@@ -190,6 +191,7 @@ Access session responses include a service-owned `device_capacity` projection wi
 
 - `docs/RUNBOOK_COMMERCE_FLOW.md`: executable local/test checklist for checkout, webhook inbox, fulfillment, dispute hold, and admin risk resolution.
 - `scripts/verify_subscription_control_contract.sh`: local contract for the provider subscription-control port, subscription service, handler errors, and architecture boundaries.
+- `scripts/verify_admin_user_access_summary_contract.sh`: local contract for the WCP-4 admin read model, privacy projection, route errors, scoped permission, and architecture boundaries.
 
 ## Configuration
 
@@ -201,7 +203,7 @@ All settings via environment variables (see `.env.example`):
 | `SERVER_ENV` | dev | Environment (dev/prod) |
 | `DATABASE_DSN` | ./walnut_billing.db | SQLite database path |
 | `ADMIN_API_KEYS` | (empty) | Comma-separated full-access admin API keys; development shortcut that maps to `admin.*` |
-| `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.audit.read"]}]`; device revoke requires `admin.access_accounts.write` |
+| `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.users.read","admin.audit.read"]}]`; user access summary requires `admin.users.read`, device revoke requires `admin.access_accounts.write` |
 | `RATELIMIT_ENABLED` | false | Enable IP rate limiting on auth endpoints |
 | `PAYMENT_WECHAT_*` | (empty) | Legacy WeChat Pay V3 credentials; not the current commercialization target |
 | `PAYMENT_ALIPAY_*` | (empty) | Legacy Alipay credentials; not the current commercialization target |

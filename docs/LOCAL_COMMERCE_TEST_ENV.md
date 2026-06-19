@@ -132,13 +132,24 @@ curl -H 'Authorization: Bearer local-admin-key' \
   'http://127.0.0.1:8082/api/v1/admin/access-accounts?limit=20' | python3 -m json.tool
 ```
 
-The access-account API intentionally returns `email_masked`, `email_domain`, and `email_fingerprint`; it does not return raw emails. Audit logs are also projected through a privacy boundary: historical raw-email actors are returned as masked email + stable fingerprint, and new access-registration audit entries use `user_id` as actor.
+The access-account API intentionally returns `email_masked`, `email_domain`, and `email_fingerprint`; it does not return raw emails. For a single user, the WCP-4 troubleshooting view aggregates the same privacy boundary with commerce/control-plane facts:
+
+```bash
+USER_ID=$(curl -sS -H 'Authorization: Bearer local-admin-key' \
+  'http://127.0.0.1:8082/api/v1/admin/access-accounts?limit=1' \
+  | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["accounts"][0]["user_id"])')
+
+curl -sS -H 'Authorization: Bearer local-admin-key' \
+  "http://127.0.0.1:8082/api/v1/admin/users/$USER_ID/access?recent_limit=10" | python3 -m json.tool
+```
+
+`/api/v1/admin/users/:user_id/access` returns device capacity, current trial/grants, `SoftwareSubscriptionProjector` status, recent order summaries, payment-event `payload_hash` only, risk counters, and cloud quota metadata. It deliberately does not return raw email, raw device id, checkout URL, provider subscription id, provider event id, or webhook raw payload. Audit logs are also projected through a privacy boundary: historical raw-email actors are returned as masked email + stable fingerprint, and new access-registration audit entries use `user_id` as actor.
 
 For closer-to-production permission testing, replace the legacy full-access key with scoped principals:
 
 ```bash
 export ADMIN_API_KEYS=
-export ADMIN_PRINCIPALS_JSON='[{"name":"support","key":"support-key","permissions":["admin.dashboard.read","admin.access_accounts.read","admin.audit.read"]},{"name":"ops","key":"ops-key","permissions":["admin.*"]}]'
+export ADMIN_PRINCIPALS_JSON='[{"name":"support","key":"support-key","permissions":["admin.dashboard.read","admin.access_accounts.read","admin.users.read","admin.audit.read"]},{"name":"ops","key":"ops-key","permissions":["admin.*"]}]'
 ```
 
 Use `support-key` to verify read-only views and `ops-key` to verify management actions such as grant creation, webhook reprocessing, and risk resolution.
@@ -161,6 +172,7 @@ After revoke, the same device cannot restore or refresh a signed access snapshot
 
 ```bash
 scripts/verify_access_device_lifecycle_contract.sh
+scripts/verify_admin_user_access_summary_contract.sh
 ```
 
 ## 5. Creem Test Mode Profile

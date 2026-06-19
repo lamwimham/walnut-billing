@@ -261,6 +261,7 @@ func Build() (*Application, error) {
 	trialGrantRepo := &gorm_repo.TrialGrantRepo{DB: db}
 	accessLoginChallengeRepo := &gorm_repo.AccessLoginChallengeRepo{DB: db}
 	accessAccountRepo := &gorm_repo.AccessAccountReadRepo{DB: db}
+	adminUserAccessSummaryRepo := &gorm_repo.AdminUserAccessSummaryReadRepo{DB: db}
 	creditAccountRepo := &gorm_repo.CreditAccountRepo{DB: db}
 	creditBucketRepo := &gorm_repo.CreditBucketRepo{DB: db}
 	creditReservationRepo := &gorm_repo.CreditReservationRepo{DB: db}
@@ -353,15 +354,23 @@ func Build() (*Application, error) {
 		l.Error("Failed to initialize cloud storage provider", "error", err)
 		return nil, err
 	}
+	cloudQuotaPolicy := service.NewCloudStorageQuotaPolicyFromMB(cfg.Access.CloudStorageQuotaMB)
 	cloudStorageSvc := service.NewCloudStorageService(service.CloudStorageDependencies{
 		Users:             userRepo,
 		Grants:            grantRepo,
 		Projects:          cloudProjectRepo,
 		Manifests:         cloudManifestRepo,
 		Objects:           cloudObjectRepo,
-		Policy:            service.NewCloudStorageQuotaPolicyFromMB(cfg.Access.CloudStorageQuotaMB),
+		Policy:            cloudQuotaPolicy,
 		Provider:          cloudObjectProvider,
 		UnitOfWorkFactory: uowFactory,
+	})
+	adminUserAccessSummarySvc := service.NewAdminUserAccessSummaryService(service.AdminUserAccessSummaryDependencies{
+		ReadModel:             adminUserAccessSummaryRepo,
+		SoftwareSubscriptions: softwareSubscriptions,
+		CloudQuotaPolicy:      cloudQuotaPolicy,
+		Privacy:               service.NewAdminPrivacyProjector(),
+		MaxDevices:            cfg.Access.MaxDevices,
 	})
 	fulfillmentCatalog, err := service.NewFulfillmentCatalogFromJSON(cfg.Fulfillment.RulesJSON, commerceCatalog.FulfillmentRules())
 	if err != nil {
@@ -536,7 +545,7 @@ func Build() (*Application, error) {
 		Entitlement:          handler.NewEntitlementHandler(entitlementSvc, auditSvc),
 		AccessSession:        handler.NewAccessSessionHandler(accessSessionSvc, auditSvc),
 		AccessLoginChallenge: handler.NewAccessLoginChallengeHandler(accessLoginChallengeSvc, auditSvc),
-		AccessAdmin:          handler.NewAccessAdminHandler(accessAdminSvc, accessDeviceAdminSvc, auditSvc),
+		AccessAdmin:          handler.NewAccessAdminHandlerWithSummary(accessAdminSvc, accessDeviceAdminSvc, adminUserAccessSummarySvc, auditSvc),
 		AccessSnapshot:       handler.NewAccessSnapshotHandler(accessSnapshotIssuer),
 		Credit:               handler.NewCreditHandler(creditSvc, auditSvc),
 		Checkout:             handler.NewCheckoutHandler(checkoutSvc),

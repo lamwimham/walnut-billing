@@ -66,6 +66,17 @@ func TestAPIKeyAuthPrincipalsSupportsWildcard(t *testing.T) {
 	}
 }
 
+func TestUsersReadPermissionIsScopedSeparatelyFromAccessAccounts(t *testing.T) {
+	support := AdminPrincipal{Name: "support", Permissions: []string{PermissionAccessAccountsRead}}
+	if PrincipalHasPermission(support, PermissionUsersRead) {
+		t.Fatalf("access account list permission must not imply user access summary permission")
+	}
+	users := AdminPrincipal{Name: "support-users", Permissions: []string{PermissionUsersRead}}
+	if !PrincipalHasPermission(users, PermissionUsersRead) {
+		t.Fatalf("expected users read permission to match itself")
+	}
+}
+
 func TestAPIKeyAuthPrincipalsRejectsMissingAndInvalidKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

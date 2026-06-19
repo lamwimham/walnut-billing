@@ -26,6 +26,12 @@ type fakeAccessDeviceAdminService struct {
 	err    error
 }
 
+type fakeAdminUserAccessSummaryService struct {
+	input  service.AdminUserAccessSummaryInput
+	result *service.AdminUserAccessSummary
+	err    error
+}
+
 func (f *fakeAccessAdminService) ListAccounts(ctx context.Context, query service.AccessAdminQuery) (*service.AccessAccountList, error) {
 	f.query = query
 	return f.result, nil
@@ -37,6 +43,14 @@ func (f *fakeAccessDeviceAdminService) RevokeDevice(ctx context.Context, input s
 		return nil, f.err
 	}
 	return f.device, nil
+}
+
+func (f *fakeAdminUserAccessSummaryService) Get(ctx context.Context, input service.AdminUserAccessSummaryInput) (*service.AdminUserAccessSummary, error) {
+	f.input = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.result, nil
 }
 
 func TestAccessAdminHandler_ListAccounts(t *testing.T) {
@@ -65,6 +79,60 @@ func TestAccessAdminHandler_ListAccounts(t *testing.T) {
 	}
 	if resp.Total != 1 || resp.Accounts[0].EmailMasked != "wr**er@example.com" {
 		t.Fatalf("unexpected response: %#v", resp)
+	}
+}
+
+func TestAccessAdminHandler_GetUserAccessSummary(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	summarySvc := &fakeAdminUserAccessSummaryService{result: &service.AdminUserAccessSummary{User: service.AdminUserAccessIdentity{ID: "usr_1", EmailMasked: "wr**er@example.com"}}}
+	handler := NewAccessAdminHandlerWithSummary(nil, nil, summarySvc, nil)
+	r := gin.New()
+	r.GET("/admin/users/:user_id/access", handler.GetUserAccessSummary)
+
+	req, _ := http.NewRequest(http.MethodGet, "/admin/users/usr_1/access?recent_limit=3", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if summarySvc.input.UserID != "usr_1" || summarySvc.input.RecentLimit != 3 {
+		t.Fatalf("unexpected summary input: %#v", summarySvc.input)
+	}
+	if strings.Contains(w.Body.String(), `"email":"`) || strings.Contains(w.Body.String(), "writer@example.com") {
+		t.Fatalf("response leaked raw email: %s", w.Body.String())
+	}
+}
+
+func TestAccessAdminHandler_GetUserAccessSummaryMapsErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+		code string
+	}{
+		{"invalid", service.ErrInvalidAdminUserAccessSummary, http.StatusBadRequest, "invalid_admin_user_access_summary"},
+		{"not_found", service.ErrUserNotFound, http.StatusNotFound, "user_not_found"},
+		{"unknown", errors.New("boom"), http.StatusInternalServerError, "admin_user_access_summary_failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			handler := NewAccessAdminHandlerWithSummary(nil, nil, &fakeAdminUserAccessSummaryService{err: tt.err}, nil)
+			r := gin.New()
+			r.GET("/admin/users/:user_id/access", handler.GetUserAccessSummary)
+
+			req, _ := http.NewRequest(http.MethodGet, "/admin/users/usr_missing/access", nil)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if w.Code != tt.want {
+				t.Fatalf("expected status %d, got %d: %s", tt.want, w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tt.code) {
+				t.Fatalf("expected error code %s, got %s", tt.code, w.Body.String())
+			}
+		})
 	}
 }
 

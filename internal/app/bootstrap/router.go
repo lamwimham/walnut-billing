@@ -127,6 +127,7 @@ func (m identityAccessModule) RegisterRoutes(routes moduleRoutes) {
 	routes.Public.POST("/credits/reservations/:id/release", h.Credit.Release)
 
 	routes.Admin.GET("/access-accounts", routes.RequireAdmin(middleware.PermissionAccessAccountsRead), h.AccessAdmin.ListAccounts)
+	routes.Admin.GET("/users/:user_id/access", routes.RequireAdmin(middleware.PermissionUsersRead), h.AccessAdmin.GetUserAccessSummary)
 	routes.Admin.POST("/devices/:id/revoke", routes.RequireAdmin(middleware.PermissionAccessAccountsWrite), h.AccessAdmin.RevokeDevice)
 	routes.Admin.GET("/registrations", routes.RequireAdmin(middleware.PermissionRegistrationsRead), h.Entitlement.ListRegistrations)
 	routes.Admin.POST("/registrations/:id/review", routes.RequireAdmin(middleware.PermissionRegistrationsWrite), h.Entitlement.ReviewRegistration)

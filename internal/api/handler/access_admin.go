@@ -12,13 +12,28 @@ import (
 )
 
 type AccessAdminHandler struct {
-	AccessAdminSvc service.AccessAdminService
-	DeviceAdminSvc service.AccessDeviceAdminService
-	AuditSvc       service.AuditService
+	AccessAdminSvc       service.AccessAdminService
+	DeviceAdminSvc       service.AccessDeviceAdminService
+	UserAccessSummarySvc service.AdminUserAccessSummaryService
+	AuditSvc             service.AuditService
 }
 
 func NewAccessAdminHandler(accessAdminSvc service.AccessAdminService, deviceAdminSvc service.AccessDeviceAdminService, auditSvc service.AuditService) *AccessAdminHandler {
-	return &AccessAdminHandler{AccessAdminSvc: accessAdminSvc, DeviceAdminSvc: deviceAdminSvc, AuditSvc: auditSvc}
+	return NewAccessAdminHandlerWithSummary(accessAdminSvc, deviceAdminSvc, nil, auditSvc)
+}
+
+func NewAccessAdminHandlerWithSummary(
+	accessAdminSvc service.AccessAdminService,
+	deviceAdminSvc service.AccessDeviceAdminService,
+	userAccessSummarySvc service.AdminUserAccessSummaryService,
+	auditSvc service.AuditService,
+) *AccessAdminHandler {
+	return &AccessAdminHandler{
+		AccessAdminSvc:       accessAdminSvc,
+		DeviceAdminSvc:       deviceAdminSvc,
+		UserAccessSummarySvc: userAccessSummarySvc,
+		AuditSvc:             auditSvc,
+	}
 }
 
 // ListAccounts handles GET /api/v1/admin/access-accounts.
@@ -36,6 +51,23 @@ func (h *AccessAdminHandler) ListAccounts(c *gin.Context) {
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// GetUserAccessSummary handles GET /api/v1/admin/users/:user_id/access.
+func (h *AccessAdminHandler) GetUserAccessSummary(c *gin.Context) {
+	if h == nil || h.UserAccessSummarySvc == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "admin user access summary service is not configured", "code": "admin_user_access_summary_unconfigured"})
+		return
+	}
+	result, err := h.UserAccessSummarySvc.Get(c.Request.Context(), service.AdminUserAccessSummaryInput{
+		UserID:      c.Param("user_id"),
+		RecentLimit: intQuery(c, "recent_limit", 10),
+	})
+	if err != nil {
+		writeAdminUserAccessSummaryError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -83,6 +115,17 @@ func writeAccessDeviceAdminError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "access_device_not_found"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
+}
+
+func writeAdminUserAccessSummaryError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrInvalidAdminUserAccessSummary):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_admin_user_access_summary"})
+	case errors.Is(err, service.ErrUserNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "user_not_found"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "code": "admin_user_access_summary_failed"})
 	}
 }
 

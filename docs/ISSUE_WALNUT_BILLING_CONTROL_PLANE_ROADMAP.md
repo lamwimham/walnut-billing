@@ -358,8 +358,8 @@ Provider ADR 决策前只保留接口与 unconfigured provider：
 | 项 | 设计 |
 |---|---|
 | 职责 | 账号/设备/授权/订单/支付事件/风险/云配额查询和人工操作 |
-| 已有能力 | API key + permission middleware、dashboard shell、access account masked view |
-| 主要服务 | `AdminUserFacade`, `AdminCommerceFacade`, `AdminCloudFacade`, `AdminAuditFacade` |
+| 已有能力 | API key + permission middleware、dashboard shell、access account masked view、user access summary read model |
+| 主要服务 | `AccessAdminService`, `AdminUserAccessSummaryService`, `AdminCommerceFacade`, `AdminCloudFacade`, `AdminAuditFacade` |
 | 认证 | dev 可 API key；prod 使用 scoped principals，后续可接 OIDC/SSO |
 | 权限 | support read、ops write、finance payment、admin all |
 | 隐私 | 默认脱敏；高权限详情也记录 audit；禁止导出明文敏感数据 |
@@ -460,7 +460,7 @@ Admin 页面分区：
 | `GET` | `/api/v1/admin/users/:id` | 用户详情，权限更高 |
 | `GET` | `/api/v1/admin/users/:id/devices` | 设备列表 |
 | `POST` | `/api/v1/admin/devices/:id/revoke` | 撤销设备 |
-| `GET` | `/api/v1/admin/users/:id/access` | trial/grants/subscription/snapshot summary |
+| `GET` | `/api/v1/admin/users/:id/access` | trial/grants/subscription/orders/payment-events/risk/cloud summary，默认脱敏 |
 | `POST` | `/api/v1/admin/grants` | 人工 grant |
 | `POST` | `/api/v1/admin/grants/:id/revoke` | 人工撤销 grant |
 | `GET` | `/api/v1/admin/orders` | 订单列表 |
@@ -591,6 +591,8 @@ WCP-3 进展（2026-06-19）：第二切片已完成。支付层新增可选 `Su
 - 恢复月付后取消标记清除，snapshot 同步更新。
 
 ### WCP-4：Admin Console MVP（P1）
+
+WCP-4 进展（2026-06-19）：第一切片已完成。新增 `AdminUserAccessSummaryService` 作为管理端只读 facade，依赖 `AdminUserAccessSummaryReadRepository`、`SoftwareSubscriptionProjector` 与 cloud quota policy，统一投影单个用户的 device capacity、trial、grants、subscription、recent orders、payment events、risk counters 与 cloud quota metadata。HTTP route `GET /api/v1/admin/users/:user_id/access` 由 `admin.users.read` 单独授权，handler 只做 transport mapping；support 账号可被授予 `admin.access_accounts.read` + `admin.users.read` 做脱敏排障，写操作仍需 ops/admin 权限。响应只返回 raw provider payload 的 `payload_hash` 和 provider-neutral 摘要，禁止泄露 raw email、raw device id、checkout URL、provider subscription id、provider event id 或 webhook raw payload。新增 `scripts/verify_admin_user_access_summary_contract.sh` 固化 read model、privacy projection、handler error code、权限边界和架构边界。
 
 目标：让管理员可以在测试和生产中独立排查用户、授权、支付和风险问题。
 

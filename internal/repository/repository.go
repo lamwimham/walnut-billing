@@ -175,6 +175,34 @@ type AccessAccountReadRepository interface {
 	List(ctx context.Context, query AccessAccountQuery) ([]AccessAccountRecord, int64, error)
 }
 
+// AdminUserAccessSummaryQuery defines the scope for a single-user operator
+// summary. RecentLimit bounds child collections so admin views stay predictable.
+type AdminUserAccessSummaryQuery struct {
+	UserID      string
+	RecentLimit int
+}
+
+// AdminUserAccessSummaryRecord groups the cross-module read facts needed for a
+// privacy-safe admin troubleshooting view. It is read-only by design; admin
+// write actions must still go through application services.
+type AdminUserAccessSummaryRecord struct {
+	User              domain.User
+	Devices           []domain.UserDevice
+	TrialGrants       []domain.TrialGrant
+	EntitlementGrants []domain.EntitlementGrant
+	Orders            []domain.Order
+	PaymentEvents     []domain.PaymentEventInbox
+	RiskFlags         []domain.PaymentRiskFlag
+	CloudProjects     []domain.CloudProject
+	CloudUsedBytes    int64
+}
+
+// AdminUserAccessSummaryReadRepository defines the cross-module admin read
+// model source for one user's current access, commerce, risk, and cloud facts.
+type AdminUserAccessSummaryReadRepository interface {
+	Get(ctx context.Context, query AdminUserAccessSummaryQuery) (*AdminUserAccessSummaryRecord, error)
+}
+
 // UserRepository defines data access for stable user identities.
 type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
