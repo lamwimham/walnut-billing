@@ -464,6 +464,7 @@ Admin 页面分区：
 | `POST` | `/api/v1/admin/grants` | 人工 grant |
 | `POST` | `/api/v1/admin/grants/:id/revoke` | 人工撤销 grant |
 | `GET` | `/api/v1/admin/orders` | 订单列表，含 payment-event / fulfillment / risk 摘要，默认脱敏 |
+| `GET` | `/api/v1/admin/subscriptions` | 订阅列表，含 Walnut projection、cancel/resume flags、latest order/provider-control/payment-event 摘要，默认脱敏 |
 | `GET` | `/api/v1/admin/payment-events` | webhook inbox |
 | `POST` | `/api/v1/admin/payment-events/:id/reprocess` | 重放处理 |
 | `GET` | `/api/v1/admin/payment-risk-flags` | 风险列表 |
@@ -598,6 +599,8 @@ WCP-4 进展（2026-06-19）：第一切片已完成。新增 `AdminUserAccessSu
 WCP-4 进展（2026-06-19）：第二切片已完成。新增 `AdminOrderService` + `AdminOrderReadRepository`，提供 `GET /api/v1/admin/orders` 只读订单排障列表，由 `admin.orders.read` 单独授权。该 read model 只使用 Walnut-owned `out_trade_no`、`user_id`、`sku_code`、状态和金额等稳定字段，并聚合 payment-event count/latest `payload_hash`、fulfillment count/failure count、open risk count，帮助运营从订单视角定位“付款成功未解锁 / webhook 失败 / risk hold”。响应只暴露 provider presence flags（checkout session、provider customer、provider subscription metadata），不返回 checkout URL、provider customer id、provider subscription id、provider event id、idempotency key 或 raw webhook payload。新增 `scripts/verify_admin_order_contract.sh` 固化 read model、handler error code、权限边界和架构边界。
 
 WCP-4 进展（2026-06-19）：第三切片已完成。新增 `AdminCloudStorageService` + `AdminCloudStorageReadRepository`，提供 `GET /api/v1/admin/cloud-storage/usage` 和 `GET /api/v1/admin/users/:user_id/cloud-storage/projects`，由 `admin.cloud_storage.read` 单独授权。该 read model 是 cloud storage metadata 的管理端 facade：service 依赖 repository port、`CloudStorageQuotaPolicy` 与 `AdminPrivacyProjector`，handler 只做 HTTP query/param 映射；repository 聚合用户、cloud project、latest manifest、active object count/bytes，不依赖 object storage provider。响应只返回 masked user email、masked project name、quota/usage、project/status/object counters 与 manifest hash fingerprint，不返回 object key、upload/download URL、local path、provider object key、raw manifest hash、文件 bytes 或文件正文。新增 `scripts/verify_admin_cloud_storage_contract.sh` 固化 read model、privacy projection、handler error code、权限边界和架构边界。
+
+WCP-4 进展（2026-06-19）：第四切片已完成。新增 `AdminSubscriptionService` + `AdminSubscriptionReadRepository`，提供 `GET /api/v1/admin/subscriptions`，由 `admin.subscriptions.read` 单独授权。该 read model 只聚合 Walnut-owned 用户、SKU、fulfillment grants、latest checkout/renewal order、latest cancellation fact 和 payment-event facts；service 复用 `projectSoftwareSubscriptionFromGrants` 投影 `active` / `cancel_at_period_end` / `expired` / `cancelled`，并统一做状态过滤、隐私投影与 provider-control status metadata 映射。响应可帮助运营定位“月付 active 但按钮状态异常 / 已退订但权益仍在周期内 / provider cancel/resume 状态不一致”，但只返回 masked email、active entitlements、latest order summary、provider-control status/raw_status/period dates、payment-event count/latest `payload_hash` 和 `has_provider_subscription` 布尔值；不返回 checkout URL、provider customer id、provider subscription id、provider event id、raw webhook payload 或 idempotency key。新增 `scripts/verify_admin_subscription_contract.sh` 固化 service/handler/repository/privacy/RBAC/architecture 合同。
 
 目标：让管理员可以在测试和生产中独立排查用户、授权、支付和风险问题。
 

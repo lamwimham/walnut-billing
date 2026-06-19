@@ -229,6 +229,9 @@ curl -sS "$BASE_URL/api/v1/admin/users/$USER_ID/access?recent_limit=10" \
 curl -sS "$BASE_URL/api/v1/admin/orders?user_id=$USER_ID&limit=10" \
   -H "$AUTH_HEADER"
 
+curl -sS "$BASE_URL/api/v1/admin/subscriptions?user_id=$USER_ID&limit=10" \
+  -H "$AUTH_HEADER"
+
 curl -sS "$BASE_URL/api/v1/admin/cloud-storage/usage?user_id=$USER_ID&limit=10" \
   -H "$AUTH_HEADER"
 
@@ -244,6 +247,7 @@ curl -sS "$BASE_URL/api/v1/users/$USER_ID/entitlements/snapshot"
 - Fulfillment 包含 `pro_own_ai_monthly` 的当前真实高级权益 executions：editorial-studio 与 cloud-storage。
 - Admin user access summary 使用同一 `SoftwareSubscriptionProjector`，可同时查看 device capacity、trial/grants、orders、payment event `payload_hash`、risk counters、cloud quota metadata；不得展示 raw email、raw device id、checkout URL、provider subscription id 或 webhook raw payload。
 - Admin order list 能按 `user_id` / `out_trade_no` 定位 checkout 订单，并显示 payment event count/latest `payload_hash`、fulfillment failures、open risk count；不得展示 checkout URL、provider customer id、provider subscription id 或 idempotency key。
+- Admin subscription list 能按 `user_id` / `sku_code` / `status` / `provider` / `out_trade_no` 定位月付或终身订阅，显示 Walnut subscription projection、cancel/resume flags、active fulfillment grants、latest order/provider-control status 与 payment-event `payload_hash`；不得展示 checkout URL、provider customer id、provider subscription id、provider event id、raw webhook payload 或 idempotency key。
 - Admin cloud storage read model 能按 `user_id` 定位用户云用量与项目 metadata，并显示 quota、used bytes、active object count/latest manifest fingerprint；不得展示 object key、upload/download URL、local path、raw manifest hash 或文件内容。
 - Snapshot 的 license state 进入 subscription，且 entitlements 包含 `editorial.studio`、`cloud.storage`。
 - Signed access snapshot 的 `license.subscription_status` 来源于 `SoftwareSubscriptionProjector`；月付 active 时应为 `active` 或空，`current_period_ends_at` 与当前 Walnut period 一致。

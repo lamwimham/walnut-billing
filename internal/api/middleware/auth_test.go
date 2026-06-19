@@ -99,6 +99,17 @@ func TestCloudStorageReadPermissionIsScopedSeparatelyFromUsersAndOrders(t *testi
 	}
 }
 
+func TestSubscriptionsReadPermissionIsScopedSeparatelyFromOrdersAndPaymentEvents(t *testing.T) {
+	finance := AdminPrincipal{Name: "finance", Permissions: []string{PermissionOrdersRead, PermissionPaymentEventsRead}}
+	if PrincipalHasPermission(finance, PermissionSubscriptionsRead) {
+		t.Fatalf("order/payment-event read permissions must not imply admin subscriptions read permission")
+	}
+	subscriptions := AdminPrincipal{Name: "subscription-ops", Permissions: []string{PermissionSubscriptionsRead}}
+	if !PrincipalHasPermission(subscriptions, PermissionSubscriptionsRead) {
+		t.Fatalf("expected subscriptions read permission to match itself")
+	}
+}
+
 func TestAPIKeyAuthPrincipalsRejectsMissingAndInvalidKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

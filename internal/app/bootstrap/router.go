@@ -29,6 +29,7 @@ type applicationHandlers struct {
 	Credit               *handler.CreditHandler
 	Checkout             *handler.CheckoutHandler
 	AdminOrder           *handler.AdminOrderHandler
+	AdminSubscription    *handler.AdminSubscriptionHandler
 	AdminCloudStorage    *handler.AdminCloudStorageHandler
 	Subscription         *handler.SubscriptionHandler
 	PaymentEvent         *handler.PaymentEventHandler
@@ -171,6 +172,7 @@ func (m commerceModule) RegisterRoutes(routes moduleRoutes) {
 	routes.Admin.POST("/payment/:provider/mock", routes.RequireAdmin(middleware.PermissionPaymentWrite), h.PaymentConfig.SwitchToMock)
 	routes.Admin.POST("/payment/import", routes.RequireAdmin(middleware.PermissionPaymentWrite), h.PaymentConfig.ImportProviders)
 	routes.Admin.GET("/orders", routes.RequireAdmin(middleware.PermissionOrdersRead), h.AdminOrder.ListOrders)
+	routes.Admin.GET("/subscriptions", routes.RequireAdmin(middleware.PermissionSubscriptionsRead), h.AdminSubscription.ListSubscriptions)
 	routes.Admin.GET("/payment-events", routes.RequireAdmin(middleware.PermissionPaymentEventsRead), h.PaymentEvent.ListEvents)
 	routes.Admin.GET("/payment-events/:id", routes.RequireAdmin(middleware.PermissionPaymentEventsRead), h.PaymentEvent.GetEvent)
 	routes.Admin.POST("/payment-events/:id/reprocess", routes.RequireAdmin(middleware.PermissionPaymentEventsWrite), h.PaymentEvent.ReprocessEvent)

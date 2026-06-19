@@ -57,6 +57,41 @@ type AdminOrderReadRepository interface {
 	List(ctx context.Context, query AdminOrderQuery) ([]AdminOrderRecord, int64, error)
 }
 
+// AdminSubscriptionQuery defines filters for the privacy-safe operator
+// subscription read model. Status is computed in the service projection.
+type AdminSubscriptionQuery struct {
+	UserID     string
+	SKUCode    string
+	Status     string
+	Provider   string
+	OutTradeNo string
+	Limit      int
+	Offset     int
+}
+
+// AdminSubscriptionReadModel groups subscription candidate facts. Repositories
+// return normalized domain facts only to service-level privacy projectors.
+type AdminSubscriptionReadModel struct {
+	Records []AdminSubscriptionRecord
+}
+
+// AdminSubscriptionRecord combines the facts needed to project one user's
+// Walnut-owned subscription state and provider-control diagnostics.
+type AdminSubscriptionRecord struct {
+	User               domain.User
+	SKUCode            string
+	Grants             []domain.EntitlementGrant
+	LatestOrder        *domain.Order
+	LatestCancellation *domain.SubscriptionCancellation
+	PaymentEvents      []domain.PaymentEventInbox
+}
+
+// AdminSubscriptionReadRepository defines a read-only subscription candidate
+// source for admin troubleshooting surfaces.
+type AdminSubscriptionReadRepository interface {
+	List(ctx context.Context, query AdminSubscriptionQuery) (*AdminSubscriptionReadModel, error)
+}
+
 // SubscriptionOrderQuery locates the Walnut-owned order anchoring a software subscription.
 type SubscriptionOrderQuery struct {
 	UserID  string

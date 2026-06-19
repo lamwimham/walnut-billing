@@ -263,6 +263,7 @@ func Build() (*Application, error) {
 	accessAccountRepo := &gorm_repo.AccessAccountReadRepo{DB: db}
 	adminUserAccessSummaryRepo := &gorm_repo.AdminUserAccessSummaryReadRepo{DB: db}
 	adminOrderRepo := &gorm_repo.AdminOrderReadRepo{DB: db}
+	adminSubscriptionRepo := &gorm_repo.AdminSubscriptionReadRepo{DB: db}
 	adminCloudStorageRepo := &gorm_repo.AdminCloudStorageReadRepo{DB: db}
 	creditAccountRepo := &gorm_repo.CreditAccountRepo{DB: db}
 	creditBucketRepo := &gorm_repo.CreditBucketRepo{DB: db}
@@ -472,6 +473,10 @@ func Build() (*Application, error) {
 
 	paymentSvc := payment.NewPaymentService(orderRepo, licRepo, registry)
 	adminOrderSvc := service.NewAdminOrderService(adminOrderRepo)
+	adminSubscriptionSvc := service.NewAdminSubscriptionService(service.AdminSubscriptionDependencies{
+		ReadModel: adminSubscriptionRepo,
+		Privacy:   service.NewAdminPrivacyProjector(),
+	})
 	adminCloudStorageSvc := service.NewAdminCloudStorageService(service.AdminCloudStorageDependencies{
 		ReadModel:   adminCloudStorageRepo,
 		QuotaPolicy: cloudQuotaPolicy,
@@ -558,6 +563,7 @@ func Build() (*Application, error) {
 		Credit:               handler.NewCreditHandler(creditSvc, auditSvc),
 		Checkout:             handler.NewCheckoutHandler(checkoutSvc),
 		AdminOrder:           handler.NewAdminOrderHandler(adminOrderSvc),
+		AdminSubscription:    handler.NewAdminSubscriptionHandler(adminSubscriptionSvc),
 		AdminCloudStorage:    handler.NewAdminCloudStorageHandler(adminCloudStorageSvc),
 		Subscription:         handler.NewSubscriptionHandler(subscriptionCancellationSvc),
 		PaymentEvent:         handler.NewPaymentEventHandler(paymentEventSvc),
