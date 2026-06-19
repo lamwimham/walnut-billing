@@ -11,6 +11,7 @@ walnut-billing/
 ├── cmd/server/main.go              # Process entry point + graceful shutdown
 ├── internal/
 │   ├── app/bootstrap/              # Config, DB, DI, provider setup, module route registrars
+│   ├── app/migration/              # Database migration runner and versioned schema ledger
 │   ├── config/                     # Viper-based configuration
 │   ├── domain/models.go            # Entities (Product, License, Order, User, Grant)
 │   ├── generator/                  # Factory pattern: license key generation
@@ -200,16 +201,18 @@ Access session responses include a service-owned `device_capacity` projection wi
 - `scripts/verify_admin_subscription_contract.sh`: local contract for the WCP-4 admin subscription read model, Walnut projection, privacy projection, scoped permission, and architecture boundaries.
 - `scripts/verify_admin_cloud_storage_contract.sh`: local contract for the WCP-4 admin cloud-storage read model, privacy projection, scoped permission, and architecture boundaries.
 - `scripts/verify_production_config_contract.sh`: local contract for WCP-6 production fail-fast config, checkout redirect allowlist, HTTP security middleware, and architecture boundaries.
+- `scripts/verify_database_migration_contract.sh`: local contract for WCP-6 database migration mode, version ledger, and production config guard.
 
 ## Configuration
 
-All settings via environment variables (see `.env.example`). `config.Load()` runs production fail-fast validation when `SERVER_ENV=prod`; missing admin auth, non-prod snapshot signer, Creem live config/product map, rate limit, DB DSN, explicit HTTPS CORS origins, enabled security headers, or checkout redirect allowlist returns `ErrInvalidProductionConfig` before bootstrap wires providers.
+All settings via environment variables (see `.env.example`). `config.Load()` runs production fail-fast validation when `SERVER_ENV=prod`; missing admin auth, non-prod snapshot signer, Creem live config/product map, rate limit, DB DSN, versioned migration mode, explicit HTTPS CORS origins, enabled security headers, or checkout redirect allowlist returns `ErrInvalidProductionConfig` before bootstrap wires providers.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SERVER_PORT` | 8082 | HTTP listen port |
 | `SERVER_ENV` | dev | Environment (dev/prod) |
 | `DATABASE_DSN` | ./walnut_billing.db | SQLite database path |
+| `DATABASE_MIGRATION_MODE` | auto | Database migration strategy: `auto` keeps dev AutoMigrate compatibility, `versioned` records `schema_migrations` and is required in prod, `disabled` expects an external migration step |
 | `HTTP_CORS_ALLOWED_ORIGINS` | (empty) | Comma-separated exact browser origins allowed by global CORS; prod requires HTTPS origins only and rejects wildcard/path/query entries |
 | `HTTP_SECURITY_HEADERS_ENABLED` | true | Enable global hardening headers; prod requires it to remain true |
 | `HTTP_SECURITY_HEADERS_HSTS_MAX_AGE_SECONDS` | 31536000 | HSTS max age in seconds; prod requires at least one year |
@@ -258,6 +261,8 @@ Bucket expiry is exposed through `POST /api/v1/admin/credits/buckets/expire` for
 **Note**: If payment credentials are not configured, the service uses mock adapters in development. Production does not register the mock checkout provider and now fails fast unless Creem live credentials, webhook secret, product map, HTTP browser-boundary config, and redirect allowlist are configured.
 
 HTTP security headers and CORS are infrastructure middleware configured through `internal/config`, not business handlers. The current CSP permits inline dashboard CSS/JS for the embedded admin shell; it can be tightened after that shell is extracted to static assets or hashed scripts.
+
+Database schema changes are owned by `internal/app/migration`. Development can keep `DATABASE_MIGRATION_MODE=auto`; production must use `versioned`, which applies ordered migrations and records version/checksum rows in `schema_migrations` before repositories and services are wired.
 
 ## Prometheus Metrics
 

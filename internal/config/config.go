@@ -33,9 +33,16 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Driver string
-	DSN    string
+	Driver        string
+	DSN           string
+	MigrationMode string
 }
+
+const (
+	DatabaseMigrationModeAuto      = "auto"
+	DatabaseMigrationModeVersioned = "versioned"
+	DatabaseMigrationModeDisabled  = "disabled"
+)
 
 type HTTPConfig struct {
 	CORSAllowedOrigins []string
@@ -181,6 +188,7 @@ func Load() (*Config, error) {
 	v.SetDefault("server.env", "dev")
 	v.SetDefault("database.driver", "sqlite")
 	v.SetDefault("database.dsn", "./walnut_billing.db")
+	v.SetDefault("database.migration_mode", DatabaseMigrationModeAuto)
 	v.SetDefault("http.cors_allowed_origins", []string{})
 	v.SetDefault("http.security_headers.enabled", true)
 	v.SetDefault("http.security_headers.hsts_max_age_seconds", 31536000)
@@ -380,6 +388,9 @@ func Load() (*Config, error) {
 	if val := os.Getenv("CLOUD_STORAGE_PROVIDER"); val != "" {
 		cfg.CloudStorage.Provider = val
 	}
+	if val := os.Getenv("DATABASE_MIGRATION_MODE"); val != "" {
+		cfg.Database.MigrationMode = val
+	}
 	if val := os.Getenv("FULFILLMENT_RULES_JSON"); val != "" {
 		cfg.Fulfillment.RulesJSON = val
 	}
@@ -411,6 +422,7 @@ func Load() (*Config, error) {
 	}
 
 	cfg.Server.Env = strings.ToLower(strings.TrimSpace(cfg.Server.Env))
+	cfg.Database.MigrationMode = strings.ToLower(strings.TrimSpace(cfg.Database.MigrationMode))
 	if err := ValidateProduction(cfg); err != nil {
 		return nil, err
 	}

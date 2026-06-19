@@ -49,6 +49,16 @@ func TestArchitectureImportBoundaries(t *testing.T) {
 			forbidden: []string{"walnut-billing/internal/repository/gorm_repo"},
 		},
 		{
+			name: "database migrations stay infrastructure-only",
+			root: "../migration",
+			forbidden: []string{
+				"walnut-billing/internal/api",
+				"walnut-billing/internal/service",
+				"walnut-billing/internal/payment",
+				"walnut-billing/internal/repository",
+			},
+		},
+		{
 			name: "domain is dependency-free from application layers",
 			root: "../../domain",
 			forbidden: []string{

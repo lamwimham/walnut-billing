@@ -63,6 +63,9 @@ func validateProductionDatabase(cfg DatabaseConfig) []string {
 	if strings.TrimSpace(cfg.DSN) == ":memory:" {
 		violations = append(violations, "DATABASE_DSN must not use in-memory sqlite in prod")
 	}
+	if strings.TrimSpace(cfg.MigrationMode) != DatabaseMigrationModeVersioned {
+		violations = append(violations, "DATABASE_MIGRATION_MODE must be versioned in prod")
+	}
 	return violations
 }
 

@@ -648,10 +648,12 @@ WCP-6 进展（2026-06-19）：第一切片已完成。新增 `internal/config.V
 
 WCP-6 进展（2026-06-19）：第二切片已完成。新增 `internal/api/middleware` 层的 CORS 与 SecurityHeaders 基础设施中间件，由 `internal/config.HTTPConfig` 配置并在 `internal/app/bootstrap` 全局装配，避免 handler/service 关心浏览器边界。`SERVER_ENV=prod` 现在要求 `HTTP_CORS_ALLOWED_ORIGINS` 显式配置 HTTPS origin、禁止 wildcard/path/query，且要求安全响应头开启、HSTS 至少一年；启动前聚合校验失败仍统一返回 `ErrInvalidProductionConfig`。当前 CSP 为兼容内嵌 dashboard shell 暂保留 inline CSS/JS，后续可通过静态资源抽取或 hash-based CSP 收紧。
 
+WCP-6 进展（2026-06-19）：第三切片已完成。新增 `internal/app/migration` 版本化 migration runner，bootstrap 不再直接裸调 `db.AutoMigrate`；dev 默认 `DATABASE_MIGRATION_MODE=auto` 保持本地兼容，prod 必须显式设置 `DATABASE_MIGRATION_MODE=versioned`，按顺序执行 migration 并记录 `schema_migrations` 的 version/checksum/applied_at。已执行 migration 若 checksum 变化会拒绝启动，避免历史 schema 变更不可审计；`disabled` 模式预留给未来外部迁移 job。新增 `scripts/verify_database_migration_contract.sh` 固化 migration runner、生产配置校验和架构边界。
+
 任务：
 
 - prod config validation：admin principals、snapshot signer、Creem key/webhook secret、DB DSN、rate limit、CORS/redirect allowlist、安全响应头。（第二切片已完成：fail-fast、redirect allowlist、CORS/header hardening）
-- 数据迁移策略：替代裸 `AutoMigrate` 的版本化 migration，保留 rollback/runbook。
+- 数据迁移策略：替代裸 `AutoMigrate` 的版本化 migration，保留 rollback/runbook。（第三切片已完成：versioned runner + schema_migrations；rollback/backup 操作 runbook 后续完善）
 - backup/restore runbook：SQLite 初期备份，后续 Postgres migration path。
 - webhook retry / dead letter / admin reprocess runbook。
 - 安全审计：secret redaction、raw payload retention、PII retention、admin action review。

@@ -9,8 +9,8 @@ import (
 
 	"walnut-billing/internal/api/handler"
 	"walnut-billing/internal/api/middleware"
+	"walnut-billing/internal/app/migration"
 	"walnut-billing/internal/config"
-	"walnut-billing/internal/domain"
 	"walnut-billing/internal/generator"
 	"walnut-billing/internal/logger"
 	"walnut-billing/internal/observability"
@@ -224,30 +224,9 @@ func Build() (*Application, error) {
 	}
 	l.Info("Database connected", "driver", cfg.Database.Driver)
 
-	// 2. Auto Migrate
-	if err := db.AutoMigrate(
-		&domain.License{},
-		&domain.Order{},
-		&domain.Product{},
-		&domain.AuditEntry{},
-		&domain.User{},
-		&domain.RegistrationRequest{},
-		&domain.EntitlementGrant{},
-		&domain.UserDevice{},
-		&domain.TrialGrant{},
-		&domain.AccessLoginChallenge{},
-		&domain.CreditAccount{},
-		&domain.CreditBucket{},
-		&domain.CreditReservation{},
-		&domain.CreditTransaction{},
-		&domain.PaymentEventInbox{},
-		&domain.FulfillmentExecution{},
-		&domain.PaymentRiskFlag{},
-		&domain.SubscriptionCancellation{},
-		&domain.CloudProject{},
-		&domain.CloudManifest{},
-		&domain.CloudObject{},
-	); err != nil {
+	// 2. Database migration. Production requires versioned mode so schema
+	// changes are explicit and recorded before services are wired.
+	if err := migration.Run(context.Background(), db, migration.Options{Mode: migration.Mode(cfg.Database.MigrationMode)}); err != nil {
 		l.Error("Failed to migrate database", "error", err)
 		return nil, err
 	}

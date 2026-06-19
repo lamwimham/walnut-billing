@@ -17,6 +17,7 @@ func TestProductionConfigValidationSkipsNonProduction(t *testing.T) {
 func TestProductionConfigValidationRejectsMissingCriticalSettings(t *testing.T) {
 	cfg := minimalValidProductionConfig()
 	cfg.Database.DSN = ":memory:"
+	cfg.Database.MigrationMode = DatabaseMigrationModeAuto
 	cfg.HTTP.CORSAllowedOrigins = []string{"*", "http://walnut.example"}
 	cfg.HTTP.SecurityHeaders.Enabled = false
 	cfg.HTTP.SecurityHeaders.HSTSMaxAgeSeconds = 300
@@ -44,6 +45,7 @@ func TestProductionConfigValidationRejectsMissingCriticalSettings(t *testing.T) 
 	}
 	for _, want := range []string{
 		"DATABASE_DSN must not use in-memory sqlite in prod",
+		"DATABASE_MIGRATION_MODE must be versioned in prod",
 		"HTTP_CORS_ALLOWED_ORIGINS must not contain wildcard origins in prod",
 		"HTTP_CORS_ALLOWED_ORIGINS must contain https origins only in prod",
 		"HTTP_SECURITY_HEADERS_ENABLED must be true in prod",
@@ -116,7 +118,7 @@ func TestLoadFailsFastForInvalidProductionEnvironment(t *testing.T) {
 func minimalValidProductionConfig() *Config {
 	return &Config{
 		Server:   ServerConfig{Env: "prod"},
-		Database: DatabaseConfig{Driver: "sqlite", DSN: "./data/walnut_billing.db"},
+		Database: DatabaseConfig{Driver: "sqlite", DSN: "./data/walnut_billing.db", MigrationMode: DatabaseMigrationModeVersioned},
 		HTTP: HTTPConfig{
 			CORSAllowedOrigins: []string{"https://app.walnut.example", "https://ops.walnut.example"},
 			SecurityHeaders: HTTPSecurityHeadersConfig{
