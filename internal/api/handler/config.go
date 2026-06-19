@@ -2,8 +2,9 @@ package handler
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"strings"
+	"walnut-billing/internal/api/middleware"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/payment"
 	"walnut-billing/internal/service"
@@ -82,13 +83,11 @@ func (h *PaymentConfigHandler) UpdateWechatConfig(c *gin.Context) {
 		NotifyURL:   cfg.NotifyURL,
 	})
 
-	h.AuditSvc.Record(c.Request.Context(), &domain.AuditEntry{
-		Actor:     "admin",
-		Action:    domain.AuditActionConfigUpdate,
-		Target:    "payment.wechat",
-		Success:   true,
-		Details:   "sandbox=" + fmt.Sprint(req.Sandbox),
-		IPAddress: clientIP(c),
+	h.recordPaymentConfigAudit(c, "payment.wechat", true, paymentConfigAuditDetails{
+		Provider:        "wechat",
+		Sandbox:         req.Sandbox,
+		FieldsUpdated:   []string{"app_id", "mch_id", "serial_no", "private_key_present", "api_v3_key_present"},
+		SecretFieldsSet: []string{"private_key", "api_v3_key"},
 	})
 
 	c.JSON(http.StatusOK, gin.H{
@@ -141,6 +140,12 @@ func (h *PaymentConfigHandler) UpdateAlipayConfig(c *gin.Context) {
 		SandboxMode: req.Sandbox,
 		NotifyURL:   cfg.NotifyURL,
 	})
+	h.recordPaymentConfigAudit(c, "payment.alipay", true, paymentConfigAuditDetails{
+		Provider:        "alipay",
+		Sandbox:         req.Sandbox,
+		FieldsUpdated:   []string{"app_id", "private_key_present", "public_key_present"},
+		SecretFieldsSet: []string{"private_key"},
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Alipay configuration updated",
@@ -174,6 +179,7 @@ func (h *PaymentConfigHandler) UpdateCreemConfig(c *gin.Context) {
 		SandboxMode: cfg.SandboxMode,
 		NotifyURL:   notifyURL,
 	})
+	h.recordPaymentConfigAudit(c, "payment.creem", true, creemConfigAuditDetails(req, cfg.SandboxMode))
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Creem configuration updated",
@@ -207,6 +213,11 @@ func (h *PaymentConfigHandler) SwitchToMock(c *gin.Context) {
 		IsMock:    true,
 		NotifyURL: req.NotifyURL,
 	})
+	h.recordPaymentConfigAudit(c, "payment."+providerName, true, paymentConfigAuditDetails{
+		Provider:      providerName,
+		Mode:          "mock",
+		FieldsUpdated: []string{"notify_url_present"},
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": providerName + " switched to mock mode",
@@ -237,6 +248,13 @@ func (h *PaymentConfigHandler) ImportProviders(c *gin.Context) {
 					NotifyURL:   req.Wechat.NotifyURL,
 				})
 				results["wechat"] = "ok"
+				h.recordPaymentConfigAudit(c, "payment.wechat", true, paymentConfigAuditDetails{
+					Provider:        "wechat",
+					Mode:            "import",
+					Sandbox:         req.Wechat.SandboxMode,
+					FieldsUpdated:   []string{"mch_id", "app_id", "serial_no", "private_key_present", "api_v3_key_present", "notify_url_present"},
+					SecretFieldsSet: []string{"private_key", "api_v3_key"},
+				})
 			} else {
 				results["wechat"] = "failed: " + err.Error()
 			}
@@ -255,6 +273,13 @@ func (h *PaymentConfigHandler) ImportProviders(c *gin.Context) {
 					NotifyURL:   req.Alipay.NotifyURL,
 				})
 				results["alipay"] = "ok"
+				h.recordPaymentConfigAudit(c, "payment.alipay", true, paymentConfigAuditDetails{
+					Provider:        "alipay",
+					Mode:            "import",
+					Sandbox:         req.Alipay.SandboxMode,
+					FieldsUpdated:   []string{"app_id", "private_key_present", "public_key_present", "notify_url_present"},
+					SecretFieldsSet: []string{"private_key"},
+				})
 			} else {
 				results["alipay"] = "failed: " + err.Error()
 			}
@@ -272,6 +297,7 @@ func (h *PaymentConfigHandler) ImportProviders(c *gin.Context) {
 				SandboxMode: cfg.SandboxMode,
 			})
 			results["creem"] = "ok"
+			h.recordPaymentConfigAudit(c, "payment.creem", true, creemConfigAuditDetails(req.Creem, cfg.SandboxMode))
 		} else {
 			results["creem"] = "invalid: " + err.Error()
 		}
@@ -316,6 +342,86 @@ func (r creemConfigRequest) sandboxMode() bool {
 
 func (r creemConfigRequest) hasConfig() bool {
 	return r.APIKey != "" || r.WebhookSecret != "" || r.ProductMapJSON != "" || len(r.ProductIDs) > 0
+}
+
+type paymentConfigAuditDetails struct {
+	Provider        string   `json:"provider"`
+	Mode            string   `json:"mode,omitempty"`
+	Sandbox         bool     `json:"sandbox"`
+	FieldsUpdated   []string `json:"fields_updated,omitempty"`
+	SecretFieldsSet []string `json:"secret_fields_set,omitempty"`
+	ProductMapCount int      `json:"product_map_count,omitempty"`
+}
+
+func (h *PaymentConfigHandler) recordPaymentConfigAudit(c *gin.Context, target string, success bool, details paymentConfigAuditDetails) {
+	if h == nil || h.AuditSvc == nil {
+		return
+	}
+	details.FieldsUpdated = compactStrings(details.FieldsUpdated)
+	details.SecretFieldsSet = compactStrings(details.SecretFieldsSet)
+	payload, _ := json.Marshal(details)
+	h.AuditSvc.Record(c.Request.Context(), &domain.AuditEntry{
+		Actor:     adminActorFromContext(c),
+		Action:    domain.AuditActionConfigUpdate,
+		Target:    target,
+		Success:   success,
+		Details:   string(payload),
+		IPAddress: clientIP(c),
+	})
+}
+
+func creemConfigAuditDetails(req creemConfigRequest, sandbox bool) paymentConfigAuditDetails {
+	fields := []string{}
+	if strings.TrimSpace(req.APIBaseURL) != "" {
+		fields = append(fields, "api_base_url_present")
+	}
+	if strings.TrimSpace(req.SuccessURL) != "" {
+		fields = append(fields, "success_url_present")
+	}
+	if strings.TrimSpace(req.CancelURL) != "" {
+		fields = append(fields, "cancel_url_present")
+	}
+	secrets := []string{}
+	if strings.TrimSpace(req.APIKey) != "" {
+		secrets = append(secrets, "api_key")
+	}
+	if strings.TrimSpace(req.WebhookSecret) != "" {
+		secrets = append(secrets, "webhook_secret")
+	}
+	if strings.TrimSpace(req.ProductMapJSON) != "" || len(req.ProductIDs) > 0 {
+		fields = append(fields, "product_map_present")
+	}
+	return paymentConfigAuditDetails{
+		Provider:        "creem",
+		Sandbox:         sandbox,
+		FieldsUpdated:   fields,
+		SecretFieldsSet: secrets,
+		ProductMapCount: len(req.ProductIDs),
+	}
+}
+
+func compactStrings(values []string) []string {
+	items := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		items = append(items, value)
+	}
+	return items
+}
+
+func adminActorFromContext(c *gin.Context) string {
+	if principal, ok := middleware.GetAdminPrincipal(c); ok {
+		return defaultStringForHandler(principal.Name, "admin")
+	}
+	return "admin"
 }
 
 // SafeJSON is a helper that marshals safely (used in tests).

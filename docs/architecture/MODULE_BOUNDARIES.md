@@ -24,6 +24,7 @@ cmd/server/main.go
 | `database_migration` | `internal/app/migration` | Versioned schema changes, migration metadata, dev auto-migrate compatibility | HTTP handlers, payment providers, business policies |
 | `database_backup` | `scripts/backup_sqlite.sh`, `scripts/verify_sqlite_restore.sh` | Operational DB snapshots, checksum, restore drills | Application services or HTTP request flow |
 | `webhook_operations` | `docs/RUNBOOK_WEBHOOK_OPERATIONS.md`, `PaymentEventService` | Retry/dead-letter triage and admin reprocess using inbox status | Provider-specific business branches in handlers |
+| `security_audit` | `AdminPrivacyProjector`, audit services, security runbooks | Secret redaction, PII projection, safe admin action evidence | Raw provider payload exposure in cross-module read models |
 | `identity/access` | `identityAccessModule` | Email registration/restore, device-bound access snapshots, entitlement grants, credit ledger endpoints | payment provider details, checkout URLs, object storage implementation |
 | `commerce` | `commerceModule` | Checkout facade, provider webhook inbox, fulfillment diagnostics, subscription actions, payment-risk operations | Walnut App UI gates, cloud object bytes, direct snapshot cache writes |
 | `cloud_storage` | `cloudStorageModule` | Cloud quota checks, sync sessions, manifest/object metadata | payment providers, commerce checkout policy, file content parsing |
@@ -56,5 +57,6 @@ Architecture tests enforce the first hard rules:
 - Database schema evolution belongs in `internal/app/migration`; bootstrap may select a migration mode but must not own table lists or ad-hoc schema changes.
 - Backup/restore automation belongs in scripts and runbooks; runtime business services should not create backups or restore databases.
 - Webhook retry/dead-letter operations must use `PaymentEventInbox` status and admin service routes; do not mutate provider payload rows directly.
+- Secret redaction and PII projection belong in shared privacy/audit projectors; do not solve leaks by adding ad-hoc string filters in individual provider adapters.
 - Provider IDs, product IDs, and payment statuses must not enter access snapshots or Walnut App feature gates.
 - Admin write actions must go through application services and audit the principal, target, reason, and outcome.

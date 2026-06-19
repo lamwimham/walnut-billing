@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"walnut-billing/internal/api/middleware"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/payment"
 	"walnut-billing/internal/repository"
@@ -17,9 +19,15 @@ import (
 )
 
 // mockAuditService is a no-op audit service for handler tests
-type mockAuditService struct{}
+type mockAuditService struct {
+	entries []domain.AuditEntry
+}
 
-func (m *mockAuditService) Record(ctx context.Context, entry *domain.AuditEntry) {}
+func (m *mockAuditService) Record(ctx context.Context, entry *domain.AuditEntry) {
+	if entry != nil {
+		m.entries = append(m.entries, *entry)
+	}
+}
 func (m *mockAuditService) Query(ctx context.Context, query repository.AuditQuery) ([]domain.AuditEntry, int64, error) {
 	return nil, 0, nil
 }
@@ -151,6 +159,53 @@ func TestConfigHandler_UpdateCreemConfig(t *testing.T) {
 		t.Fatal("expected creem provider to be registered")
 	} else if s.IsMock || !s.SandboxMode {
 		t.Fatalf("expected real sandbox creem provider, got %#v", s)
+	}
+}
+
+func TestConfigHandler_UpdateCreemConfigAuditsWithoutSecrets(t *testing.T) {
+	registry := payment.NewProviderRegistry()
+	svc := payment.NewPaymentService(nil, nil, registry)
+	audit := &mockAuditService{}
+	h := NewPaymentConfigHandler(svc, audit)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/admin/payment/creem",
+		middleware.APIKeyAuthPrincipals([]middleware.AdminPrincipal{{Name: "ops", APIKey: "ops-secret", Permissions: []string{middleware.PermissionPaymentWrite}}}),
+		h.UpdateCreemConfig,
+	)
+
+	body := map[string]any{
+		"api_key":        "creem_test_should_not_leak",
+		"webhook_secret": "whsec_should_not_leak",
+		"sandbox":        true,
+		"product_ids": map[string]string{
+			"pro_own_ai_monthly": "prod_secret_should_not_leak",
+		},
+	}
+	jsonBody, _ := json.Marshal(body)
+	req, _ := http.NewRequest("PUT", "/admin/payment/creem", bytes.NewBuffer(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer ops-secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("expected one audit entry, got %#v", audit.entries)
+	}
+	entry := audit.entries[0]
+	if entry.Actor != "ops" || entry.Action != domain.AuditActionConfigUpdate || entry.Target != "payment.creem" || !entry.Success {
+		t.Fatalf("unexpected audit entry: %#v", entry)
+	}
+	for _, leaked := range []string{"creem_test_should_not_leak", "whsec_should_not_leak", "prod_secret_should_not_leak", "ops-secret"} {
+		if strings.Contains(entry.Details, leaked) || strings.Contains(entry.Actor, leaked) {
+			t.Fatalf("audit entry leaked secret %q: %#v", leaked, entry)
+		}
+	}
+	if !strings.Contains(entry.Details, `"secret_fields_set":["api_key","webhook_secret"]`) {
+		t.Fatalf("expected secret field names only, got %s", entry.Details)
 	}
 }
 

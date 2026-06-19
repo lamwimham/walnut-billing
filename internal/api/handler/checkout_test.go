@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"walnut-billing/internal/domain"
 	"walnut-billing/internal/service"
@@ -84,6 +86,10 @@ func TestCheckoutHandler_CreateCheckoutSession(t *testing.T) {
 	if response["checkout_url"] == "" {
 		t.Fatalf("expected checkout_url in response: %#v", response)
 	}
+	raw := w.Body.String()
+	if strings.Contains(raw, "mock_chk_CHK-TEST") || strings.Contains(raw, "cus_") || strings.Contains(raw, "provider_checkout_id") || strings.Contains(raw, "provider_customer_id") {
+		t.Fatalf("checkout response leaked provider internals: %s", raw)
+	}
 }
 
 func TestCheckoutHandler_MapsServiceErrors(t *testing.T) {
@@ -95,7 +101,7 @@ func TestCheckoutHandler_MapsServiceErrors(t *testing.T) {
 	}{
 		{name: "invalid", err: service.ErrInvalidCheckoutRequest, want: http.StatusBadRequest},
 		{name: "missing user", err: service.ErrUserNotFound, want: http.StatusNotFound},
-		{name: "provider", err: service.ErrCheckoutProviderFailed, want: http.StatusBadGateway},
+		{name: "provider", err: service.ErrCheckoutProviderFailed, want: http.StatusBadGateway, wantCode: "checkout_provider_failed"},
 		{
 			name: "risk blocked",
 			err: &service.CheckoutPolicyRejection{
@@ -167,5 +173,22 @@ func TestCheckoutHandler_MapsServiceErrors(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCheckoutHandler_ProviderFailureDoesNotExposeProviderErrorBody(t *testing.T) {
+	providerErr := fmt.Errorf("%w: creem checkout error: status=500 body={\"secret\":\"provider-token\"}", service.ErrCheckoutProviderFailed)
+	router := setupCheckoutTestRouter(&mockCheckoutService{err: providerErr})
+	body := []byte(`{"user_id":"usr_1","sku_code":"credits_600","provider":"creem","idempotency_key":"checkout:1"}`)
+	req, _ := http.NewRequest("POST", "/commerce/checkout-sessions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "provider-token") || strings.Contains(w.Body.String(), "creem checkout error") {
+		t.Fatalf("provider failure response leaked provider details: %s", w.Body.String())
 	}
 }

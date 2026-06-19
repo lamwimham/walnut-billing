@@ -197,6 +197,7 @@ Access session responses include a service-owned `device_capacity` projection wi
 - `docs/RUNBOOK_COMMERCE_FLOW.md`: executable local/test checklist for checkout, webhook inbox, fulfillment, dispute hold, and admin risk resolution.
 - `docs/RUNBOOK_BACKUP_RESTORE.md`: SQLite backup/restore and restore-drill runbook for the current production baseline.
 - `docs/RUNBOOK_WEBHOOK_OPERATIONS.md`: webhook retry, dead-letter, admin reprocess, and alert triage runbook.
+- `docs/RUNBOOK_SECURITY_AUDIT.md`: secret redaction, raw payload retention, PII projection, and admin action review runbook.
 - `scripts/verify_subscription_control_contract.sh`: local contract for the provider subscription-control port, subscription service, handler errors, and architecture boundaries.
 - `scripts/verify_admin_user_access_summary_contract.sh`: local contract for the WCP-4 admin read model, privacy projection, route errors, scoped permission, and architecture boundaries.
 - `scripts/verify_admin_order_contract.sh`: local contract for the WCP-4 admin order read model, route errors, scoped permission, and architecture boundaries.
@@ -206,6 +207,7 @@ Access session responses include a service-owned `device_capacity` projection wi
 - `scripts/verify_database_migration_contract.sh`: local contract for WCP-6 database migration mode, version ledger, and production config guard.
 - `scripts/verify_sqlite_backup_contract.sh`: local contract for SQLite online backup, checksum, and disposable restore verification.
 - `scripts/verify_webhook_operations_contract.sh`: local contract for webhook retry/dead-letter semantics, reprocess permissions, and handler mappings.
+- `scripts/verify_security_audit_contract.sh`: local contract for provider ID redaction, safe config audit details, privacy projections, and scoped admin permissions.
 
 ## Configuration
 

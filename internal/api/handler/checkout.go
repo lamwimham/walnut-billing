@@ -114,6 +114,9 @@ func checkoutErrorResponse(err error) gin.H {
 	if errors.Is(err, service.ErrCheckoutPolicyUnavailable) {
 		return gin.H{"error": "checkout policy unavailable", "code": "checkout_policy_unavailable"}
 	}
+	if errors.Is(err, service.ErrCheckoutProviderFailed) {
+		return gin.H{"error": "checkout provider failed", "code": "checkout_provider_failed"}
+	}
 	return gin.H{"error": err.Error()}
 }
 
@@ -122,15 +125,13 @@ func checkoutOrderResponse(order *domain.Order) gin.H {
 		return gin.H{}
 	}
 	return gin.H{
-		"out_trade_no":         order.OutTradeNo,
-		"user_id":              order.UserID,
-		"sku_code":             order.SKUCode,
-		"amount":               order.Amount,
-		"currency":             order.Currency,
-		"status":               order.Status,
-		"provider":             order.Provider,
-		"provider_checkout_id": order.ProviderCheckoutID,
-		"provider_customer_id": order.ProviderCustomerID,
-		"order_type":           order.OrderType,
+		"out_trade_no": order.OutTradeNo,
+		"user_id":      order.UserID,
+		"sku_code":     order.SKUCode,
+		"amount":       order.Amount,
+		"currency":     order.Currency,
+		"status":       order.Status,
+		"provider":     order.Provider,
+		"order_type":   order.OrderType,
 	}
 }
