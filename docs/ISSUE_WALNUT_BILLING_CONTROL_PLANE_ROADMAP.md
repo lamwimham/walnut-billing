@@ -650,11 +650,13 @@ WCP-6 进展（2026-06-19）：第二切片已完成。新增 `internal/api/midd
 
 WCP-6 进展（2026-06-19）：第三切片已完成。新增 `internal/app/migration` 版本化 migration runner，bootstrap 不再直接裸调 `db.AutoMigrate`；dev 默认 `DATABASE_MIGRATION_MODE=auto` 保持本地兼容，prod 必须显式设置 `DATABASE_MIGRATION_MODE=versioned`，按顺序执行 migration 并记录 `schema_migrations` 的 version/checksum/applied_at。已执行 migration 若 checksum 变化会拒绝启动，避免历史 schema 变更不可审计；`disabled` 模式预留给未来外部迁移 job。新增 `scripts/verify_database_migration_contract.sh` 固化 migration runner、生产配置校验和架构边界。
 
+WCP-6 进展（2026-06-19）：第四切片已完成。新增 SQLite 在线备份与恢复演练脚本：`scripts/backup_sqlite.sh` 使用 SQLite `.backup` API 生成一致性快照并输出 `.sha256` 与 `.meta`，`scripts/verify_sqlite_restore.sh` 在一次性目录中校验 checksum、`integrity_check`、`foreign_key_check` 与核心生产表，`scripts/verify_sqlite_backup_contract.sh` 固化端到端备份/恢复合同。新增 `docs/RUNBOOK_BACKUP_RESTORE.md`，明确停服恢复步骤、WAL/SHM 处理、off-host 存储、保留策略与未来 Postgres PITR 迁移触发条件。
+
 任务：
 
 - prod config validation：admin principals、snapshot signer、Creem key/webhook secret、DB DSN、rate limit、CORS/redirect allowlist、安全响应头。（第二切片已完成：fail-fast、redirect allowlist、CORS/header hardening）
 - 数据迁移策略：替代裸 `AutoMigrate` 的版本化 migration，保留 rollback/runbook。（第三切片已完成：versioned runner + schema_migrations；rollback/backup 操作 runbook 后续完善）
-- backup/restore runbook：SQLite 初期备份，后续 Postgres migration path。
+- backup/restore runbook：SQLite 初期备份，后续 Postgres migration path。（第四切片已完成：SQLite backup/restore scripts + runbook；Postgres PITR path 后续按规模触发）
 - webhook retry / dead letter / admin reprocess runbook。
 - 安全审计：secret redaction、raw payload retention、PII retention、admin action review。
 - 监控告警：checkout failure spike、webhook failed、fulfillment failed、snapshot signing errors、quota overage。

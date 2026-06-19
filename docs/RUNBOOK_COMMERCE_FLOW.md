@@ -348,6 +348,8 @@ Walnut 的 cancel-at-period-end 语义映射到 Creem cancel body：
 
 生产数据库必须使用 `DATABASE_MIGRATION_MODE=versioned`。启动时会先执行 `internal/app/migration` 中的有序 migration，并在 `schema_migrations` 记录 version/checksum；如果已执行 migration 的 checksum 变化，进程拒绝继续启动，避免隐式修改历史迁移。
 
+SQLite 备份/恢复操作见 `docs/RUNBOOK_BACKUP_RESTORE.md`。放量前至少完成一次 `scripts/backup_sqlite.sh` + `scripts/verify_sqlite_restore.sh` 演练，并确认备份文件、`.sha256`、`.meta` 已复制到 off-host 存储。
+
 ### 1. 确认 Creem adapter 已注册
 
 ```bash
@@ -749,6 +751,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 | Creem provider `disabled` | 未配置 Creem，当前只跑 mock profile | `/admin/payment/providers` | 如需 Creem test mode，设置 test API key、webhook secret 和完整 product map |
 | Creem provider `error` | 缺少 product map、test/prod endpoint/key 混用、webhook secret 缺失 | `/admin/payment/providers` 的 `error` 字段；启动日志 | 修正 `PAYMENT_CREEM_*`，确保 sandbox 使用 `https://test-api.creem.io` 与 test key |
 | 启动失败：`DATABASE_MIGRATION_MODE must be versioned in prod` | 生产仍使用 dev `auto` 迁移策略 | `.env` / secret manager / 启动日志 | 设置 `DATABASE_MIGRATION_MODE=versioned`，并先在备份副本验证 migration |
+| 需要回滚/恢复 SQLite DB | 部署失败、DB 损坏或误操作 | `docs/RUNBOOK_BACKUP_RESTORE.md`、`.sha256`、`schema_migrations` | 停服务，保存当前 DB/WAL/SHM，复制已验证 backup，删除旧 WAL/SHM，启动后检查 `/health` 与 admin read models |
 | 浏览器请求被 CORS 拦截 | Origin 不在 `HTTP_CORS_ALLOWED_ORIGINS` 或生产配置使用了 wildcard/http origin | 浏览器 devtools、响应头、启动日志中的 `ErrInvalidProductionConfig` | 将 App/Admin Web 的精确 HTTPS origin 加入 allowlist；不要使用 `*` 或带 path/query 的 URL |
 | checkout 返回 `payment provider not found: creem` | Creem 当前不是 active provider | `/admin/payment/providers` | 先消除 `disabled/error` 状态，再重试 checkout |
 | checkout 返回 `checkout_provider_failed` | provider 请求失败或 SKU 未映射 | 服务日志；响应 body | 检查 product map、API base URL、网络、Creem credentials |
@@ -769,6 +772,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 
 - [ ] `ADMIN_PRINCIPALS_JSON` 或 `ADMIN_API_KEYS` 非空；生产优先 scoped principals。
 - [ ] `DATABASE_MIGRATION_MODE=versioned`，目标 DB 备份已完成，`schema_migrations` 记录可审计。
+- [ ] `scripts/verify_sqlite_backup_contract.sh` 通过，最新生产备份已完成 restore drill 并复制到 off-host 存储。
 - [ ] `PAYMENT_CREEM_API_KEY` 与 `PAYMENT_CREEM_WEBHOOK_SECRET` 存在 secret manager，不进入日志。
 - [ ] `PAYMENT_CREEM_SANDBOX=false`，且未使用 test key 或 `https://test-api.creem.io`。
 - [ ] `PAYMENT_CREEM_PRODUCT_MAP_JSON` 覆盖所有可见海外 SKU。
@@ -791,6 +795,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 ```bash
 scripts/verify_production_config_contract.sh
 scripts/verify_database_migration_contract.sh
+scripts/verify_sqlite_backup_contract.sh
 go test ./...
 git diff --check
 rg -n "creem|Creem|PaymentRiskFlag|payment\\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true
