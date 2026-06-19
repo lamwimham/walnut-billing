@@ -22,6 +22,25 @@ Walnut App / PC Core
 
 Handlers remain transport-only. `CloudStorageService` owns authorization/session/manifest state. Provider-specific storage code belongs behind `ObjectStorageProvider`; billing must not parse file content or proxy bytes.
 
+## Provider Configuration
+
+Leave `CLOUD_STORAGE_PROVIDER` empty until a real bucket is ready. Cloud APIs then fail with `cloud storage provider not configured`, while checkout, subscription, access snapshot, and admin read flows continue normally.
+
+Set `CLOUD_STORAGE_PROVIDER=r2` or `s3` to enable the S3-compatible adapter:
+
+| Config | R2 example | Notes |
+|---|---|---|
+| `CLOUD_STORAGE_ENDPOINT_URL` | `https://<account_id>.r2.cloudflarestorage.com` | Must be an origin without path/query |
+| `CLOUD_STORAGE_REGION` | `auto` | AWS S3 uses its region, for example `us-east-1` |
+| `CLOUD_STORAGE_BUCKET` | `walnut-sync` | Bucket name used by the presigner |
+| `CLOUD_STORAGE_ACCESS_KEY_ID` / `CLOUD_STORAGE_SECRET_ACCESS_KEY` | server secret | Never expose to clients |
+| `CLOUD_STORAGE_FORCE_PATH_STYLE` | auto-enabled for `r2` | S3/MinIO may opt in explicitly |
+| `CLOUD_STORAGE_OBJECT_TAGGING` | `false` | Enable only after bucket/provider compatibility is verified |
+| `CLOUD_STORAGE_UPLOAD_TARGET_TTL_SECONDS` / `DOWNLOAD_TARGET_TTL_SECONDS` | `900` | Short-lived client targets |
+| `CLOUD_STORAGE_OPERATION_TTL_SECONDS` | `60` | Server-side head/delete request TTL |
+
+The adapter signs SigV4 targets in `internal/objectstorage`; it does not import payment code and it does not change cloud service business rules.
+
 ## Plan-Aware Quota
 
 Quota is decided by `CloudStorageQuotaPolicy.Decide`, not by handlers or admin read models. The policy consumes the active `cloud.storage` grants and returns a `CloudStorageQuotaDecision` with `plan`, `has_entitlement`, and `quota_bytes`.

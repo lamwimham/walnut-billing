@@ -162,7 +162,18 @@ type AccessConfig struct {
 }
 
 type CloudStorageConfig struct {
-	Provider string
+	Provider                 string
+	EndpointURL              string
+	Region                   string
+	Bucket                   string
+	AccessKeyID              string
+	SecretAccessKey          string
+	SessionToken             string
+	ForcePathStyle           bool
+	ObjectTagging            bool
+	UploadTargetTTLSeconds   int
+	DownloadTargetTTLSeconds int
+	OperationTTLSeconds      int
 }
 
 type AdminConfig struct {
@@ -253,6 +264,17 @@ func Load() (*Config, error) {
 	v.SetDefault("access.login_challenge_delivery", "dev")
 	v.SetDefault("access.login_challenge_secret", "walnut-dev-login-challenge-secret")
 	v.SetDefault("cloudstorage.provider", "")
+	v.SetDefault("cloudstorage.endpoint_url", "")
+	v.SetDefault("cloudstorage.region", "")
+	v.SetDefault("cloudstorage.bucket", "")
+	v.SetDefault("cloudstorage.access_key_id", "")
+	v.SetDefault("cloudstorage.secret_access_key", "")
+	v.SetDefault("cloudstorage.session_token", "")
+	v.SetDefault("cloudstorage.force_path_style", false)
+	v.SetDefault("cloudstorage.object_tagging", false)
+	v.SetDefault("cloudstorage.upload_target_ttl_seconds", 900)
+	v.SetDefault("cloudstorage.download_target_ttl_seconds", 900)
+	v.SetDefault("cloudstorage.operation_ttl_seconds", 60)
 
 	// 读取环境变量或配置文件
 	v.AutomaticEnv()
@@ -402,6 +424,43 @@ func Load() (*Config, error) {
 	}
 	if val := os.Getenv("CLOUD_STORAGE_PROVIDER"); val != "" {
 		cfg.CloudStorage.Provider = val
+	}
+	if val := os.Getenv("CLOUD_STORAGE_ENDPOINT_URL"); val != "" {
+		cfg.CloudStorage.EndpointURL = val
+	}
+	if val := os.Getenv("CLOUD_STORAGE_REGION"); val != "" {
+		cfg.CloudStorage.Region = val
+	}
+	if val := os.Getenv("CLOUD_STORAGE_BUCKET"); val != "" {
+		cfg.CloudStorage.Bucket = val
+	}
+	if val := os.Getenv("CLOUD_STORAGE_ACCESS_KEY_ID"); val != "" {
+		cfg.CloudStorage.AccessKeyID = val
+	}
+	if val := os.Getenv("CLOUD_STORAGE_SECRET_ACCESS_KEY"); val != "" {
+		cfg.CloudStorage.SecretAccessKey = val
+	}
+	if val := os.Getenv("CLOUD_STORAGE_SESSION_TOKEN"); val != "" {
+		cfg.CloudStorage.SessionToken = val
+	}
+	if val := os.Getenv("CLOUD_STORAGE_FORCE_PATH_STYLE"); val == "true" {
+		cfg.CloudStorage.ForcePathStyle = true
+	} else if val == "false" {
+		cfg.CloudStorage.ForcePathStyle = false
+	}
+	if val := os.Getenv("CLOUD_STORAGE_OBJECT_TAGGING"); val == "true" {
+		cfg.CloudStorage.ObjectTagging = true
+	} else if val == "false" {
+		cfg.CloudStorage.ObjectTagging = false
+	}
+	if val := os.Getenv("CLOUD_STORAGE_UPLOAD_TARGET_TTL_SECONDS"); val != "" {
+		cfg.CloudStorage.UploadTargetTTLSeconds = parseIntEnv(val, cfg.CloudStorage.UploadTargetTTLSeconds)
+	}
+	if val := os.Getenv("CLOUD_STORAGE_DOWNLOAD_TARGET_TTL_SECONDS"); val != "" {
+		cfg.CloudStorage.DownloadTargetTTLSeconds = parseIntEnv(val, cfg.CloudStorage.DownloadTargetTTLSeconds)
+	}
+	if val := os.Getenv("CLOUD_STORAGE_OPERATION_TTL_SECONDS"); val != "" {
+		cfg.CloudStorage.OperationTTLSeconds = parseIntEnv(val, cfg.CloudStorage.OperationTTLSeconds)
 	}
 	if val := os.Getenv("DATABASE_MIGRATION_MODE"); val != "" {
 		cfg.Database.MigrationMode = val

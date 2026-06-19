@@ -27,7 +27,7 @@ cmd/server/main.go
 | `security_audit` | `AdminPrivacyProjector`, audit services, security runbooks | Secret redaction, PII projection, safe admin action evidence | Raw provider payload exposure in cross-module read models |
 | `identity/access` | `identityAccessModule` | Email registration/restore, device-bound access snapshots, entitlement grants, credit ledger endpoints | payment provider details, checkout URLs, object storage implementation |
 | `commerce` | `commerceModule` | Checkout facade, provider webhook inbox, fulfillment diagnostics, subscription actions, payment-risk operations | Walnut App UI gates, cloud object bytes, direct snapshot cache writes |
-| `cloud_storage` | `cloudStorageModule` | Cloud quota checks, sync sessions, manifest/object metadata, restore metadata | payment providers, commerce checkout policy, file content parsing, object byte proxying |
+| `cloud_storage` | `cloudStorageModule` | Cloud quota checks, sync sessions, manifest/object metadata, restore metadata | payment providers, commerce checkout policy, object storage adapter implementation, file content parsing, object byte proxying |
 | `admin` | `adminModule` plus admin sections of other modules | RBAC-protected operator APIs, audit views, manual operations through services | direct DB writes that bypass service/audit boundaries |
 | `legacy_license` | `legacyLicenseModule` | Existing key/license/order compatibility APIs while commerce checkout becomes primary | new commercial feature gates |
 | `observability` | `internal/observability`, `internal/metrics`, `docs/RUNBOOK_MONITORING_ALERTS.md` | Service observation decorators, low-cardinality metrics, structured operational logs, alert runbooks | Business decisions, provider-specific policy branches, raw secrets/payload/object bytes in labels |
@@ -39,7 +39,7 @@ cmd/server/main.go
 api/handler
   -> service application interfaces
     -> repository interfaces + platform adapter interfaces
-      -> gorm_repo / payment / future object storage adapters
+      -> gorm_repo / payment / objectstorage adapters
 ```
 
 Architecture tests enforce the first hard rules:
@@ -47,6 +47,7 @@ Architecture tests enforce the first hard rules:
 - `internal/service` must not import `internal/api` or `internal/api/handler`.
 - Access-oriented services (`access_*.go`, `entitlement.go`, `credit*.go`) must not import `internal/payment`.
 - Cloud storage services must not import `internal/payment`.
+- Cloud storage services must not import `internal/objectstorage`; bootstrap is the only place that chooses S3/R2 vs unconfigured provider.
 - API handlers must not import `internal/repository/gorm_repo`; persistence access goes through services.
 - Domain models must not import service, api, payment, or repository packages.
 

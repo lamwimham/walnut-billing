@@ -44,6 +44,14 @@ func TestArchitectureImportBoundaries(t *testing.T) {
 			forbidden: []string{"walnut-billing/internal/payment"},
 		},
 		{
+			name: "cloud storage services do not depend on object storage adapters",
+			root: "../../service",
+			files: func(path string) bool {
+				return strings.HasPrefix(filepath.Base(path), "cloud_storage")
+			},
+			forbidden: []string{"walnut-billing/internal/objectstorage"},
+		},
+		{
 			name:      "handlers do not bypass repositories",
 			root:      "../../api/handler",
 			forbidden: []string{"walnut-billing/internal/repository/gorm_repo"},

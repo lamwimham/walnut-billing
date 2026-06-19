@@ -629,12 +629,14 @@ WCP-5 进展（2026-06-19）：第一切片已完成。新增 `CloudSyncSession`
 
 WCP-5 进展（2026-06-19）：第二切片已完成。`CloudStorageQuotaPolicy` 从固定 MB 演进为 plan-aware strategy，统一返回 `CloudStorageQuotaDecision{plan, has_entitlement, quota_bytes}`；trial/monthly/lifetime/custom quota 分别由 `ACCESS_CLOUD_STORAGE_TRIAL_QUOTA_MB`、`ACCESS_CLOUD_STORAGE_MONTHLY_QUOTA_MB`、`ACCESS_CLOUD_STORAGE_LIFETIME_QUOTA_MB` 与 `ACCESS_CLOUD_STORAGE_QUOTA_MB` 配置，`0` 继承默认 quota。该策略注入 `CloudStorageService`、signed access snapshot feature projection、`AdminCloudStorageService` 与 `AdminUserAccessSummaryService`，避免客户端 usage、snapshot 和运营 read model 漂移。新增 `POST /api/v1/cloud-storage/download-targets`，通过 `CloudObjectRepository.GetByObjectKey` 校验 active user、cloud entitlement、project ownership 与 active object 状态后再委托 `ObjectStorageProvider.BuildDownloadTarget`；restore metadata 仍只列 manifest/object metadata，download URL 只在客户端主动恢复单对象时签发。`ObservedCloudStorageService` 已把该路径纳入 `operation="download_target"` 观测。
 
+WCP-5 进展（2026-06-19）：第三切片已完成。新增 `internal/objectstorage.S3CompatibleProvider` 作为真实 S3/R2 adapter，实现 SigV4 presigned upload/download target 以及 server-side Head/Delete；bootstrap 通过 `CLOUD_STORAGE_PROVIDER=r2|s3` 注入该 adapter，`CloudStorageService` 仍只依赖 `ObjectStorageProvider` port。新增配置 `CLOUD_STORAGE_ENDPOINT_URL`、`CLOUD_STORAGE_REGION`、`CLOUD_STORAGE_BUCKET`、`CLOUD_STORAGE_ACCESS_KEY_ID`、`CLOUD_STORAGE_SECRET_ACCESS_KEY`、`CLOUD_STORAGE_SESSION_TOKEN`、`CLOUD_STORAGE_FORCE_PATH_STYLE`、`CLOUD_STORAGE_OBJECT_TAGGING` 与 target TTL；prod 在 provider 非空时 fail-fast 校验 endpoint/region/bucket/credentials/TTL。适配器契约测试覆盖 virtual-host/path-style URL、R2 `auto` region、临时 token、metadata header、可选 object tagging、head/delete request 以及 bootstrap wiring；架构测试固化 cloud service 不依赖 objectstorage adapter。
+
 任务：
 
-- 编写 ADR：评估 OSS、S3/R2、MinIO、managed storage，明确第一实现。（第一切片已完成：首选 S3-compatible / Cloudflare R2，provider adapter 后续落地）
-- 完善 `ObjectStorageProvider` contract：upload target、download target、delete、head object、lifecycle tags。（第一切片已完成：port 已扩展，真实 adapter 后续实现）
+- 编写 ADR：评估 OSS、S3/R2、MinIO、managed storage，明确第一实现。（第三切片已完成：首选 S3-compatible / Cloudflare R2，并已落地 S3/R2 adapter）
+- 完善 `ObjectStorageProvider` contract：upload target、download target、delete、head object、lifecycle tags。（第三切片已完成：port + S3/R2 adapter + 可选 object tagging）
 - 新增 `CloudSyncSession`，保证 upload session 与 manifest commit 绑定。（第一切片已完成：session 持久化、fingerprint/expiry/commit 绑定）
-- 增加 restore APIs：project list、latest manifest、object download target。（第二切片已完成：metadata + download-target 授权；真实 provider adapter 后续实现）
+- 增加 restore APIs：project list、latest manifest、object download target。（第三切片已完成：metadata + download-target 授权 + S3/R2 provider target）
 - Quota policy 从固定 MB 演进为基于 access plan：trial/monthly/lifetime 可配置。（第二切片已完成：共享 strategy 注入 service/snapshot/admin read models）
 
 验收标准：

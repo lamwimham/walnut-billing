@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"walnut-billing/internal/domain"
@@ -47,6 +48,7 @@ func ValidateProduction(cfg *Config) error {
 	violations = append(violations, validateProductionRateLimit(cfg.RateLimit)...)
 	violations = append(violations, validateProductionCheckout(cfg.Checkout)...)
 	violations = append(violations, validateProductionAccess(cfg.Access)...)
+	violations = append(violations, validateProductionCloudStorage(cfg.CloudStorage)...)
 	violations = append(violations, validateProductionCreem(cfg.Payment)...)
 
 	if len(violations) == 0 {
@@ -149,6 +151,41 @@ func validateProductionAccess(cfg AccessConfig) []string {
 	}
 	if cfg.CloudStorageTrialQuotaMB < 0 || cfg.CloudStorageMonthlyQuotaMB < 0 || cfg.CloudStorageLifetimeQuotaMB < 0 {
 		violations = append(violations, "ACCESS_CLOUD_STORAGE_*_QUOTA_MB must be >= 0 in prod")
+	}
+	return violations
+}
+
+func validateProductionCloudStorage(cfg CloudStorageConfig) []string {
+	var violations []string
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	if provider == "" {
+		return nil
+	}
+	if !slices.Contains([]string{"s3", "r2"}, provider) {
+		return []string{"CLOUD_STORAGE_PROVIDER must be s3 or r2 in prod"}
+	}
+	if strings.TrimSpace(cfg.EndpointURL) == "" {
+		violations = append(violations, "CLOUD_STORAGE_ENDPOINT_URL is required when cloud storage provider is configured in prod")
+	} else {
+		parsed, err := url.Parse(strings.TrimSpace(cfg.EndpointURL))
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			violations = append(violations, "CLOUD_STORAGE_ENDPOINT_URL must be an https origin in prod")
+		}
+	}
+	if strings.TrimSpace(cfg.Region) == "" {
+		violations = append(violations, "CLOUD_STORAGE_REGION is required when cloud storage provider is configured in prod")
+	}
+	if strings.TrimSpace(cfg.Bucket) == "" {
+		violations = append(violations, "CLOUD_STORAGE_BUCKET is required when cloud storage provider is configured in prod")
+	}
+	if strings.TrimSpace(cfg.AccessKeyID) == "" {
+		violations = append(violations, "CLOUD_STORAGE_ACCESS_KEY_ID is required when cloud storage provider is configured in prod")
+	}
+	if strings.TrimSpace(cfg.SecretAccessKey) == "" {
+		violations = append(violations, "CLOUD_STORAGE_SECRET_ACCESS_KEY is required when cloud storage provider is configured in prod")
+	}
+	if cfg.UploadTargetTTLSeconds <= 0 || cfg.DownloadTargetTTLSeconds <= 0 || cfg.OperationTTLSeconds <= 0 {
+		violations = append(violations, "CLOUD_STORAGE_*_TTL_SECONDS must be > 0 in prod")
 	}
 	return violations
 }

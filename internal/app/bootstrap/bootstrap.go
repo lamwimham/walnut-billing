@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"walnut-billing/internal/api/handler"
 	"walnut-billing/internal/api/middleware"
@@ -13,6 +14,7 @@ import (
 	"walnut-billing/internal/config"
 	"walnut-billing/internal/generator"
 	"walnut-billing/internal/logger"
+	"walnut-billing/internal/objectstorage"
 	"walnut-billing/internal/observability"
 	"walnut-billing/internal/payment"
 	"walnut-billing/internal/repository"
@@ -175,12 +177,38 @@ func buildCloudObjectStorageProvider(cfg *config.Config) (service.ObjectStorageP
 	if cfg != nil {
 		providerID = strings.TrimSpace(cfg.CloudStorage.Provider)
 	}
-	switch providerID {
+	switch strings.ToLower(providerID) {
 	case "":
 		return service.NewUnconfiguredObjectStorageProvider(), nil
+	case "s3", "r2":
+		forcePathStyle := cfg.CloudStorage.ForcePathStyle
+		if strings.EqualFold(providerID, "r2") {
+			forcePathStyle = true
+		}
+		return objectstorage.NewS3CompatibleProvider(objectstorage.S3CompatibleConfig{
+			ProviderID:        strings.ToLower(providerID),
+			EndpointURL:       cfg.CloudStorage.EndpointURL,
+			Region:            cfg.CloudStorage.Region,
+			Bucket:            cfg.CloudStorage.Bucket,
+			AccessKeyID:       cfg.CloudStorage.AccessKeyID,
+			SecretAccessKey:   cfg.CloudStorage.SecretAccessKey,
+			SessionToken:      cfg.CloudStorage.SessionToken,
+			ForcePathStyle:    forcePathStyle,
+			ObjectTagging:     cfg.CloudStorage.ObjectTagging,
+			UploadTargetTTL:   secondsDuration(cfg.CloudStorage.UploadTargetTTLSeconds),
+			DownloadTargetTTL: secondsDuration(cfg.CloudStorage.DownloadTargetTTLSeconds),
+			OperationTTL:      secondsDuration(cfg.CloudStorage.OperationTTLSeconds),
+		})
 	default:
 		return nil, fmt.Errorf("cloud storage provider %q is not implemented yet", providerID)
 	}
+}
+
+func secondsDuration(seconds int) time.Duration {
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func buildAccessSnapshotSigner(cfg *config.Config) (service.AccessSnapshotSigner, error) {

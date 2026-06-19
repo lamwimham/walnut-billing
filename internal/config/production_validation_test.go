@@ -94,6 +94,44 @@ func TestProductionConfigValidationAcceptsCompleteProductionConfig(t *testing.T)
 	}
 }
 
+func TestProductionConfigValidationRejectsIncompleteCloudStorageProvider(t *testing.T) {
+	cfg := minimalValidProductionConfig()
+	cfg.CloudStorage = CloudStorageConfig{
+		Provider:                 "r2",
+		EndpointURL:              "http://account.r2.cloudflarestorage.com/path",
+		UploadTargetTTLSeconds:   0,
+		DownloadTargetTTLSeconds: 0,
+		OperationTTLSeconds:      0,
+	}
+
+	err := ValidateProduction(cfg)
+	if !errors.Is(err, ErrInvalidProductionConfig) {
+		t.Fatalf("expected ErrInvalidProductionConfig, got %v", err)
+	}
+	for _, want := range []string{
+		"CLOUD_STORAGE_ENDPOINT_URL must be an https origin in prod",
+		"CLOUD_STORAGE_REGION is required when cloud storage provider is configured in prod",
+		"CLOUD_STORAGE_BUCKET is required when cloud storage provider is configured in prod",
+		"CLOUD_STORAGE_ACCESS_KEY_ID is required when cloud storage provider is configured in prod",
+		"CLOUD_STORAGE_SECRET_ACCESS_KEY is required when cloud storage provider is configured in prod",
+		"CLOUD_STORAGE_*_TTL_SECONDS must be > 0 in prod",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected violation %q in %v", want, err)
+		}
+	}
+}
+
+func TestProductionConfigValidationRejectsUnsupportedCloudStorageProvider(t *testing.T) {
+	cfg := minimalValidProductionConfig()
+	cfg.CloudStorage = CloudStorageConfig{Provider: "future-provider"}
+
+	err := ValidateProduction(cfg)
+	if !errors.Is(err, ErrInvalidProductionConfig) || !strings.Contains(err.Error(), "CLOUD_STORAGE_PROVIDER must be s3 or r2 in prod") {
+		t.Fatalf("expected unsupported cloud provider violation, got %v", err)
+	}
+}
+
 func TestProductionConfigValidationAcceptsScopedAdminPrincipalAndWrappedProductMap(t *testing.T) {
 	cfg := minimalValidProductionConfig()
 	cfg.Admin.APIKeys = nil
@@ -160,6 +198,12 @@ func minimalValidProductionConfig() *Config {
 			CreemSuccessURL:     "https://walnut.example/checkout/success",
 			CreemCancelURL:      "https://walnut.example/checkout/cancel",
 			CreemProductMapJSON: `{"pro_own_ai_monthly":"prod_monthly","pro_own_ai_lifetime":"prod_lifetime"}`,
+		},
+		CloudStorage: CloudStorageConfig{
+			Provider:                 "",
+			UploadTargetTTLSeconds:   900,
+			DownloadTargetTTLSeconds: 900,
+			OperationTTLSeconds:      60,
 		},
 	}
 }

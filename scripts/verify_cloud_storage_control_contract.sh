@@ -14,17 +14,23 @@ go test ./internal/service -run 'TestPlanAwareCloudStorageQuotaPolicy' -count=1
 go test ./internal/service -run 'TestAccessSnapshotIssuer_UsesSharedCloudQuotaPolicy|TestAdminCloudStorageService|TestAdminUserAccessSummaryService' -count=1
 go test ./internal/api/handler -run 'TestCloudStorageHandler' -count=1
 go test ./internal/repository/gorm_repo -run 'TestCloudStorageRepositories' -count=1
+go test ./internal/objectstorage -run 'TestS3CompatibleProvider' -count=1
 go test ./internal/app/migration -run 'TestRunVersionedAppliesBaselineAndRecordsMetadata' -count=1
-go test ./internal/app/bootstrap -run 'TestArchitectureImportBoundaries' -count=1
-go test ./internal/config -run 'TestLoadReadsAccessEnvConfig|TestProductionConfigValidationRejectsMissingCriticalSettings' -count=1
+go test ./internal/app/bootstrap -run 'Test(ArchitectureImportBoundaries|BuildCloudObjectStorageProvider)' -count=1
+go test ./internal/config -run 'Test(LoadReadsAccessEnvConfig|ProductionConfigValidationRejectsMissingCriticalSettings|ProductionConfigValidationRejectsIncompleteCloudStorageProvider)' -count=1
 
 for symbol in \
   CloudSyncSession \
   CloudSyncSessionRepository \
   CloudSyncSessionRepo \
+  S3CompatibleProvider \
+  NewS3CompatibleProvider \
   PlanAwareCloudStorageQuotaPolicy \
   CloudStorageQuotaDecision \
   CloudStoragePlanMonthly \
+  CLOUD_STORAGE_PROVIDER \
+  CLOUD_STORAGE_ENDPOINT_URL \
+  CLOUD_STORAGE_SECRET_ACCESS_KEY \
   ACCESS_CLOUD_STORAGE_MONTHLY_QUOTA_MB \
   BuildDownloadTarget \
   GetByObjectKey \
@@ -42,6 +48,8 @@ done
 
 for doc in \
   'CloudSyncSession' \
+  'S3-compatible' \
+  'CLOUD_STORAGE_PROVIDER' \
   'plan-aware quota' \
   'download-targets' \
   'ObjectStorageProvider' \

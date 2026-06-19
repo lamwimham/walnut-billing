@@ -15,6 +15,7 @@ walnut-billing/
 │   ├── config/                     # Viper-based configuration
 │   ├── domain/models.go            # Entities (Product, License, Order, User, Grant)
 │   ├── generator/                  # Factory pattern: license key generation
+│   ├── objectstorage/              # S3/R2-compatible object storage adapter
 │   ├── payment/                    # Adapter pattern: Creem + legacy WeChat/Alipay
 │   ├── repository/                 # Repository pattern: interfaces + GORM impl
 │   ├── service/                    # Business logic with UnitOfWork transactions
@@ -153,6 +154,8 @@ Access session responses include a service-owned `device_capacity` projection wi
 
 Cloud storage remains control-plane only. Billing authorizes upload sessions, records metadata, enforces the shared plan-aware quota policy, and returns restore metadata; object bytes are uploaded/downloaded directly through the configured object storage provider. The same quota decision feeds client usage, signed access snapshots, and admin read models so trial/monthly/lifetime projections do not drift.
 
+`CLOUD_STORAGE_PROVIDER=r2` or `s3` enables the S3-compatible adapter in `internal/objectstorage`. The adapter signs short-lived SigV4 upload/download targets and server-side head/delete requests; credentials stay server-side, handlers still depend only on `ObjectStorageProvider`, and leaving the provider empty keeps cloud sync explicitly disabled without impacting licensing.
+
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
 | POST | `/api/v1/cloud-storage/sync-sessions` | `{user_id, client_project_id, project_name, resources[]}` | `{sync_session:{id, upload_targets[], quota_bytes, used_bytes, requested_bytes, expires_at}}` |
@@ -225,11 +228,11 @@ Cloud storage remains control-plane only. Billing authorizes upload sessions, re
 - `scripts/verify_webhook_operations_contract.sh`: local contract for webhook retry/dead-letter semantics, reprocess permissions, and handler mappings.
 - `scripts/verify_security_audit_contract.sh`: local contract for provider ID redaction, safe config audit details, privacy projections, and scoped admin permissions.
 - `scripts/verify_monitoring_contract.sh`: local contract for WCP-6 metrics coverage, observer/decorator wiring, alert runbook, and architecture boundaries.
-- `scripts/verify_cloud_storage_control_contract.sh`: local contract for WCP-5 cloud sync sessions, restore metadata routes, provider port shape, and architecture boundaries.
+- `scripts/verify_cloud_storage_control_contract.sh`: local contract for WCP-5 cloud sync sessions, restore metadata routes, S3/R2 adapter shape, provider port shape, and architecture boundaries.
 
 ## Configuration
 
-All settings via environment variables (see `.env.example`). `config.Load()` runs production fail-fast validation when `SERVER_ENV=prod`; missing admin auth, non-prod snapshot signer, Creem live config/product map, rate limit, DB DSN, versioned migration mode, explicit HTTPS CORS origins, enabled security headers, or checkout redirect allowlist returns `ErrInvalidProductionConfig` before bootstrap wires providers.
+All settings via environment variables (see `.env.example`). `config.Load()` runs production fail-fast validation when `SERVER_ENV=prod`; missing admin auth, non-prod snapshot signer, Creem live config/product map, rate limit, DB DSN, versioned migration mode, explicit HTTPS CORS origins, enabled security headers, checkout redirect allowlist, or incomplete cloud-storage provider config returns `ErrInvalidProductionConfig` before bootstrap wires providers.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -282,6 +285,18 @@ All settings via environment variables (see `.env.example`). `config.Load()` run
 | `ACCESS_LOGIN_CHALLENGE_MAX_CREATES_PER_IP` | 20 | Max challenge creates per hashed client IP within the rate-limit window |
 | `ACCESS_LOGIN_CHALLENGE_DELIVERY` | dev | `dev` returns `dev_token` outside prod; `email` is currently disabled until a provider adapter is configured |
 | `ACCESS_LOGIN_CHALLENGE_SECRET` | dev secret | HMAC secret for OTP hashing; prod must not use the dev secret |
+| `CLOUD_STORAGE_PROVIDER` | (empty) | Object storage adapter: empty disables sync, `r2`/`s3` use the S3-compatible SigV4 adapter |
+| `CLOUD_STORAGE_ENDPOINT_URL` | (empty) | Provider origin, e.g. `https://<account_id>.r2.cloudflarestorage.com` or `https://s3.<region>.amazonaws.com` |
+| `CLOUD_STORAGE_REGION` | (empty) | SigV4 region; use `auto` for Cloudflare R2 |
+| `CLOUD_STORAGE_BUCKET` | (empty) | Bucket name used in signed object URLs |
+| `CLOUD_STORAGE_ACCESS_KEY_ID` | (empty) | Server-side object storage access key id |
+| `CLOUD_STORAGE_SECRET_ACCESS_KEY` | (empty) | Server-side object storage secret access key |
+| `CLOUD_STORAGE_SESSION_TOKEN` | (empty) | Optional temporary credential token |
+| `CLOUD_STORAGE_FORCE_PATH_STYLE` | false | Force `/bucket/key` URL shape; bootstrap enables path-style for `r2` |
+| `CLOUD_STORAGE_OBJECT_TAGGING` | false | Include `x-amz-tagging` in signed upload targets; keep disabled until provider bucket compatibility is verified |
+| `CLOUD_STORAGE_UPLOAD_TARGET_TTL_SECONDS` | 900 | Upload target TTL for direct client PUT |
+| `CLOUD_STORAGE_DOWNLOAD_TARGET_TTL_SECONDS` | 900 | Download target TTL for restore GET |
+| `CLOUD_STORAGE_OPERATION_TTL_SECONDS` | 60 | Server-side head/delete presign TTL |
 
 Bucket expiry is exposed through `POST /api/v1/admin/credits/buckets/expire` for operator or scheduled jobs.
 
