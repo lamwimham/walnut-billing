@@ -52,6 +52,7 @@ type AccessSnapshotIssuerRepositories struct {
 type AccessSnapshotIssuerDependencies struct {
 	Repositories          AccessSnapshotIssuerRepositories
 	Policy                AccessSnapshotPolicy
+	CloudQuotaPolicy      CloudStorageQuotaPolicy
 	Signer                AccessSnapshotSigner
 	SoftwareSubscriptions SoftwareSubscriptionProjector
 }
@@ -243,6 +244,7 @@ func (s *ed25519AccessSnapshotSigner) Algorithm() string {
 type accessSnapshotIssuer struct {
 	repos                 AccessSnapshotIssuerRepositories
 	policy                AccessSnapshotPolicy
+	cloudQuotaPolicy      CloudStorageQuotaPolicy
 	signer                AccessSnapshotSigner
 	softwareSubscriptions SoftwareSubscriptionProjector
 }
@@ -263,7 +265,7 @@ func NewAccessSnapshotIssuer(deps AccessSnapshotIssuerDependencies) AccessSnapsh
 			Cancellations:     deps.Repositories.Cancellations,
 		}, nil)
 	}
-	return &accessSnapshotIssuer{repos: deps.Repositories, policy: policy, signer: signer, softwareSubscriptions: projector}
+	return &accessSnapshotIssuer{repos: deps.Repositories, policy: policy, cloudQuotaPolicy: deps.CloudQuotaPolicy, signer: signer, softwareSubscriptions: projector}
 }
 
 func (i *accessSnapshotIssuer) Issue(ctx context.Context, input AccessSnapshotIssueInput) (*domain.AccessSnapshotV2, error) {
@@ -306,7 +308,7 @@ func (i *accessSnapshotIssuer) Issue(ctx context.Context, input AccessSnapshotIs
 		License:           license,
 		Device:            device,
 		Entitlements:      entitlements,
-		Features:          i.featureProjection(ctx, user, entitlements),
+		Features:          i.featureProjection(ctx, user, activeGrants, entitlements),
 		Credits:           creditSnapshotWithRepo(ctx, i.repos.CreditAccounts, user.ID),
 		IssuedAt:          issuedAt.Format(time.RFC3339),
 		ExpiresAt:         expiresAt.Format(time.RFC3339),
@@ -406,11 +408,21 @@ func (i *accessSnapshotIssuer) snapshotDevice(ctx context.Context, user *domain.
 	return deviceSnapshotProjection(&activeDevices[0], capacity), nil
 }
 
-func (i *accessSnapshotIssuer) featureProjection(ctx context.Context, user *domain.User, entitlements map[string]bool) map[string]any {
+func (i *accessSnapshotIssuer) featureProjection(ctx context.Context, user *domain.User, grants []domain.EntitlementGrant, entitlements map[string]bool) map[string]any {
 	features := map[string]any{"ai.hosted.available": false}
 	if entitlements[domain.EntitlementCloudStorage] {
-		features["cloud.storage.quota_mb"] = i.policy.CloudStorageQuotaMB(ctx, user)
+		quotaBytes := int64(0)
+		if i.cloudQuotaPolicy != nil {
+			quota := i.cloudQuotaPolicy.Decide(ctx, CloudStorageQuotaInput{User: user, Grants: grants, Now: time.Now().UTC()})
+			quotaBytes = quota.QuotaBytes
+			features["cloud.storage.plan"] = quota.Plan
+		} else {
+			quotaBytes = i.policy.CloudStorageQuotaMB(ctx, user) * 1024 * 1024
+			features["cloud.storage.plan"] = CloudStoragePlanCustom
+		}
+		features["cloud.storage.quota_mb"] = quotaBytes / (1024 * 1024)
 	} else {
+		features["cloud.storage.plan"] = CloudStoragePlanNone
 		features["cloud.storage.quota_mb"] = int64(0)
 	}
 	return features

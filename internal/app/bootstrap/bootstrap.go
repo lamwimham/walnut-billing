@@ -139,6 +139,18 @@ func buildAccessSnapshotPolicy(cfg *config.Config) service.AccessSnapshotPolicy 
 	return service.NewConfigurableAccessSnapshotPolicy(policyConfig)
 }
 
+func buildCloudStorageQuotaPolicy(cfg *config.Config) service.CloudStorageQuotaPolicy {
+	if cfg == nil {
+		return service.NewCloudStorageQuotaPolicyFromMB(0)
+	}
+	return service.NewPlanAwareCloudStorageQuotaPolicyFromMB(
+		cfg.Access.CloudStorageQuotaMB,
+		cfg.Access.CloudStorageTrialQuotaMB,
+		cfg.Access.CloudStorageMonthlyQuotaMB,
+		cfg.Access.CloudStorageLifetimeQuotaMB,
+	)
+}
+
 func creemConfigured(cfg config.PaymentConfig) bool {
 	return strings.TrimSpace(cfg.CreemAPIKey) != "" ||
 		strings.TrimSpace(cfg.CreemWebhookSecret) != "" ||
@@ -294,6 +306,7 @@ func Build() (*Application, error) {
 		EntitlementGrants: grantRepo,
 		Cancellations:     subscriptionCancellationRepo,
 	}, nil)
+	cloudQuotaPolicy := buildCloudStorageQuotaPolicy(cfg)
 	accessSnapshotIssuer := service.NewAccessSnapshotIssuer(service.AccessSnapshotIssuerDependencies{
 		Repositories: service.AccessSnapshotIssuerRepositories{
 			Users:             userRepo,
@@ -305,6 +318,7 @@ func Build() (*Application, error) {
 			Cancellations:     subscriptionCancellationRepo,
 		},
 		Policy:                buildAccessSnapshotPolicy(cfg),
+		CloudQuotaPolicy:      cloudQuotaPolicy,
 		Signer:                accessSnapshotSigner,
 		SoftwareSubscriptions: softwareSubscriptions,
 	})
@@ -342,7 +356,6 @@ func Build() (*Application, error) {
 		l.Error("Failed to initialize cloud storage provider", "error", err)
 		return nil, err
 	}
-	cloudQuotaPolicy := service.NewCloudStorageQuotaPolicyFromMB(cfg.Access.CloudStorageQuotaMB)
 	cloudStorageSvc := service.NewCloudStorageService(service.CloudStorageDependencies{
 		Users:             userRepo,
 		Grants:            grantRepo,

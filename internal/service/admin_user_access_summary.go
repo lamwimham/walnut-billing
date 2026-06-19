@@ -151,6 +151,7 @@ type AdminUserAccessRiskFlagRecord struct {
 }
 
 type AdminUserAccessCloudSummary struct {
+	Plan               string                        `json:"plan"`
 	UsedBytes          int64                         `json:"used_bytes"`
 	QuotaBytes         int64                         `json:"quota_bytes"`
 	RemainingBytes     int64                         `json:"remaining_bytes"`
@@ -315,15 +316,14 @@ func (s *adminUserAccessSummaryService) projectCloudStorage(ctx context.Context,
 	if record == nil {
 		return AdminUserAccessCloudSummary{}
 	}
-	quotaBytes := int64(0)
-	if hasActiveEntitlement(record.EntitlementGrants, domain.EntitlementCloudStorage, s.currentTime()) && s.cloudQuotaPolicy != nil {
-		quotaBytes = s.cloudQuotaPolicy.QuotaBytes(ctx, &record.User)
+	now := s.currentTime()
+	quota := CloudStorageQuotaDecision{Plan: cloudStoragePlanForGrants(record.EntitlementGrants, now)}
+	if s.cloudQuotaPolicy != nil {
+		quota = s.cloudQuotaPolicy.Decide(ctx, CloudStorageQuotaInput{User: &record.User, Grants: record.EntitlementGrants, Now: now})
 	}
-	if quotaBytes < 0 {
-		quotaBytes = 0
-	}
-	usage := usageFor(record.User.ID, record.CloudUsedBytes, quotaBytes)
+	usage := usageFor(record.User.ID, quota.Plan, record.CloudUsedBytes, quota.QuotaBytes)
 	summary := AdminUserAccessCloudSummary{
+		Plan:           usage.Plan,
 		UsedBytes:      usage.UsedBytes,
 		QuotaBytes:     usage.QuotaBytes,
 		RemainingBytes: usage.RemainingBytes,

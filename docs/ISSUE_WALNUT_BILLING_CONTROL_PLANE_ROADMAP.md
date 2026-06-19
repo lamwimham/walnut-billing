@@ -329,8 +329,8 @@ SubscriptionCancellationService
 | 已有实体 | `CloudProject`, `CloudManifest`, `CloudObject` |
 | 建议新增实体 | `CloudSyncSession`：记录 upload session、过期、requested bytes、commit 状态 |
 | 主要服务 | `CloudStorageService`, `CloudQuotaPolicy`, `ObjectStorageProvider` |
-| Provider ports | `ObjectStorageProvider.BuildUploadTarget`, 后续 `BuildDownloadTarget`, `DeleteObject` |
-| Client API | `POST /api/v1/cloud-storage/sync-sessions`, `POST /api/v1/cloud-storage/manifests`, `GET /api/v1/users/:user_id/cloud-storage/usage`, `GET /api/v1/users/:user_id/cloud-storage/projects`, `GET /api/v1/cloud-storage/projects/:id/manifests/latest` |
+| Provider ports | `ObjectStorageProvider.BuildUploadTarget`, `BuildDownloadTarget`, `HeadObject`, `DeleteObject` |
+| Client API | `POST /api/v1/cloud-storage/sync-sessions`, `POST /api/v1/cloud-storage/manifests`, `GET /api/v1/users/:user_id/cloud-storage/usage`, `GET /api/v1/users/:user_id/cloud-storage/projects`, `GET /api/v1/cloud-storage/projects/:id/manifests/latest`, `POST /api/v1/cloud-storage/download-targets` |
 | Admin API | `GET /api/v1/admin/cloud-storage/usage`, `GET /api/v1/admin/users/:id/cloud-storage/projects` |
 
 Provider ADR 决策前只保留接口与 unconfigured provider：
@@ -350,7 +350,7 @@ Provider ADR 决策前只保留接口与 unconfigured provider：
 - object key 不包含本地绝对路径，只由 user/project/resource/content hash 等稳定字段生成。
 - App 直传对象存储，billing 不接收文件 bytes。
 - manifest commit 幂等：同一 idempotency key 不重复写 object metadata。
-- restore API 能返回用户项目列表与最新 manifest，App 可据此重建项目文件清单。
+- restore API 能返回用户项目列表、最新 manifest 和单对象 download target，App 可据此重建项目文件清单并直连对象存储恢复 bytes。
 - 云删除、用户删除、项目归档必须写 audit，并遵循 retention policy。
 
 ### 4.6 Admin：管理后台和运营工具
@@ -443,6 +443,7 @@ Admin 页面分区：
 | `GET` | `/api/v1/users/:user_id/cloud-storage/usage` | cloud_storage | 已有 |
 | `GET` | `/api/v1/users/:user_id/cloud-storage/projects` | cloud_storage | 已有，restore project metadata |
 | `GET` | `/api/v1/cloud-storage/projects/:id/manifests/latest` | cloud_storage | 已有，restore latest manifest/object metadata |
+| `POST` | `/api/v1/cloud-storage/download-targets` | cloud_storage | 已有，校验用户/项目/object ownership 后返回 provider download target |
 
 ### 6.2 Provider / Webhook API
 
@@ -626,20 +627,22 @@ WCP-4 进展（2026-06-19）：第四切片已完成。新增 `AdminSubscription
 
 WCP-5 进展（2026-06-19）：第一切片已完成。新增 `CloudSyncSession` domain/repository/GORM adapter，并纳入 UnitOfWork 与 migration schema；`AuthorizeSync` 现在持久化授权会话、provider、quota 快照、requested bytes 和资源 fingerprint，`CommitManifest` 必须携带 matching `sync_session_id`，校验 user/project/provider/resources/expiry 后才写 `CloudManifest` 与 `CloudObject` metadata，同一 session 被消费后不能再次提交。`ObjectStorageProvider` contract 扩展为 upload/download/head/delete/lifecycle tags，但仍保留 `UnconfiguredObjectStorageProvider` 明确失败，避免在未决策 provider 前写假实现。新增 client restore metadata API：`GET /api/v1/users/:user_id/cloud-storage/projects` 与 `GET /api/v1/cloud-storage/projects/:project_id/manifests/latest?user_id=...`。新增 `docs/ADR_CLOUD_STORAGE_PROVIDER.md`、`docs/RUNBOOK_CLOUD_STORAGE_CONTROL_PLANE.md` 与 `scripts/verify_cloud_storage_control_contract.sh` 固化 provider 策略、同步会话、manifest 绑定和 restore 元数据合同。
 
+WCP-5 进展（2026-06-19）：第二切片已完成。`CloudStorageQuotaPolicy` 从固定 MB 演进为 plan-aware strategy，统一返回 `CloudStorageQuotaDecision{plan, has_entitlement, quota_bytes}`；trial/monthly/lifetime/custom quota 分别由 `ACCESS_CLOUD_STORAGE_TRIAL_QUOTA_MB`、`ACCESS_CLOUD_STORAGE_MONTHLY_QUOTA_MB`、`ACCESS_CLOUD_STORAGE_LIFETIME_QUOTA_MB` 与 `ACCESS_CLOUD_STORAGE_QUOTA_MB` 配置，`0` 继承默认 quota。该策略注入 `CloudStorageService`、signed access snapshot feature projection、`AdminCloudStorageService` 与 `AdminUserAccessSummaryService`，避免客户端 usage、snapshot 和运营 read model 漂移。新增 `POST /api/v1/cloud-storage/download-targets`，通过 `CloudObjectRepository.GetByObjectKey` 校验 active user、cloud entitlement、project ownership 与 active object 状态后再委托 `ObjectStorageProvider.BuildDownloadTarget`；restore metadata 仍只列 manifest/object metadata，download URL 只在客户端主动恢复单对象时签发。`ObservedCloudStorageService` 已把该路径纳入 `operation="download_target"` 观测。
+
 任务：
 
 - 编写 ADR：评估 OSS、S3/R2、MinIO、managed storage，明确第一实现。（第一切片已完成：首选 S3-compatible / Cloudflare R2，provider adapter 后续落地）
 - 完善 `ObjectStorageProvider` contract：upload target、download target、delete、head object、lifecycle tags。（第一切片已完成：port 已扩展，真实 adapter 后续实现）
 - 新增 `CloudSyncSession`，保证 upload session 与 manifest commit 绑定。（第一切片已完成：session 持久化、fingerprint/expiry/commit 绑定）
-- 增加 restore APIs：project list、latest manifest、object download target。（第一切片已完成：project/latest manifest metadata；download target 待真实 provider adapter）
-- Quota policy 从固定 MB 演进为基于 access plan：trial/monthly/lifetime 可配置。
+- 增加 restore APIs：project list、latest manifest、object download target。（第二切片已完成：metadata + download-target 授权；真实 provider adapter 后续实现）
+- Quota policy 从固定 MB 演进为基于 access plan：trial/monthly/lifetime 可配置。（第二切片已完成：共享 strategy 注入 service/snapshot/admin read models）
 
 验收标准：
 
 - provider 未配置时 cloud API 明确失败，不影响软件授权其他闭环。
 - provider 配置后，App 可直传对象并用未过期 `CloudSyncSession` commit manifest。
 - quota 计算基于 latest active objects，不重复计算被替换对象。
-- restore 能在新设备上列出项目和最新 manifest metadata。
+- restore 能在新设备上列出项目、最新 manifest metadata，并按 active object 申请单对象 download target。
 - 云存储 admin 页面只展示 metadata，不展示正文或原文件内容。
 
 ### WCP-6：生产安全和可运维性（P1）

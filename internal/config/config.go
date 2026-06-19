@@ -148,6 +148,9 @@ type AccessConfig struct {
 	SnapshotOfflineGraceSeconds          int
 	MaxDevices                           int
 	CloudStorageQuotaMB                  int64
+	CloudStorageTrialQuotaMB             int64
+	CloudStorageMonthlyQuotaMB           int64
+	CloudStorageLifetimeQuotaMB          int64
 	TrialDurationDays                    int
 	LoginChallengeTTLSeconds             int
 	LoginChallengeMaxAttempts            int
@@ -238,6 +241,9 @@ func Load() (*Config, error) {
 	v.SetDefault("access.snapshot_offline_grace_seconds", 604800)
 	v.SetDefault("access.max_devices", 2)
 	v.SetDefault("access.cloud_storage_quota_mb", int64(1024))
+	v.SetDefault("access.cloud_storage_trial_quota_mb", int64(0))
+	v.SetDefault("access.cloud_storage_monthly_quota_mb", int64(0))
+	v.SetDefault("access.cloud_storage_lifetime_quota_mb", int64(0))
 	v.SetDefault("access.trial_duration_days", 14)
 	v.SetDefault("access.login_challenge_ttl_seconds", 600)
 	v.SetDefault("access.login_challenge_max_attempts", 5)
@@ -360,6 +366,15 @@ func Load() (*Config, error) {
 	}
 	if val := os.Getenv("ACCESS_CLOUD_STORAGE_QUOTA_MB"); val != "" {
 		cfg.Access.CloudStorageQuotaMB = int64(parseIntEnv(val, int(cfg.Access.CloudStorageQuotaMB)))
+	}
+	if val := os.Getenv("ACCESS_CLOUD_STORAGE_TRIAL_QUOTA_MB"); val != "" {
+		cfg.Access.CloudStorageTrialQuotaMB = int64(parseIntEnv(val, int(cfg.Access.CloudStorageTrialQuotaMB)))
+	}
+	if val := os.Getenv("ACCESS_CLOUD_STORAGE_MONTHLY_QUOTA_MB"); val != "" {
+		cfg.Access.CloudStorageMonthlyQuotaMB = int64(parseIntEnv(val, int(cfg.Access.CloudStorageMonthlyQuotaMB)))
+	}
+	if val := os.Getenv("ACCESS_CLOUD_STORAGE_LIFETIME_QUOTA_MB"); val != "" {
+		cfg.Access.CloudStorageLifetimeQuotaMB = int64(parseIntEnv(val, int(cfg.Access.CloudStorageLifetimeQuotaMB)))
 	}
 	if val := os.Getenv("ACCESS_TRIAL_DURATION_DAYS"); val != "" {
 		cfg.Access.TrialDurationDays = parseIntEnv(val, cfg.Access.TrialDurationDays)

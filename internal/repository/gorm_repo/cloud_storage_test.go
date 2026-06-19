@@ -144,6 +144,10 @@ func TestCloudStorageRepositoriesPersistManifestAndObjectUsage(t *testing.T) {
 	if err := objects.Upsert(ctx, second); err != nil {
 		t.Fatalf("upsert second object: %v", err)
 	}
+	loadedObject, err := objects.GetByObjectKey(ctx, first.ObjectKey)
+	if err != nil || loadedObject.ID != first.ID {
+		t.Fatalf("load object by key: %#v err=%v", loadedObject, err)
+	}
 	used, err := objects.SumActiveBytesByUser(ctx, "usr_1")
 	if err != nil || used != 300 {
 		t.Fatalf("sum active bytes: used=%d err=%v", used, err)
@@ -180,5 +184,8 @@ func TestCloudStorageRepositoriesReturnNotFound(t *testing.T) {
 	}
 	if _, err := (&CloudSyncSessionRepo{DB: db}).GetByID(ctx, "missing"); err != repository.ErrNotFound {
 		t.Fatalf("expected sync session not found, got %v", err)
+	}
+	if _, err := (&CloudObjectRepo{DB: db}).GetByObjectKey(ctx, "missing"); err != repository.ErrNotFound {
+		t.Fatalf("expected object not found, got %v", err)
 	}
 }

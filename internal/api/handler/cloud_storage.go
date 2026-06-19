@@ -43,6 +43,13 @@ type CloudManifestCommitRequest struct {
 	IdempotencyKey  string                        `json:"idempotency_key" binding:"required"`
 }
 
+type CloudDownloadTargetRequest struct {
+	UserID          string `json:"user_id" binding:"required"`
+	CloudProjectID  string `json:"cloud_project_id"`
+	ClientProjectID string `json:"client_project_id"`
+	ObjectKey       string `json:"object_key" binding:"required"`
+}
+
 func (h *CloudStorageHandler) AuthorizeSync(c *gin.Context) {
 	var req CloudSyncAuthorizationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -113,6 +120,25 @@ func (h *CloudStorageHandler) LatestManifest(c *gin.Context) {
 		UserID:          c.Query("user_id"),
 		CloudProjectID:  c.Param("project_id"),
 		ClientProjectID: c.Query("client_project_id"),
+	})
+	if err != nil {
+		writeCloudStorageError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *CloudStorageHandler) BuildDownloadTarget(c *gin.Context) {
+	var req CloudDownloadTargetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := h.CloudStorage.BuildDownloadTarget(c.Request.Context(), service.CloudDownloadTargetInput{
+		UserID:          req.UserID,
+		CloudProjectID:  req.CloudProjectID,
+		ClientProjectID: req.ClientProjectID,
+		ObjectKey:       req.ObjectKey,
 	})
 	if err != nil {
 		writeCloudStorageError(c, err)

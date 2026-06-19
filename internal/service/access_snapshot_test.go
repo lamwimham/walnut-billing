@@ -74,11 +74,56 @@ func TestAccessSnapshotIssuer_IssuesSignedTrialSnapshot(t *testing.T) {
 	if quota, ok := snapshot.Features["cloud.storage.quota_mb"].(int64); !ok || quota != 2048 {
 		t.Fatalf("expected cloud quota projection, got %#v", snapshot.Features)
 	}
+	if plan, ok := snapshot.Features["cloud.storage.plan"].(string); !ok || plan != CloudStoragePlanCustom {
+		t.Fatalf("expected cloud plan projection, got %#v", snapshot.Features)
+	}
 	issuedAt, _ := time.Parse(time.RFC3339, snapshot.IssuedAt)
 	expiresAt, _ := time.Parse(time.RFC3339, snapshot.ExpiresAt)
 	graceUntil, _ := time.Parse(time.RFC3339, snapshot.OfflineGraceUntil)
 	if expiresAt.Sub(issuedAt) != time.Minute || graceUntil.Sub(expiresAt) != 2*time.Minute {
 		t.Fatalf("unexpected ttl/grace issued=%s expires=%s grace=%s", snapshot.IssuedAt, snapshot.ExpiresAt, snapshot.OfflineGraceUntil)
+	}
+}
+
+func TestAccessSnapshotIssuer_UsesSharedCloudQuotaPolicy(t *testing.T) {
+	signer, _ := NewHMACAccessSnapshotSigner("test-secret", "test-key")
+	issuer := NewAccessSnapshotIssuer(AccessSnapshotIssuerDependencies{
+		Repositories: AccessSnapshotIssuerRepositories{
+			Users:             newMockEntitlementUserRepo(),
+			Devices:           newMockUserDeviceRepo(),
+			TrialGrants:       newMockTrialGrantRepo(),
+			EntitlementGrants: newMockGrantRepo(),
+			CreditAccounts:    newMockCreditAccountRepo(),
+		},
+		Policy: NewConfigurableAccessSnapshotPolicy(AccessSnapshotPolicyConfig{
+			TTLSeconds:          60,
+			OfflineGraceSeconds: 120,
+			MaxDevices:          2,
+			CloudStorageQuotaMB: 2048,
+		}),
+		CloudQuotaPolicy: NewPlanAwareCloudStorageQuotaPolicyFromMB(1024, 128, 2048, 4096),
+		Signer:           signer,
+	})
+	impl := issuer.(*accessSnapshotIssuer)
+	now := time.Now().UTC()
+	expires := now.AddDate(0, 1, 0)
+	impl.repos.Users.(*mockEntitlementUserRepo).users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	impl.repos.EntitlementGrants.(*mockGrantRepo).grants["monthly_cloud"] = &domain.EntitlementGrant{
+		ID:            "monthly_cloud",
+		UserID:        "usr_1",
+		EntitlementID: domain.EntitlementCloudStorage,
+		Status:        domain.GrantStatusActive,
+		Source:        domain.GrantSourceFulfillment,
+		StartsAt:      now.Add(-time.Hour),
+		ExpiresAt:     &expires,
+	}
+
+	snapshot, err := issuer.Issue(context.Background(), AccessSnapshotIssueInput{UserID: "usr_1"})
+	if err != nil {
+		t.Fatalf("issue snapshot: %v", err)
+	}
+	if snapshot.Features["cloud.storage.plan"] != CloudStoragePlanMonthly || snapshot.Features["cloud.storage.quota_mb"] != int64(2048) {
+		t.Fatalf("expected shared quota policy projection, got %#v", snapshot.Features)
 	}
 }
 

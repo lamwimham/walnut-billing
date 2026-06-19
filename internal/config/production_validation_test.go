@@ -31,6 +31,8 @@ func TestProductionConfigValidationRejectsMissingCriticalSettings(t *testing.T) 
 	cfg.Access.SnapshotSecret = defaultDevAccessSnapshotSecret
 	cfg.Access.LoginChallengeDelivery = "dev"
 	cfg.Access.LoginChallengeSecret = defaultDevLoginChallengeSecret
+	cfg.Access.CloudStorageQuotaMB = 0
+	cfg.Access.CloudStorageTrialQuotaMB = -1
 	cfg.Payment.CreemAPIKey = "creem_test_key"
 	cfg.Payment.CreemWebhookSecret = ""
 	cfg.Payment.CreemSandbox = true
@@ -57,6 +59,9 @@ func TestProductionConfigValidationRejectsMissingCriticalSettings(t *testing.T) 
 		"ACCESS_SNAPSHOT_SIGNATURE_ALGORITHM must be Ed25519 or EdDSA in prod",
 		"ACCESS_SNAPSHOT_PRIVATE_KEY is required in prod",
 		"ACCESS_LOGIN_CHALLENGE_DELIVERY must not be dev in prod",
+		"ACCESS_LOGIN_CHALLENGE_SECRET must be non-dev in prod",
+		"ACCESS_CLOUD_STORAGE_QUOTA_MB must be > 0 in prod",
+		"ACCESS_CLOUD_STORAGE_*_QUOTA_MB must be >= 0 in prod",
 		"PAYMENT_CREEM_WEBHOOK_SECRET is required in prod",
 		"PAYMENT_CREEM_SANDBOX must be false in prod",
 		"PAYMENT_CREEM_API_BASE_URL must target https://api.creem.io in prod",
@@ -137,12 +142,16 @@ func minimalValidProductionConfig() *Config {
 			RedirectAllowlist: []string{"https://walnut.example"},
 		},
 		Access: AccessConfig{
-			SnapshotSignatureAlgorithm: "Ed25519",
-			SnapshotPrivateKey:         "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-			SnapshotKeyID:              "kid-2026-06",
-			SnapshotSecret:             "non-default-prod-secret",
-			LoginChallengeDelivery:     "email",
-			LoginChallengeSecret:       "non-default-login-secret",
+			SnapshotSignatureAlgorithm:  "Ed25519",
+			SnapshotPrivateKey:          "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+			SnapshotKeyID:               "kid-2026-06",
+			SnapshotSecret:              "non-default-prod-secret",
+			LoginChallengeDelivery:      "email",
+			LoginChallengeSecret:        "non-default-login-secret",
+			CloudStorageQuotaMB:         1024,
+			CloudStorageTrialQuotaMB:    256,
+			CloudStorageMonthlyQuotaMB:  1024,
+			CloudStorageLifetimeQuotaMB: 2048,
 		},
 		Payment: PaymentConfig{
 			CreemAPIKey:         "creem_live_key",

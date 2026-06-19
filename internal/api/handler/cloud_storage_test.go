@@ -26,6 +26,8 @@ type fakeCloudStorageService struct {
 	projectResult   *service.CloudStorageProjectList
 	manifestQuery   service.CloudStorageLatestManifestQuery
 	manifestResult  *service.CloudStorageLatestManifest
+	downloadInput   service.CloudDownloadTargetInput
+	downloadResult  *service.CloudDownloadTargetAuthorization
 	err             error
 }
 
@@ -52,6 +54,11 @@ func (f *fakeCloudStorageService) ListProjects(ctx context.Context, query servic
 func (f *fakeCloudStorageService) LatestManifest(ctx context.Context, query service.CloudStorageLatestManifestQuery) (*service.CloudStorageLatestManifest, error) {
 	f.manifestQuery = query
 	return f.manifestResult, f.err
+}
+
+func (f *fakeCloudStorageService) BuildDownloadTarget(ctx context.Context, input service.CloudDownloadTargetInput) (*service.CloudDownloadTargetAuthorization, error) {
+	f.downloadInput = input
+	return f.downloadResult, f.err
 }
 
 func TestCloudStorageHandler_AuthorizeSync(t *testing.T) {
@@ -182,6 +189,39 @@ func TestCloudStorageHandler_ListProjectsAndLatestManifest(t *testing.T) {
 	}
 	if fake.manifestQuery.UserID != "usr_1" || fake.manifestQuery.CloudProjectID != "cpr_1" {
 		t.Fatalf("unexpected manifest query: %#v", fake.manifestQuery)
+	}
+}
+
+func TestCloudStorageHandler_BuildDownloadTarget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCloudStorageService{
+		downloadResult: &service.CloudDownloadTargetAuthorization{
+			UserID:          "usr_1",
+			CloudProjectID:  "cpr_1",
+			ClientProjectID: "project-local",
+			Object:          service.CloudObjectSummary{ObjectKey: "accounts/usr_1/projects/project-local/wiki/hash/page.md"},
+			DownloadTarget: service.CloudObjectDownloadTarget{
+				ObjectKey:   "accounts/usr_1/projects/project-local/wiki/hash/page.md",
+				DownloadURL: "test-provider://accounts/usr_1/projects/project-local/wiki/hash/page.md",
+				Method:      "GET",
+				Provider:    "test-provider",
+			},
+		},
+	}
+	h := NewCloudStorageHandler(fake)
+	r := gin.New()
+	r.POST("/cloud-storage/download-targets", h.BuildDownloadTarget)
+
+	body := bytes.NewBufferString(`{"user_id":"usr_1","cloud_project_id":"cpr_1","object_key":"accounts/usr_1/projects/project-local/wiki/hash/page.md"}`)
+	req, _ := http.NewRequest(http.MethodPost, "/cloud-storage/download-targets", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if fake.downloadInput.UserID != "usr_1" || fake.downloadInput.CloudProjectID != "cpr_1" || fake.downloadInput.ObjectKey == "" {
+		t.Fatalf("unexpected download input: %#v", fake.downloadInput)
 	}
 }
 

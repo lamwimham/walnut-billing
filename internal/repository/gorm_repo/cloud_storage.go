@@ -148,6 +148,14 @@ func (r *CloudObjectRepo) Update(ctx context.Context, object *domain.CloudObject
 	return r.DB.WithContext(ctx).Save(object).Error
 }
 
+func (r *CloudObjectRepo) GetByObjectKey(ctx context.Context, objectKey string) (*domain.CloudObject, error) {
+	var object domain.CloudObject
+	if err := r.DB.WithContext(ctx).Where("object_key = ?", objectKey).First(&object).Error; err != nil {
+		return nil, mapGormNotFound(err)
+	}
+	return &object, nil
+}
+
 func (r *CloudObjectRepo) ListByProject(ctx context.Context, cloudProjectID string, status string) ([]domain.CloudObject, error) {
 	var objects []domain.CloudObject
 	q := r.DB.WithContext(ctx).Model(&domain.CloudObject{}).Where("cloud_project_id = ?", cloudProjectID)

@@ -144,6 +144,12 @@ func validateProductionAccess(cfg AccessConfig) []string {
 	if strings.TrimSpace(cfg.LoginChallengeSecret) == "" || strings.TrimSpace(cfg.LoginChallengeSecret) == defaultDevLoginChallengeSecret {
 		violations = append(violations, "ACCESS_LOGIN_CHALLENGE_SECRET must be non-dev in prod")
 	}
+	if cfg.CloudStorageQuotaMB <= 0 {
+		violations = append(violations, "ACCESS_CLOUD_STORAGE_QUOTA_MB must be > 0 in prod")
+	}
+	if cfg.CloudStorageTrialQuotaMB < 0 || cfg.CloudStorageMonthlyQuotaMB < 0 || cfg.CloudStorageLifetimeQuotaMB < 0 {
+		violations = append(violations, "ACCESS_CLOUD_STORAGE_*_QUOTA_MB must be >= 0 in prod")
+	}
 	return violations
 }
 

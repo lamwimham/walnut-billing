@@ -1,6 +1,6 @@
 # Cloud Storage Control Plane Runbook
 
-This runbook closes the first WCP-5 control-plane slice. Cloud storage is metadata-first: `walnut-billing` authorizes sync, tracks quota, records manifests and object metadata, and exposes restore metadata. Object bytes remain outside billing.
+This runbook closes the WCP-5 control-plane slices for sync sessions, restore metadata, plan-aware quota, and download target authorization. Cloud storage is metadata-first: `walnut-billing` authorizes sync, tracks quota, records manifests and object metadata, and exposes restore metadata. Object bytes remain outside billing.
 
 ## Architecture
 
@@ -15,9 +15,26 @@ Walnut App / PC Core
     -> validate CloudSyncSession + resource fingerprint
     -> commit CloudManifest + CloudObject metadata
   -> GET restore metadata
+  -> POST /api/v1/cloud-storage/download-targets
+    -> ownership + entitlement check
+    -> ObjectStorageProvider.BuildDownloadTarget
 ```
 
 Handlers remain transport-only. `CloudStorageService` owns authorization/session/manifest state. Provider-specific storage code belongs behind `ObjectStorageProvider`; billing must not parse file content or proxy bytes.
+
+## Plan-Aware Quota
+
+Quota is decided by `CloudStorageQuotaPolicy.Decide`, not by handlers or admin read models. The policy consumes the active `cloud.storage` grants and returns a `CloudStorageQuotaDecision` with `plan`, `has_entitlement`, and `quota_bytes`.
+
+| Plan | Grant source | Config |
+|---|---|---|
+| `trial` | active `GrantSourceTrial` | `ACCESS_CLOUD_STORAGE_TRIAL_QUOTA_MB` |
+| `monthly` | active paid fulfillment grant or subscription-grace grant with `expires_at` | `ACCESS_CLOUD_STORAGE_MONTHLY_QUOTA_MB` |
+| `lifetime` | active paid fulfillment grant without `expires_at` | `ACCESS_CLOUD_STORAGE_LIFETIME_QUOTA_MB` |
+| `custom` | active manual/custom cloud grant | `ACCESS_CLOUD_STORAGE_QUOTA_MB` |
+| `none` | no active cloud grant | `0` |
+
+Plan-specific values set to `0` inherit `ACCESS_CLOUD_STORAGE_QUOTA_MB`. The same policy is injected into client cloud usage, manifest authorization, signed access snapshot feature projection, admin cloud-storage read models, and user-access troubleshooting summaries.
 
 ## Client Flow
 
@@ -28,6 +45,8 @@ Handlers remain transport-only. `CloudStorageService` owns authorization/session
 5. For restore on a new device, call:
    - `GET /api/v1/users/:user_id/cloud-storage/projects`
    - `GET /api/v1/cloud-storage/projects/:project_id/manifests/latest?user_id=:user_id`
+6. For each object the client chooses to restore, call `POST /api/v1/cloud-storage/download-targets` with `user_id`, either `cloud_project_id` or `client_project_id`, and the provider-neutral `object_key` from the latest manifest.
+7. Download bytes directly from the returned provider target. Do not send object bytes through billing.
 
 ## Error Semantics
 
@@ -50,11 +69,13 @@ Restore APIs return only metadata needed to rebuild local file lists:
 
 They do not return file bytes, local absolute paths, upload/download URLs, provider object ids, secrets, or admin-only masked identity data.
 
+Download targets are intentionally separate from restore metadata. `POST /api/v1/cloud-storage/download-targets` verifies the active user, cloud entitlement, project ownership, active object status, and provider boundary before returning a short-lived provider target. The target is for client-owned restore only; admin read models must never expose download URLs or object keys.
+
 ## Operator Checks
 
 - Use `GET /api/v1/admin/cloud-storage/usage` to inspect usage rollups.
 - Use `GET /api/v1/admin/users/:user_id/cloud-storage/projects` for metadata-only project summaries.
-- Use `cloud_sync_total{error_kind="over_quota"}` and `cloud_sync_total{error_kind="provider_not_configured"}` for alert triage.
+- Use `cloud_sync_total{operation="download_target"}` for restore-target diagnostics and `cloud_sync_total{error_kind="over_quota"}` / `cloud_sync_total{error_kind="provider_not_configured"}` for alert triage.
 - Do not inspect object bytes during billing support. If a provider issue is suspected, compare metadata counts, manifest hashes, and provider head-object diagnostics through the future adapter tooling.
 
 ## Verification

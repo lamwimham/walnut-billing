@@ -162,6 +162,7 @@ func (m cloudStorageModule) RegisterRoutes(routes moduleRoutes) {
 	routes.Public.GET("/users/:user_id/cloud-storage/usage", h.CloudStorage.Usage)
 	routes.Public.GET("/users/:user_id/cloud-storage/projects", h.CloudStorage.ListProjects)
 	routes.Public.GET("/cloud-storage/projects/:project_id/manifests/latest", h.CloudStorage.LatestManifest)
+	routes.Public.POST("/cloud-storage/download-targets", h.CloudStorage.BuildDownloadTarget)
 
 	routes.Admin.GET("/cloud-storage/usage", routes.RequireAdmin(middleware.PermissionCloudStorageRead), h.AdminCloudStorage.Usage)
 	routes.Admin.GET("/users/:user_id/cloud-storage/projects", routes.RequireAdmin(middleware.PermissionCloudStorageRead), h.AdminCloudStorage.ListUserProjects)

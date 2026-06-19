@@ -66,6 +66,10 @@ func (s *stubCloudStorageService) LatestManifest(ctx context.Context, query Clou
 	return &CloudStorageLatestManifest{}, s.err
 }
 
+func (s *stubCloudStorageService) BuildDownloadTarget(ctx context.Context, input CloudDownloadTargetInput) (*CloudDownloadTargetAuthorization, error) {
+	return &CloudDownloadTargetAuthorization{UserID: input.UserID}, s.err
+}
+
 type stubAccessSnapshotIssuer struct {
 	result *domain.AccessSnapshotV2
 	err    error

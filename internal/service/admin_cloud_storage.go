@@ -53,6 +53,7 @@ type AdminCloudStorageUsage struct {
 
 type AdminCloudStorageUsageUser struct {
 	User                    AdminCloudStorageUserIdentity `json:"user"`
+	Plan                    string                        `json:"plan"`
 	UsedBytes               int64                         `json:"used_bytes"`
 	QuotaBytes              int64                         `json:"quota_bytes"`
 	RemainingBytes          int64                         `json:"remaining_bytes"`
@@ -67,6 +68,7 @@ type AdminCloudStorageUsageUser struct {
 type AdminCloudStorageProjectList struct {
 	GeneratedAt    string                            `json:"generated_at"`
 	User           AdminCloudStorageUserIdentity     `json:"user"`
+	Plan           string                            `json:"plan"`
 	UsedBytes      int64                             `json:"used_bytes"`
 	QuotaBytes     int64                             `json:"quota_bytes"`
 	RemainingBytes int64                             `json:"remaining_bytes"`
@@ -183,8 +185,8 @@ func (s *adminCloudStorageService) ListUserProjects(ctx context.Context, query A
 		return nil, ErrUserNotFound
 	}
 	now := s.currentTime()
-	quotaBytes, hasGrant := s.quotaFor(ctx, record.User, record.Grants, now)
-	usage := usageFor(record.User.ID, record.UsedBytes, quotaBytes)
+	quota := s.quotaFor(ctx, record.User, record.Grants, now)
+	usage := usageFor(record.User.ID, quota.Plan, record.UsedBytes, quota.QuotaBytes)
 	projects := make([]AdminCloudStorageProjectSummary, 0, len(record.Projects))
 	for _, project := range record.Projects {
 		projects = append(projects, projectAdminCloudStorageProject(project))
@@ -192,18 +194,19 @@ func (s *adminCloudStorageService) ListUserProjects(ctx context.Context, query A
 	return &AdminCloudStorageProjectList{
 		GeneratedAt:    formatTime(now),
 		User:           s.projectUserIdentity(record.User),
+		Plan:           usage.Plan,
 		UsedBytes:      usage.UsedBytes,
 		QuotaBytes:     usage.QuotaBytes,
 		RemainingBytes: usage.RemainingBytes,
-		OverQuota:      usage.OverQuota || !hasGrant && usage.UsedBytes > 0,
+		OverQuota:      usage.OverQuota || !quota.HasEntitlement && usage.UsedBytes > 0,
 		TotalProjects:  record.TotalProjects,
 		Projects:       projects,
 	}, nil
 }
 
 func (s *adminCloudStorageService) projectUsageUser(ctx context.Context, record repository.AdminCloudStorageUserRecord, now time.Time) AdminCloudStorageUsageUser {
-	quotaBytes, hasGrant := s.quotaFor(ctx, record.User, record.Grants, now)
-	usage := usageFor(record.User.ID, record.UsedBytes, quotaBytes)
+	quota := s.quotaFor(ctx, record.User, record.Grants, now)
+	usage := usageFor(record.User.ID, quota.Plan, record.UsedBytes, quota.QuotaBytes)
 	activeProjects := 0
 	for _, project := range record.Projects {
 		if project.Status == "" || project.Status == domain.CloudProjectStatusActive {
@@ -213,13 +216,14 @@ func (s *adminCloudStorageService) projectUsageUser(ctx context.Context, record 
 	latestProject := latestAdminCloudStorageProject(record.Projects)
 	return AdminCloudStorageUsageUser{
 		User:                    s.projectUserIdentity(record.User),
+		Plan:                    usage.Plan,
 		UsedBytes:               usage.UsedBytes,
 		QuotaBytes:              usage.QuotaBytes,
 		RemainingBytes:          usage.RemainingBytes,
-		OverQuota:               usage.OverQuota || !hasGrant && usage.UsedBytes > 0,
+		OverQuota:               usage.OverQuota || !quota.HasEntitlement && usage.UsedBytes > 0,
 		ProjectCount:            len(record.Projects),
 		ActiveProjectCount:      activeProjects,
-		HasCloudStorageGrant:    hasGrant,
+		HasCloudStorageGrant:    quota.HasEntitlement,
 		LatestProjectUpdatedAt:  formatTime(latestProject.UpdatedAt),
 		LatestProjectNameMasked: maskToken(latestProject.Name),
 	}
@@ -238,16 +242,11 @@ func (s *adminCloudStorageService) projectUserIdentity(user domain.User) AdminCl
 	}
 }
 
-func (s *adminCloudStorageService) quotaFor(ctx context.Context, user domain.User, grants []domain.EntitlementGrant, now time.Time) (int64, bool) {
-	hasGrant := hasActiveEntitlement(grants, domain.EntitlementCloudStorage, now)
-	if !hasGrant || s == nil || s.quotaPolicy == nil {
-		return 0, hasGrant
+func (s *adminCloudStorageService) quotaFor(ctx context.Context, user domain.User, grants []domain.EntitlementGrant, now time.Time) CloudStorageQuotaDecision {
+	if s == nil || s.quotaPolicy == nil {
+		return CloudStorageQuotaDecision{Plan: cloudStoragePlanForGrants(grants, now), HasEntitlement: hasActiveEntitlement(grants, domain.EntitlementCloudStorage, now)}
 	}
-	quotaBytes := s.quotaPolicy.QuotaBytes(ctx, &user)
-	if quotaBytes < 0 {
-		quotaBytes = 0
-	}
-	return quotaBytes, true
+	return s.quotaPolicy.Decide(ctx, CloudStorageQuotaInput{User: &user, Grants: grants, Now: now})
 }
 
 func projectAdminCloudStorageProject(record repository.AdminCloudStorageProjectRecord) AdminCloudStorageProjectSummary {

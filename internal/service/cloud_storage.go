@@ -26,29 +26,91 @@ var (
 	ErrCloudSyncSessionAlreadyCommitted  = errors.New("cloud sync session already committed")
 )
 
+const (
+	CloudStoragePlanNone     = "none"
+	CloudStoragePlanTrial    = "trial"
+	CloudStoragePlanMonthly  = "monthly"
+	CloudStoragePlanLifetime = "lifetime"
+	CloudStoragePlanCustom   = "custom"
+)
+
 type CloudStorageQuotaPolicy interface {
-	QuotaBytes(ctx context.Context, user *domain.User) int64
+	Decide(ctx context.Context, input CloudStorageQuotaInput) CloudStorageQuotaDecision
 }
 
-type StaticCloudStorageQuotaPolicy struct {
-	quotaBytes int64
+type CloudStorageQuotaInput struct {
+	User   *domain.User
+	Grants []domain.EntitlementGrant
+	Now    time.Time
+}
+
+type CloudStorageQuotaDecision struct {
+	Plan           string `json:"plan"`
+	HasEntitlement bool   `json:"has_entitlement"`
+	QuotaBytes     int64  `json:"quota_bytes"`
+}
+
+type CloudStorageQuotaPolicyConfig struct {
+	DefaultQuotaBytes  int64
+	TrialQuotaBytes    int64
+	MonthlyQuotaBytes  int64
+	LifetimeQuotaBytes int64
+}
+
+type PlanAwareCloudStorageQuotaPolicy struct {
+	config CloudStorageQuotaPolicyConfig
 }
 
 func NewStaticCloudStorageQuotaPolicy(quotaBytes int64) CloudStorageQuotaPolicy {
 	if quotaBytes < 0 {
 		quotaBytes = 0
 	}
-	return StaticCloudStorageQuotaPolicy{quotaBytes: quotaBytes}
+	return NewPlanAwareCloudStorageQuotaPolicy(CloudStorageQuotaPolicyConfig{
+		DefaultQuotaBytes:  quotaBytes,
+		TrialQuotaBytes:    quotaBytes,
+		MonthlyQuotaBytes:  quotaBytes,
+		LifetimeQuotaBytes: quotaBytes,
+	})
 }
 
 func NewCloudStorageQuotaPolicyFromMB(quotaMB int64) CloudStorageQuotaPolicy {
 	return NewStaticCloudStorageQuotaPolicy(quotaMB * 1024 * 1024)
 }
 
-func (p StaticCloudStorageQuotaPolicy) QuotaBytes(ctx context.Context, user *domain.User) int64 {
+func NewPlanAwareCloudStorageQuotaPolicy(config CloudStorageQuotaPolicyConfig) CloudStorageQuotaPolicy {
+	config = normalizeCloudStorageQuotaPolicyConfig(config)
+	return PlanAwareCloudStorageQuotaPolicy{config: config}
+}
+
+func NewPlanAwareCloudStorageQuotaPolicyFromMB(defaultQuotaMB int64, trialQuotaMB int64, monthlyQuotaMB int64, lifetimeQuotaMB int64) CloudStorageQuotaPolicy {
+	return NewPlanAwareCloudStorageQuotaPolicy(CloudStorageQuotaPolicyConfig{
+		DefaultQuotaBytes:  mbToBytes(defaultQuotaMB),
+		TrialQuotaBytes:    mbToBytes(trialQuotaMB),
+		MonthlyQuotaBytes:  mbToBytes(monthlyQuotaMB),
+		LifetimeQuotaBytes: mbToBytes(lifetimeQuotaMB),
+	})
+}
+
+func (p PlanAwareCloudStorageQuotaPolicy) Decide(ctx context.Context, input CloudStorageQuotaInput) CloudStorageQuotaDecision {
 	_ = ctx
-	_ = user
-	return p.quotaBytes
+	plan := cloudStoragePlanForGrants(input.Grants, input.Now)
+	decision := CloudStorageQuotaDecision{Plan: plan, HasEntitlement: plan != CloudStoragePlanNone}
+	switch plan {
+	case CloudStoragePlanTrial:
+		decision.QuotaBytes = p.config.TrialQuotaBytes
+	case CloudStoragePlanMonthly:
+		decision.QuotaBytes = p.config.MonthlyQuotaBytes
+	case CloudStoragePlanLifetime:
+		decision.QuotaBytes = p.config.LifetimeQuotaBytes
+	case CloudStoragePlanCustom:
+		decision.QuotaBytes = p.config.DefaultQuotaBytes
+	default:
+		decision.QuotaBytes = 0
+	}
+	if decision.QuotaBytes < 0 {
+		decision.QuotaBytes = 0
+	}
+	return decision
 }
 
 type ObjectStorageProvider interface {
@@ -162,6 +224,7 @@ type CloudStorageService interface {
 	Usage(ctx context.Context, userID string) (*CloudStorageUsage, error)
 	ListProjects(ctx context.Context, query CloudStorageProjectQuery) (*CloudStorageProjectList, error)
 	LatestManifest(ctx context.Context, query CloudStorageLatestManifestQuery) (*CloudStorageLatestManifest, error)
+	BuildDownloadTarget(ctx context.Context, input CloudDownloadTargetInput) (*CloudDownloadTargetAuthorization, error)
 }
 
 type CloudResourceDescriptor struct {
@@ -212,6 +275,7 @@ type CloudManifestCommitResult struct {
 
 type CloudStorageUsage struct {
 	UserID         string `json:"user_id"`
+	Plan           string `json:"plan"`
 	UsedBytes      int64  `json:"used_bytes"`
 	QuotaBytes     int64  `json:"quota_bytes"`
 	RemainingBytes int64  `json:"remaining_bytes"`
@@ -250,6 +314,21 @@ type CloudStorageLatestManifest struct {
 	Project  CloudStorageProjectSummary `json:"project"`
 	Manifest *CloudManifestSummary      `json:"manifest,omitempty"`
 	Objects  []CloudObjectSummary       `json:"objects"`
+}
+
+type CloudDownloadTargetInput struct {
+	UserID          string `json:"user_id"`
+	CloudProjectID  string `json:"cloud_project_id"`
+	ClientProjectID string `json:"client_project_id"`
+	ObjectKey       string `json:"object_key"`
+}
+
+type CloudDownloadTargetAuthorization struct {
+	UserID          string                    `json:"user_id"`
+	CloudProjectID  string                    `json:"cloud_project_id"`
+	ClientProjectID string                    `json:"client_project_id"`
+	Object          CloudObjectSummary        `json:"object"`
+	DownloadTarget  CloudObjectDownloadTarget `json:"download_target"`
 }
 
 type CloudManifestSummary struct {
@@ -326,7 +405,7 @@ func (s *cloudStorageService) AuthorizeSync(ctx context.Context, input CloudSync
 	if err := validateCloudRepos(repos); err != nil {
 		return nil, err
 	}
-	user, quotaBytes, usedBytes, err := s.authorizeCloudAccess(ctx, input.UserID)
+	user, quota, usedBytes, err := s.authorizeCloudAccess(ctx, input.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +418,7 @@ func (s *cloudStorageService) AuthorizeSync(ctx context.Context, input CloudSync
 		return nil, err
 	}
 	requestedBytes := sumResourceBytes(resources)
-	if projectedUsed > quotaBytes {
+	if projectedUsed > quota.QuotaBytes {
 		return nil, ErrCloudStorageOverQuota
 	}
 	targets := make([]CloudObjectUploadTarget, 0, len(resources))
@@ -373,7 +452,7 @@ func (s *cloudStorageService) AuthorizeSync(ctx context.Context, input CloudSync
 		ResourceFingerprint: cloudResourceFingerprint(resources),
 		RequestedBytes:      requestedBytes,
 		UsedBytes:           usedBytes,
-		QuotaBytes:          quotaBytes,
+		QuotaBytes:          quota.QuotaBytes,
 		Status:              domain.CloudSyncSessionStatusAuthorized,
 		ExpiresAt:           expiresAt,
 		CreatedAt:           now,
@@ -388,7 +467,7 @@ func (s *cloudStorageService) AuthorizeSync(ctx context.Context, input CloudSync
 		CloudProjectID:  project.ID,
 		ClientProjectID: strings.TrimSpace(input.ClientProjectID),
 		Provider:        s.provider.ProviderID(),
-		QuotaBytes:      quotaBytes,
+		QuotaBytes:      quota.QuotaBytes,
 		UsedBytes:       usedBytes,
 		RequestedBytes:  requestedBytes,
 		UploadTargets:   targets,
@@ -413,7 +492,7 @@ func (s *cloudStorageService) CommitManifest(ctx context.Context, input CloudMan
 		return nil, ErrInvalidCloudStorage
 	}
 
-	user, quotaBytes, usedBytes, err := s.authorizeCloudAccess(ctx, input.UserID)
+	user, quota, usedBytes, err := s.authorizeCloudAccess(ctx, input.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +513,7 @@ func (s *cloudStorageService) CommitManifest(ctx context.Context, input CloudMan
 		return nil, err
 	}
 
-	return s.commitWithTransaction(ctx, user, quotaBytes, usedBytes, input, resources)
+	return s.commitWithTransaction(ctx, user, quota, usedBytes, input, resources)
 }
 
 func (s *cloudStorageService) Usage(ctx context.Context, userID string) (*CloudStorageUsage, error) {
@@ -449,18 +528,11 @@ func (s *cloudStorageService) Usage(ctx context.Context, userID string) (*CloudS
 	if err != nil {
 		return nil, err
 	}
-	hasGrant, err := s.hasCloudStorageGrant(ctx, user.ID)
+	quota, err := s.cloudStorageQuotaDecision(ctx, user)
 	if err != nil {
 		return nil, err
 	}
-	quotaBytes := int64(0)
-	if hasGrant {
-		quotaBytes = s.policy.QuotaBytes(ctx, user)
-		if quotaBytes < 0 {
-			quotaBytes = 0
-		}
-	}
-	return usageFor(user.ID, usedBytes, quotaBytes), nil
+	return usageFor(user.ID, quota.Plan, usedBytes, quota.QuotaBytes), nil
 }
 
 func (s *cloudStorageService) ListProjects(ctx context.Context, query CloudStorageProjectQuery) (*CloudStorageProjectList, error) {
@@ -471,9 +543,9 @@ func (s *cloudStorageService) ListProjects(ctx context.Context, query CloudStora
 	if err != nil {
 		return nil, err
 	}
-	if hasGrant, err := s.hasCloudStorageGrant(ctx, user.ID); err != nil {
+	if quota, err := s.cloudStorageQuotaDecision(ctx, user); err != nil {
 		return nil, err
-	} else if !hasGrant {
+	} else if !quota.HasEntitlement {
 		return nil, ErrCloudStorageAccessDenied
 	}
 	limit := query.Limit
@@ -511,9 +583,9 @@ func (s *cloudStorageService) LatestManifest(ctx context.Context, query CloudSto
 	if err != nil {
 		return nil, err
 	}
-	if hasGrant, err := s.hasCloudStorageGrant(ctx, user.ID); err != nil {
+	if quota, err := s.cloudStorageQuotaDecision(ctx, user); err != nil {
 		return nil, err
-	} else if !hasGrant {
+	} else if !quota.HasEntitlement {
 		return nil, ErrCloudStorageAccessDenied
 	}
 	project, err := s.projectForLatestManifest(ctx, user.ID, query)
@@ -549,9 +621,62 @@ func (s *cloudStorageService) LatestManifest(ctx context.Context, query CloudSto
 	}, nil
 }
 
-func (s *cloudStorageService) commitWithTransaction(ctx context.Context, user *domain.User, quotaBytes int64, usedBytes int64, input CloudManifestCommitInput, resources []CloudResourceDescriptor) (*CloudManifestCommitResult, error) {
+func (s *cloudStorageService) BuildDownloadTarget(ctx context.Context, input CloudDownloadTargetInput) (*CloudDownloadTargetAuthorization, error) {
+	if err := s.requireConfiguredProvider(); err != nil {
+		return nil, err
+	}
+	if s.projects == nil || s.objects == nil {
+		return nil, ErrInvalidCloudStorage
+	}
+	user, err := s.loadActiveUser(ctx, input.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if quota, err := s.cloudStorageQuotaDecision(ctx, user); err != nil {
+		return nil, err
+	} else if !quota.HasEntitlement {
+		return nil, ErrCloudStorageAccessDenied
+	}
+	objectKey := strings.TrimSpace(input.ObjectKey)
+	if objectKey == "" {
+		return nil, ErrInvalidCloudStorage
+	}
+	object, err := s.objects.GetByObjectKey(ctx, objectKey)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrCloudProjectNotFound
+		}
+		return nil, err
+	}
+	if object.UserID != user.ID || object.Status != domain.CloudObjectStatusActive {
+		return nil, ErrCloudProjectNotFound
+	}
+	project, err := s.projectForLatestManifest(ctx, user.ID, CloudStorageLatestManifestQuery{
+		CloudProjectID:  firstNonEmpty(input.CloudProjectID, object.CloudProjectID),
+		ClientProjectID: firstNonEmpty(input.ClientProjectID, object.ClientProjectID),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if object.CloudProjectID != project.ID {
+		return nil, ErrCloudProjectNotFound
+	}
+	target, err := s.provider.BuildDownloadTarget(ctx, CloudObjectDownloadRequest{ObjectKey: object.ObjectKey})
+	if err != nil {
+		return nil, err
+	}
+	return &CloudDownloadTargetAuthorization{
+		UserID:          user.ID,
+		CloudProjectID:  project.ID,
+		ClientProjectID: project.ClientProjectID,
+		Object:          cloudObjectSummary(*object),
+		DownloadTarget:  target,
+	}, nil
+}
+
+func (s *cloudStorageService) commitWithTransaction(ctx context.Context, user *domain.User, quota CloudStorageQuotaDecision, usedBytes int64, input CloudManifestCommitInput, resources []CloudResourceDescriptor) (*CloudManifestCommitResult, error) {
 	if s.unitOfWorkFactory == nil {
-		return s.commitWithRepos(ctx, user, quotaBytes, usedBytes, input, resources, cloudStorageRepositories{projects: s.projects, syncSessions: s.syncSessions, manifests: s.manifests, objects: s.objects})
+		return s.commitWithRepos(ctx, user, quota, usedBytes, input, resources, cloudStorageRepositories{projects: s.projects, syncSessions: s.syncSessions, manifests: s.manifests, objects: s.objects})
 	}
 	uow := s.unitOfWorkFactory()
 	if err := uow.Begin(ctx); err != nil {
@@ -559,7 +684,7 @@ func (s *cloudStorageService) commitWithTransaction(ctx context.Context, user *d
 	}
 	defer uow.Rollback()
 	repos := uow.Repos()
-	result, err := s.commitWithRepos(ctx, user, quotaBytes, usedBytes, input, resources, cloudStorageRepositories{
+	result, err := s.commitWithRepos(ctx, user, quota, usedBytes, input, resources, cloudStorageRepositories{
 		projects:     repos.CloudProjectRepo,
 		syncSessions: repos.CloudSyncSessionRepo,
 		manifests:    repos.CloudManifestRepo,
@@ -574,7 +699,7 @@ func (s *cloudStorageService) commitWithTransaction(ctx context.Context, user *d
 	return result, nil
 }
 
-func (s *cloudStorageService) commitWithRepos(ctx context.Context, user *domain.User, quotaBytes int64, usedBytes int64, input CloudManifestCommitInput, resources []CloudResourceDescriptor, repos cloudStorageRepositories) (*CloudManifestCommitResult, error) {
+func (s *cloudStorageService) commitWithRepos(ctx context.Context, user *domain.User, quota CloudStorageQuotaDecision, usedBytes int64, input CloudManifestCommitInput, resources []CloudResourceDescriptor, repos cloudStorageRepositories) (*CloudManifestCommitResult, error) {
 	if err := validateCloudRepos(repos); err != nil {
 		return nil, err
 	}
@@ -599,7 +724,7 @@ func (s *cloudStorageService) commitWithRepos(ctx context.Context, user *domain.
 	if projectedUsed < newProjectBytes {
 		projectedUsed = newProjectBytes
 	}
-	if projectedUsed > quotaBytes {
+	if projectedUsed > quota.QuotaBytes {
 		return nil, ErrCloudStorageOverQuota
 	}
 
@@ -685,7 +810,7 @@ func (s *cloudStorageService) commitWithRepos(ctx context.Context, user *domain.
 	return &CloudManifestCommitResult{
 		Project:  project,
 		Manifest: manifest,
-		Usage:    *usageFor(user.ID, projectedUsed, quotaBytes),
+		Usage:    *usageFor(user.ID, quota.Plan, projectedUsed, quota.QuotaBytes),
 	}, nil
 }
 
@@ -696,30 +821,29 @@ func (s *cloudStorageService) requireConfiguredProvider() error {
 	return nil
 }
 
-func (s *cloudStorageService) authorizeCloudAccess(ctx context.Context, userID string) (*domain.User, int64, int64, error) {
+func (s *cloudStorageService) authorizeCloudAccess(ctx context.Context, userID string) (*domain.User, CloudStorageQuotaDecision, int64, error) {
 	if s.objects == nil {
-		return nil, 0, 0, ErrInvalidCloudStorage
+		return nil, CloudStorageQuotaDecision{}, 0, ErrInvalidCloudStorage
 	}
 	user, err := s.loadActiveUser(ctx, userID)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, CloudStorageQuotaDecision{}, 0, err
 	}
-	hasGrant, err := s.hasCloudStorageGrant(ctx, user.ID)
+	quota, err := s.cloudStorageQuotaDecision(ctx, user)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, CloudStorageQuotaDecision{}, 0, err
 	}
-	if !hasGrant {
-		return nil, 0, 0, ErrCloudStorageAccessDenied
+	if !quota.HasEntitlement {
+		return nil, CloudStorageQuotaDecision{}, 0, ErrCloudStorageAccessDenied
 	}
-	quotaBytes := s.policy.QuotaBytes(ctx, user)
-	if quotaBytes <= 0 {
-		return nil, 0, 0, ErrCloudStorageAccessDenied
+	if quota.QuotaBytes <= 0 {
+		return nil, CloudStorageQuotaDecision{}, 0, ErrCloudStorageAccessDenied
 	}
 	usedBytes, err := s.objects.SumActiveBytesByUser(ctx, user.ID)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, CloudStorageQuotaDecision{}, 0, err
 	}
-	return user, quotaBytes, usedBytes, nil
+	return user, quota, usedBytes, nil
 }
 
 func (s *cloudStorageService) loadActiveUser(ctx context.Context, userID string) (*domain.User, error) {
@@ -743,20 +867,19 @@ func (s *cloudStorageService) loadActiveUser(ctx context.Context, userID string)
 	return user, nil
 }
 
-func (s *cloudStorageService) hasCloudStorageGrant(ctx context.Context, userID string) (bool, error) {
+func (s *cloudStorageService) cloudStorageQuotaDecision(ctx context.Context, user *domain.User) (CloudStorageQuotaDecision, error) {
 	if s.grants == nil {
-		return false, ErrInvalidCloudStorage
+		return CloudStorageQuotaDecision{}, ErrInvalidCloudStorage
 	}
 	grants, err := s.grants.List(ctx, repository.EntitlementGrantQuery{
-		UserID:        userID,
+		UserID:        user.ID,
 		EntitlementID: domain.EntitlementCloudStorage,
 		Status:        domain.GrantStatusActive,
-		Limit:         1,
 	})
 	if err != nil {
-		return false, err
+		return CloudStorageQuotaDecision{}, err
 	}
-	return len(grants) > 0, nil
+	return s.policy.Decide(ctx, CloudStorageQuotaInput{User: user, Grants: grants, Now: time.Now().UTC()}), nil
 }
 
 func projectedUsageForResources(ctx context.Context, objects repository.CloudObjectRepository, cloudProjectID string, currentUsedBytes int64, resources []CloudResourceDescriptor) (int64, error) {
@@ -1005,15 +1128,7 @@ func cloudManifestSummary(manifest *domain.CloudManifest) *CloudManifestSummary 
 func cloudObjectSummaries(objects []domain.CloudObject) []CloudObjectSummary {
 	result := make([]CloudObjectSummary, 0, len(objects))
 	for _, object := range objects {
-		result = append(result, CloudObjectSummary{
-			ResourceID:   object.ResourceID,
-			ResourceKind: object.ResourceKind,
-			ObjectKey:    object.ObjectKey,
-			ContentHash:  object.ContentHash,
-			SizeBytes:    object.SizeBytes,
-			ContentType:  object.ContentType,
-			Status:       object.Status,
-		})
+		result = append(result, cloudObjectSummary(object))
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].ResourceKind == result[j].ResourceKind {
@@ -1022,6 +1137,18 @@ func cloudObjectSummaries(objects []domain.CloudObject) []CloudObjectSummary {
 		return result[i].ResourceKind < result[j].ResourceKind
 	})
 	return result
+}
+
+func cloudObjectSummary(object domain.CloudObject) CloudObjectSummary {
+	return CloudObjectSummary{
+		ResourceID:   object.ResourceID,
+		ResourceKind: object.ResourceKind,
+		ObjectKey:    object.ObjectKey,
+		ContentHash:  object.ContentHash,
+		SizeBytes:    object.SizeBytes,
+		ContentType:  object.ContentType,
+		Status:       object.Status,
+	}
 }
 
 var unsafePathSegmentRE = regexp.MustCompile(`[^a-zA-Z0-9_.:-]+`)
@@ -1062,13 +1189,89 @@ func sumObjectBytes(objects []domain.CloudObject) int64 {
 	return total
 }
 
-func usageFor(userID string, usedBytes int64, quotaBytes int64) *CloudStorageUsage {
+func normalizeCloudStorageQuotaPolicyConfig(config CloudStorageQuotaPolicyConfig) CloudStorageQuotaPolicyConfig {
+	if config.DefaultQuotaBytes < 0 {
+		config.DefaultQuotaBytes = 0
+	}
+	if config.TrialQuotaBytes <= 0 {
+		config.TrialQuotaBytes = config.DefaultQuotaBytes
+	}
+	if config.MonthlyQuotaBytes <= 0 {
+		config.MonthlyQuotaBytes = config.DefaultQuotaBytes
+	}
+	if config.LifetimeQuotaBytes <= 0 {
+		config.LifetimeQuotaBytes = config.DefaultQuotaBytes
+	}
+	return config
+}
+
+func mbToBytes(value int64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	return value * 1024 * 1024
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func cloudStoragePlanForGrants(grants []domain.EntitlementGrant, now time.Time) string {
+	now = now.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	hasCustom := false
+	hasTrial := false
+	hasMonthly := false
+	hasLifetime := false
+	for _, grant := range grants {
+		if grant.EntitlementID != domain.EntitlementCloudStorage || !isGrantActive(grant, now) {
+			continue
+		}
+		switch {
+		case grant.Source == domain.GrantSourceFulfillment && grant.ExpiresAt == nil:
+			hasLifetime = true
+		case grant.Source == domain.GrantSourceFulfillment && grant.ExpiresAt != nil:
+			hasMonthly = true
+		case grant.Source == domain.GrantSourceSubscriptionGrace:
+			hasMonthly = true
+		case grant.Source == domain.GrantSourceTrial:
+			hasTrial = true
+		default:
+			hasCustom = true
+		}
+	}
+	switch {
+	case hasLifetime:
+		return CloudStoragePlanLifetime
+	case hasMonthly:
+		return CloudStoragePlanMonthly
+	case hasTrial:
+		return CloudStoragePlanTrial
+	case hasCustom:
+		return CloudStoragePlanCustom
+	default:
+		return CloudStoragePlanNone
+	}
+}
+
+func usageFor(userID string, plan string, usedBytes int64, quotaBytes int64) *CloudStorageUsage {
 	remaining := quotaBytes - usedBytes
 	if remaining < 0 {
 		remaining = 0
 	}
+	if strings.TrimSpace(plan) == "" {
+		plan = CloudStoragePlanNone
+	}
 	return &CloudStorageUsage{
 		UserID:         userID,
+		Plan:           plan,
 		UsedBytes:      usedBytes,
 		QuotaBytes:     quotaBytes,
 		RemainingBytes: remaining,

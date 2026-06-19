@@ -5,7 +5,7 @@ Date: 2026-06-19
 
 ## Context
 
-`walnut-billing` owns the cloud-storage control plane: entitlement checks, quota, upload authorization sessions, manifest commits, object metadata, restore metadata, and admin read models. It must not proxy file bytes or store Wiki/material content in the billing database.
+`walnut-billing` owns the cloud-storage control plane: entitlement checks, plan-aware quota, upload authorization sessions, manifest commits, object metadata, restore metadata, client download-target authorization, and admin read models. It must not proxy file bytes or store Wiki/material content in the billing database.
 
 The provider decision must keep Walnut App independent from storage-vendor details. Clients call billing for upload/restore metadata; object bytes move directly between the client and the storage provider using short-lived targets.
 
@@ -35,12 +35,14 @@ Until that adapter is implemented and configured, production keeps `Unconfigured
 - Billing never receives or stores object bytes.
 - `CloudSyncSession` must be authorized before `CloudManifest` can be committed.
 - A manifest commit must match the authorized session resource fingerprint and provider.
-- Restore APIs return project, latest manifest, and object metadata only; object download targets are a future provider-backed step.
+- Restore metadata APIs return project, latest manifest, and object metadata only.
+- Object download targets are authorized through `POST /api/v1/cloud-storage/download-targets`, which checks user/project/object ownership before delegating to `ObjectStorageProvider.BuildDownloadTarget`.
 - Object keys are provider-neutral and derived from stable Walnut identifiers, resource kind, content hash, and sanitized filename; never from local absolute paths.
 - Admin cloud read models never expose object keys, upload/download URLs, local paths, provider object ids, or file contents.
+- Cloud quota is decided by a shared `CloudStorageQuotaPolicy` strategy so client usage, access snapshots, and admin read models project the same trial/monthly/lifetime/custom plan.
 
 ## Consequences
 
 - The current code can safely ship before real object storage is configured because unconfigured provider errors are explicit and isolated to cloud sync.
 - Adding R2/S3 later is an adapter implementation behind `ObjectStorageProvider`; handlers and access/commerce services should not change.
-- Quota policy can evolve from fixed MB to plan-aware strategy without changing provider adapters.
+- Plan-aware quota changes remain service-policy decisions and do not require provider adapter changes.

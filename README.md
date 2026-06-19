@@ -151,15 +151,16 @@ Access session responses include a service-owned `device_capacity` projection wi
 
 ### Cloud Storage Control Plane
 
-Cloud storage remains control-plane only. Billing authorizes upload sessions, records metadata, enforces quota, and returns restore metadata; object bytes are uploaded/downloaded directly through the configured object storage provider.
+Cloud storage remains control-plane only. Billing authorizes upload sessions, records metadata, enforces the shared plan-aware quota policy, and returns restore metadata; object bytes are uploaded/downloaded directly through the configured object storage provider. The same quota decision feeds client usage, signed access snapshots, and admin read models so trial/monthly/lifetime projections do not drift.
 
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
 | POST | `/api/v1/cloud-storage/sync-sessions` | `{user_id, client_project_id, project_name, resources[]}` | `{sync_session:{id, upload_targets[], quota_bytes, used_bytes, requested_bytes, expires_at}}` |
-| POST | `/api/v1/cloud-storage/manifests` | `{user_id, client_project_id, sync_session_id, manifest_hash, manifest_version, resources[], idempotency_key}` | `{project, manifest, usage}` |
-| GET | `/api/v1/users/:user_id/cloud-storage/usage` | — | `{usage:{used_bytes, quota_bytes, remaining_bytes, over_quota}}` |
+| POST | `/api/v1/cloud-storage/manifests` | `{user_id, client_project_id, sync_session_id, manifest_hash, manifest_version, resources[], idempotency_key}` | `{project, manifest, usage:{plan, used_bytes, quota_bytes, remaining_bytes, over_quota}}` |
+| GET | `/api/v1/users/:user_id/cloud-storage/usage` | — | `{usage:{plan, used_bytes, quota_bytes, remaining_bytes, over_quota}}` |
 | GET | `/api/v1/users/:user_id/cloud-storage/projects?status=&limit=` | — | User-owned project metadata and latest manifest summaries |
 | GET | `/api/v1/cloud-storage/projects/:project_id/manifests/latest?user_id=` | — | Latest manifest and active object metadata for restore |
+| POST | `/api/v1/cloud-storage/download-targets` | `{user_id, cloud_project_id?, client_project_id?, object_key}` | Provider download target for an active user-owned object |
 
 ### Legacy Webhooks (called by domestic payment providers)
 
@@ -269,7 +270,10 @@ All settings via environment variables (see `.env.example`). `config.Load()` run
 | `RENEWAL_EXPIRED_ACTION` | expire_grace | Expiry handling: `expire_grace` or `natural_expiry` |
 | `ACCESS_SNAPSHOT_*` | dev HS256 values | Signed access snapshot policy and signer configuration |
 | `ACCESS_MAX_DEVICES` | 2 | Maximum active devices per access account; projected as device capacity in access sessions and signed snapshots |
-| `ACCESS_CLOUD_STORAGE_QUOTA_MB` | 1024 | Default cloud storage quota projected into access snapshots |
+| `ACCESS_CLOUD_STORAGE_QUOTA_MB` | 1024 | Fallback cloud storage quota for custom/manual grants and plan-specific quota defaults |
+| `ACCESS_CLOUD_STORAGE_TRIAL_QUOTA_MB` | 0 | Trial cloud quota override; `0` falls back to `ACCESS_CLOUD_STORAGE_QUOTA_MB` |
+| `ACCESS_CLOUD_STORAGE_MONTHLY_QUOTA_MB` | 0 | Monthly cloud quota override; `0` falls back to `ACCESS_CLOUD_STORAGE_QUOTA_MB` |
+| `ACCESS_CLOUD_STORAGE_LIFETIME_QUOTA_MB` | 0 | Lifetime cloud quota override; `0` falls back to `ACCESS_CLOUD_STORAGE_QUOTA_MB` |
 | `ACCESS_TRIAL_DURATION_DAYS` | 14 | One-time trial duration keyed by normalized email and trial type |
 | `ACCESS_LOGIN_CHALLENGE_TTL_SECONDS` | 600 | Email login/recovery OTP validity window |
 | `ACCESS_LOGIN_CHALLENGE_MAX_ATTEMPTS` | 5 | Wrong-token/device attempts before the challenge expires |

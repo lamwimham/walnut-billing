@@ -153,6 +153,7 @@ type CloudSyncSessionRepository interface {
 type CloudObjectRepository interface {
 	Upsert(ctx context.Context, object *domain.CloudObject) error
 	Update(ctx context.Context, object *domain.CloudObject) error
+	GetByObjectKey(ctx context.Context, objectKey string) (*domain.CloudObject, error)
 	ListByProject(ctx context.Context, cloudProjectID string, status string) ([]domain.CloudObject, error)
 	SumActiveBytesByUser(ctx context.Context, userID string) (int64, error)
 }

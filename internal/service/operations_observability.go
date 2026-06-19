@@ -131,6 +131,15 @@ func (s *observedCloudStorageService) LatestManifest(ctx context.Context, query 
 	return s.next.LatestManifest(ctx, query)
 }
 
+func (s *observedCloudStorageService) BuildDownloadTarget(ctx context.Context, input CloudDownloadTargetInput) (*CloudDownloadTargetAuthorization, error) {
+	started := time.Now()
+	result, err := s.next.BuildDownloadTarget(ctx, input)
+	if s.observer != nil {
+		s.observer.ObserveCloudSync(ctx, cloudDownloadTargetObservation(input, result, err, time.Since(started)))
+	}
+	return result, err
+}
+
 type observedAccessSnapshotIssuer struct {
 	next     AccessSnapshotIssuer
 	observer AccessSnapshotObserver
@@ -220,6 +229,26 @@ func cloudSyncCommitObservation(input CloudManifestCommitInput, result *CloudMan
 			observation.CloudProjectID = result.Project.ID
 			observation.ClientProjectID = result.Project.ClientProjectID
 		}
+	}
+	applyCloudSyncError(&observation, err)
+	return observation
+}
+
+func cloudDownloadTargetObservation(input CloudDownloadTargetInput, result *CloudDownloadTargetAuthorization, err error, duration time.Duration) CloudSyncObservation {
+	observation := CloudSyncObservation{
+		Operation:      "download_target",
+		UserID:         input.UserID,
+		Status:         ObservationStatusSucceeded,
+		ErrorKind:      "none",
+		RequestedBytes: 0,
+		Duration:       duration,
+	}
+	if result != nil {
+		observation.UserID = result.UserID
+		observation.CloudProjectID = result.CloudProjectID
+		observation.ClientProjectID = result.ClientProjectID
+		observation.Provider = result.DownloadTarget.Provider
+		observation.RequestedBytes = result.Object.SizeBytes
 	}
 	applyCloudSyncError(&observation, err)
 	return observation
