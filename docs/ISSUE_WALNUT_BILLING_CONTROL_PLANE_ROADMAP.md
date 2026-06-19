@@ -652,12 +652,14 @@ WCP-6 进展（2026-06-19）：第三切片已完成。新增 `internal/app/migr
 
 WCP-6 进展（2026-06-19）：第四切片已完成。新增 SQLite 在线备份与恢复演练脚本：`scripts/backup_sqlite.sh` 使用 SQLite `.backup` API 生成一致性快照并输出 `.sha256` 与 `.meta`，`scripts/verify_sqlite_restore.sh` 在一次性目录中校验 checksum、`integrity_check`、`foreign_key_check` 与核心生产表，`scripts/verify_sqlite_backup_contract.sh` 固化端到端备份/恢复合同。新增 `docs/RUNBOOK_BACKUP_RESTORE.md`，明确停服恢复步骤、WAL/SHM 处理、off-host 存储、保留策略与未来 Postgres PITR 迁移触发条件。
 
+WCP-6 进展（2026-06-19）：第五切片已完成。补齐 `docs/RUNBOOK_WEBHOOK_OPERATIONS.md`，把现有 `PaymentEventInbox` 状态机收敛为可操作的 retry/dead-letter/admin reprocess 流程：`failed`、`review_required`、`policy_rejected` 作为运营队列，按 `last_error`、attempts、order/fulfillment facts 做 owner 分流；`admin.payment_events.read` 与 `admin.payment_events.write` 权限分离，support 可读不可重放。新增 `scripts/verify_webhook_operations_contract.sh` 固化 processor failure 可 reprocess、policy review/rejected 语义、签名失败不入 inbox、handler error mapping 与 RBAC 边界。
+
 任务：
 
 - prod config validation：admin principals、snapshot signer、Creem key/webhook secret、DB DSN、rate limit、CORS/redirect allowlist、安全响应头。（第二切片已完成：fail-fast、redirect allowlist、CORS/header hardening）
 - 数据迁移策略：替代裸 `AutoMigrate` 的版本化 migration，保留 rollback/runbook。（第三切片已完成：versioned runner + schema_migrations；rollback/backup 操作 runbook 后续完善）
 - backup/restore runbook：SQLite 初期备份，后续 Postgres migration path。（第四切片已完成：SQLite backup/restore scripts + runbook；Postgres PITR path 后续按规模触发）
-- webhook retry / dead letter / admin reprocess runbook。
+- webhook retry / dead letter / admin reprocess runbook。（第五切片已完成：状态语义、owner 分流、reprocess/dead-letter 操作手册与验证合同）
 - 安全审计：secret redaction、raw payload retention、PII retention、admin action review。
 - 监控告警：checkout failure spike、webhook failed、fulfillment failed、snapshot signing errors、quota overage。
 

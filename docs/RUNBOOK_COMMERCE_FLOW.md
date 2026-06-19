@@ -684,6 +684,8 @@ curl -sS -X POST "$BASE_URL/api/v1/commerce/checkout-sessions" \
 
 当 webhook 已进入 inbox，但处理失败或被退款策略转入人工处理，可通过 admin reprocess 修复可恢复故障。
 
+完整 webhook retry / dead-letter / admin reprocess 操作手册见 `docs/RUNBOOK_WEBHOOK_OPERATIONS.md`；本节只保留本地验证命令。
+
 ```bash
 curl -sS "$BASE_URL/api/v1/admin/payment-events?status=failed" \
   -H "$AUTH_HEADER"
@@ -707,6 +709,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 - 金额或币种不匹配：必须先确认 provider/product/order 映射。
 - 未知 `out_trade_no`：无法映射到 Walnut order。
 - `policy_rejected`：这是策略终态，除非业务确认并调整 `ADJUSTMENT_*` 策略，否则不要反复 reprocess。
+- 多次 reprocess 仍失败：按 webhook operations runbook 留在 inbox 作为 dead-letter 运营队列，不要直接 SQL 改状态。
 
 策略说明：
 
@@ -787,6 +790,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 - [ ] `scripts/verify_production_config_contract.sh` 通过。
 - [ ] 部署 commit 通过 `go test ./...`。
 - [ ] 运营知道如何 list failed events、reprocess events、list risk flags、resolve risk flags。
+- [ ] `docs/RUNBOOK_WEBHOOK_OPERATIONS.md` 已演练，`failed/review_required/policy_rejected` 的 owner 和升级路径明确。
 
 ## 当前质量门禁
 
@@ -796,6 +800,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 scripts/verify_production_config_contract.sh
 scripts/verify_database_migration_contract.sh
 scripts/verify_sqlite_backup_contract.sh
+scripts/verify_webhook_operations_contract.sh
 go test ./...
 git diff --check
 rg -n "creem|Creem|PaymentRiskFlag|payment\\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true

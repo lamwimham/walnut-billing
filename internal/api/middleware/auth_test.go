@@ -88,6 +88,17 @@ func TestOrdersReadPermissionIsScopedSeparatelyFromPaymentEvents(t *testing.T) {
 	}
 }
 
+func TestPaymentEventsWritePermissionIsScopedSeparatelyFromRead(t *testing.T) {
+	support := AdminPrincipal{Name: "support", Permissions: []string{PermissionPaymentEventsRead}}
+	if PrincipalHasPermission(support, PermissionPaymentEventsWrite) {
+		t.Fatalf("payment event read permission must not imply webhook reprocess permission")
+	}
+	ops := AdminPrincipal{Name: "ops", Permissions: []string{PermissionPaymentEventsWrite}}
+	if !PrincipalHasPermission(ops, PermissionPaymentEventsWrite) {
+		t.Fatalf("expected payment events write permission to match itself")
+	}
+}
+
 func TestCloudStorageReadPermissionIsScopedSeparatelyFromUsersAndOrders(t *testing.T) {
 	support := AdminPrincipal{Name: "support", Permissions: []string{PermissionUsersRead, PermissionOrdersRead}}
 	if PrincipalHasPermission(support, PermissionCloudStorageRead) {
