@@ -656,6 +656,8 @@ WCP-6 进展（2026-06-19）：第五切片已完成。补齐 `docs/RUNBOOK_WEBH
 
 WCP-6 进展（2026-06-19）：第六切片已完成。新增 `docs/RUNBOOK_SECURITY_AUDIT.md` 与 `scripts/verify_security_audit_contract.sh`，固化 secret redaction、raw payload retention、PII retention 和 admin action review。代码层收敛两个泄露点：checkout client response 不再返回 provider checkout/customer id，provider checkout 失败对客户端返回稳定 `checkout_provider_failed` 而不透传第三方 error body；runtime payment config update 统一写 `config.update` 审计，但只记录 provider、sandbox/mode、敏感字段名和 product map count，不写 API key、webhook secret 或 product id。既有 admin order/subscription/audit privacy projection 纳入合同测试。
 
+WCP-6 进展（2026-06-19）：第七切片已完成。新增 `OperationsObserver` 与 service decorator，把 subscription cancel/resume、cloud sync/manifest、signed access snapshot issuance 与 audited admin writes 接入 Prometheus 指标和结构化日志；现有 `CommerceObserver` 继续覆盖 checkout、payment event、fulfillment、payment adjustment。新增 `docs/RUNBOOK_MONITORING_ALERTS.md` 与 `scripts/verify_monitoring_contract.sh`，固化 checkout failure spike、webhook failed、fulfillment failed、snapshot signing errors、quota overage、subscription control failed 与 admin write failed 的告警阈值、owner 和排障路径。指标 label 保持低基数，不把 `user_id`、`out_trade_no`、raw `device_id`、provider event id、object key、checkout URL 或 secret 放入 metric labels。
+
 任务：
 
 - prod config validation：admin principals、snapshot signer、Creem key/webhook secret、DB DSN、rate limit、CORS/redirect allowlist、安全响应头。（第二切片已完成：fail-fast、redirect allowlist、CORS/header hardening）
@@ -663,7 +665,7 @@ WCP-6 进展（2026-06-19）：第六切片已完成。新增 `docs/RUNBOOK_SECU
 - backup/restore runbook：SQLite 初期备份，后续 Postgres migration path。（第四切片已完成：SQLite backup/restore scripts + runbook；Postgres PITR path 后续按规模触发）
 - webhook retry / dead letter / admin reprocess runbook。（第五切片已完成：状态语义、owner 分流、reprocess/dead-letter 操作手册与验证合同）
 - 安全审计：secret redaction、raw payload retention、PII retention、admin action review。（第六切片已完成：client/provider ID redaction、safe config audit、privacy projection/runbook/contract）
-- 监控告警：checkout failure spike、webhook failed、fulfillment failed、snapshot signing errors、quota overage。
+- 监控告警：checkout failure spike、webhook failed、fulfillment failed、snapshot signing errors、quota overage。（第七切片已完成：metrics/decorator 覆盖 + monitoring alerts runbook + 验证合同）
 
 验收标准：
 
@@ -672,6 +674,7 @@ WCP-6 进展（2026-06-19）：第六切片已完成。新增 `docs/RUNBOOK_SECU
 - 每个 payment event 最终状态可解释：processed / ignored / failed / review_required。
 - 支持从备份恢复到指定时间点或最近一致快照。
 - Runbook 可让非开发人员完成常见问题排查：付款成功未解锁、重复扣费、退订、换设备、风险解除。
+- 监控面板/告警可覆盖 checkout、webhook、fulfillment、subscription、snapshot signing、cloud quota 和 admin action，且告警 owner 与首轮排障路径明确。
 
 ## 8. 测试策略
 

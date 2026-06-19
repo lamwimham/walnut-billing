@@ -740,6 +740,10 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 | `fulfillments_total{status="failed"}` | 履约失败 | 修复 rule/repository 后通过 admin reprocess 恢复 |
 | `checkout_policy_blocks_total` | risk hold 数量 | 突增时检查 dispute 来源和误伤，必要时运营 review/resolve |
 | `payment_adjustments_total{status="review_required"}` | 退款人工审核积压 | 排队处理，确认后调整 policy 或 reprocess |
+| `subscription_actions_total{status="failed"}` | 退订/恢复 provider control 失败 | 不写本地取消/恢复事实；修复 provider 后用相同 idempotency key 重试 |
+| `access_snapshots_total{error_kind="signature_error"}` | signed snapshot 签名失败 | 立即检查 prod signer/key id，必要时回滚 signer 配置 |
+| `cloud_sync_total{error_kind="over_quota"}` | 云同步超配额 | 通过 admin cloud metadata 判断清理/升级路径，不查看对象正文 |
+| `admin_actions_total{success="false"}` | 管理端写操作失败 | 检查权限、审计和操作原因，不重复盲试 |
 
 日志安全约束：
 
@@ -747,6 +751,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 - 指标 label 只使用低基数字段：provider、event_type、status、sku_code、order_type、policy_action、error_kind；`user_id`、`out_trade_no`、`provider_event_id` 只进入日志。
 - 签名失败事件可能不会入 inbox，但会产生 `payment_event_observed`，用于定位 provider secret / proxy 问题。
 - 更完整的 secret redaction、raw payload retention、PII retention 与 admin action review 见 `docs/RUNBOOK_SECURITY_AUDIT.md`。
+- 生产监控面板、告警阈值和 owner 分流见 `docs/RUNBOOK_MONITORING_ALERTS.md`。
 
 ## 排障矩阵
 
@@ -793,6 +798,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 - [ ] 运营知道如何 list failed events、reprocess events、list risk flags、resolve risk flags。
 - [ ] `docs/RUNBOOK_WEBHOOK_OPERATIONS.md` 已演练，`failed/review_required/policy_rejected` 的 owner 和升级路径明确。
 - [ ] `docs/RUNBOOK_SECURITY_AUDIT.md` 已演练，确认 config update audit 不含 secret，admin read models 不暴露 raw payload/provider IDs。
+- [ ] `docs/RUNBOOK_MONITORING_ALERTS.md` 已演练，确认 checkout/webhook/fulfillment/snapshot/cloud/subscription/admin 告警 owner 明确。
 
 ## 当前质量门禁
 
@@ -804,6 +810,7 @@ scripts/verify_database_migration_contract.sh
 scripts/verify_sqlite_backup_contract.sh
 scripts/verify_webhook_operations_contract.sh
 scripts/verify_security_audit_contract.sh
+scripts/verify_monitoring_contract.sh
 go test ./...
 git diff --check
 rg -n "creem|Creem|PaymentRiskFlag|payment\\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true

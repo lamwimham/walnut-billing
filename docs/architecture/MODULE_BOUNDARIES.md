@@ -30,6 +30,7 @@ cmd/server/main.go
 | `cloud_storage` | `cloudStorageModule` | Cloud quota checks, sync sessions, manifest/object metadata | payment providers, commerce checkout policy, file content parsing |
 | `admin` | `adminModule` plus admin sections of other modules | RBAC-protected operator APIs, audit views, manual operations through services | direct DB writes that bypass service/audit boundaries |
 | `legacy_license` | `legacyLicenseModule` | Existing key/license/order compatibility APIs while commerce checkout becomes primary | new commercial feature gates |
+| `observability` | `internal/observability`, `internal/metrics`, `docs/RUNBOOK_MONITORING_ALERTS.md` | Service observation decorators, low-cardinality metrics, structured operational logs, alert runbooks | Business decisions, provider-specific policy branches, raw secrets/payload/object bytes in labels |
 | `infrastructure` | `registerInfrastructureRoutes` | Health, metrics, dashboard shell, dev mock checkout pages | business decisions |
 
 ## Dependency Rules
@@ -58,5 +59,6 @@ Architecture tests enforce the first hard rules:
 - Backup/restore automation belongs in scripts and runbooks; runtime business services should not create backups or restore databases.
 - Webhook retry/dead-letter operations must use `PaymentEventInbox` status and admin service routes; do not mutate provider payload rows directly.
 - Secret redaction and PII projection belong in shared privacy/audit projectors; do not solve leaks by adding ad-hoc string filters in individual provider adapters.
+- Operational metrics belong in observer/decorator adapters; handlers and provider adapters must not emit business metrics directly. Metric labels must stay low-cardinality and privacy-safe.
 - Provider IDs, product IDs, and payment statuses must not enter access snapshots or Walnut App feature gates.
 - Admin write actions must go through application services and audit the principal, target, reason, and outcome.

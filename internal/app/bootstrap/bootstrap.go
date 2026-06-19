@@ -275,7 +275,8 @@ func Build() (*Application, error) {
 
 	// 6. Init Services
 	licSvc := service.NewLicenseService(licRepo)
-	auditSvc := service.NewAuditService(auditRepo, 100, slog.Default())
+	auditSvc := observability.NewObservedAuditService(service.NewAuditService(auditRepo, 100, slog.Default()))
+	operationsObserver := observability.NewOperationsObserver(l)
 	uowFactory := func() repository.UnitOfWork {
 		return gorm_repo.NewUnitOfWork(db)
 	}
@@ -306,6 +307,7 @@ func Build() (*Application, error) {
 		Signer:                accessSnapshotSigner,
 		SoftwareSubscriptions: softwareSubscriptions,
 	})
+	accessSnapshotIssuer = service.NewObservedAccessSnapshotIssuer(accessSnapshotIssuer, operationsObserver)
 	accessAdminSvc := service.NewAccessAdminService(accessAccountRepo)
 	accessDeviceAdminSvc := service.NewAccessDeviceAdminService(userDeviceRepo)
 	accessSessionSvc := service.NewAccessSessionService(service.AccessSessionDependencies{
@@ -350,6 +352,7 @@ func Build() (*Application, error) {
 		Provider:          cloudObjectProvider,
 		UnitOfWorkFactory: uowFactory,
 	})
+	cloudStorageSvc = service.NewObservedCloudStorageService(cloudStorageSvc, operationsObserver)
 	adminUserAccessSummarySvc := service.NewAdminUserAccessSummaryService(service.AdminUserAccessSummaryDependencies{
 		ReadModel:             adminUserAccessSummaryRepo,
 		SoftwareSubscriptions: softwareSubscriptions,
@@ -525,6 +528,7 @@ func Build() (*Application, error) {
 		ProviderControl:   paymentSvc,
 		UnitOfWorkFactory: uowFactory,
 	})
+	subscriptionCancellationSvc = service.NewObservedSubscriptionCancellationService(subscriptionCancellationSvc, operationsObserver)
 
 	// 8. Init HTTP handlers and module route registrars. Handlers remain
 	// transport-only; modules below only declare ownership of routes.

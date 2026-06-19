@@ -45,6 +45,9 @@ func NewAuditService(repo repository.AuditRepository, bufferSize int, logger *sl
 // Record sends an audit entry to the async writer channel.
 // It drops the entry if the channel is full (fire-and-forget semantics).
 func (s *auditService) Record(ctx context.Context, entry *domain.AuditEntry) {
+	if entry == nil {
+		return
+	}
 	select {
 	case s.ch <- entry:
 		// Queued successfully

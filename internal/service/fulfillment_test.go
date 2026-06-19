@@ -580,6 +580,14 @@ func TestPaymentFulfillmentEventProcessor_AppliesRefundAdjustment(t *testing.T) 
 			FulfillmentExecutions: executions,
 			PaymentRiskFlags:      newMockPaymentRiskFlagRepo(),
 		},
+		Policy: NewConfigurablePaymentAdjustmentPolicy(PaymentAdjustmentPolicyConfig{
+			RefundWindowDays:        7,
+			RefundInWindowAction:    PaymentAdjustmentActionAutoRefund,
+			RefundOutOfWindowAction: PaymentAdjustmentActionManualReview,
+			Now: func() time.Time {
+				return order.PaidAt.UTC().Add(24 * time.Hour)
+			},
+		}),
 	})
 	processor := NewPaymentFulfillmentEventProcessorWithAdjustments(orders, NewPaymentOrderEventProcessor(orders), fulfillmentSvc, adjustments)
 
