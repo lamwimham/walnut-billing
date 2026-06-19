@@ -353,6 +353,10 @@ func validateCreemEnvironment(apiBaseURL string, apiKey string, sandbox bool) er
 	return nil
 }
 
+func ParseCreemProductMap(rawMap map[string]string, rawJSON string) (map[string]string, error) {
+	return creemProductMap(rawMap, rawJSON)
+}
+
 func creemProductMap(rawMap map[string]string, rawJSON string) (map[string]string, error) {
 	result := make(map[string]string)
 	for sku, productID := range rawMap {

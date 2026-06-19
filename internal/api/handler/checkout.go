@@ -82,6 +82,17 @@ func checkoutErrorStatus(err error) int {
 }
 
 func checkoutErrorResponse(err error) gin.H {
+	if errors.Is(err, service.ErrInvalidCheckoutRequest) {
+		decision, ok := service.CheckoutPolicyDecisionFromError(err)
+		if ok && decision.Reason == service.CheckoutPolicyReasonRedirectNotAllowed {
+			return gin.H{
+				"error":  defaultStringForHandler(decision.Message, "invalid checkout request"),
+				"code":   "checkout_redirect_not_allowed",
+				"reason": decision.Reason,
+				"action": defaultStringForHandler(decision.Action, service.CheckoutPolicyActionManualReview),
+			}
+		}
+	}
 	if errors.Is(err, service.ErrCheckoutBlockedByRisk) {
 		decision, _ := service.CheckoutPolicyDecisionFromError(err)
 		return gin.H{

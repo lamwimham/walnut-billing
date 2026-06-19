@@ -58,7 +58,7 @@ type moduleRoutes struct {
 
 func buildRouter(deps routerDependencies) (*gin.Engine, error) {
 	cfg := deps.Config
-	if cfg.Server.Env == "prod" {
+	if cfg.Server.Env == config.ProductionEnv {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
@@ -67,6 +67,9 @@ func buildRouter(deps routerDependencies) (*gin.Engine, error) {
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Logger(deps.Logger))
 	r.Use(metrics.Middleware())
+	if cfg.Server.Env == config.ProductionEnv {
+		r.SetTrustedProxies(nil)
+	}
 
 	api := r.Group("/api/v1")
 	if cfg.RateLimit.Enabled {
@@ -104,7 +107,7 @@ func configureAdminAuth(admin *gin.RouterGroup, cfg config.AdminConfig, serverEn
 		logger.Info("Admin API authentication enabled", "principals_count", len(adminPrincipals))
 		return true, nil
 	}
-	if serverEnv == "prod" {
+	if serverEnv == config.ProductionEnv {
 		err := fmt.Errorf("admin API authentication is required in production (set ADMIN_API_KEYS or ADMIN_PRINCIPALS_JSON)")
 		logger.Error("Admin API authentication is required in production", "error", err)
 		return false, err
@@ -218,7 +221,7 @@ func registerInfrastructureRoutes(r *gin.Engine, routes moduleRoutes, h applicat
 	r.GET("/metrics", metrics.Handler())
 	r.GET("/dashboard", handler.ServeDashboard)
 	routes.Admin.GET("/dashboard", routes.RequireAdmin(middleware.PermissionDashboardRead), h.Dashboard.GetDashboard)
-	if serverEnv != "prod" {
+	if serverEnv != config.ProductionEnv {
 		r.GET("/checkout/:out_trade_no", h.MockCheckout.Show)
 		r.POST("/checkout/:out_trade_no/complete", h.MockCheckout.Complete)
 	}

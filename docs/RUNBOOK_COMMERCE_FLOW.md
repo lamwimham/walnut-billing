@@ -81,6 +81,8 @@ DATABASE_DSN=./walnut_billing_local.db
 ADMIN_API_KEYS=local-admin-key
 CHECKOUT_RISK_POLICY_ENABLED=true
 CHECKOUT_RISK_BLOCK_SEVERITIES=critical,high
+# Only needed when SERVER_ENV=prod; dev can use walnut:// redirects freely.
+CHECKOUT_REDIRECT_ALLOWLIST=https://app.walnut.example,walnut://
 ```
 
 Creem 测试流程追加配置：
@@ -323,7 +325,7 @@ curl -sS -X POST "$BASE_URL/api/v1/webhooks/mock?out_trade_no=$OUT_TRADE_NO&prov
 
 只有在 mock-provider 流程通过后，再验证真实 Creem adapter。
 
-Creem test mode 与生产 mode 使用同一套 subscription control API，区别只在 base URL 与 key/product/webhook secret：
+Creem test mode 与生产 mode 使用同一套 checkout/subscription control API，区别只在 `PAYMENT_CREEM_SANDBOX`、base URL、API key、webhook secret 与 SKU product map。Creem 官方 test mode 使用独立 test API、test product 与测试卡；Walnut adapter 不把 test/prod 差异泄露给 PC/mobile。
 
 | 操作 | Method / Path | Test base URL |
 |---|---|---|
@@ -337,7 +339,7 @@ Walnut 的 cancel-at-period-end 语义映射到 Creem cancel body：
 {"mode":"scheduled","onExecute":"cancel"}
 ```
 
-后续切生产时，保持 Walnut API 不变，只把 `PAYMENT_CREEM_SANDBOX=false` 并使用生产 API key/product map/webhook secret；`PAYMENT_CREEM_API_BASE_URL` 通常继续留空，由 adapter 选择 `https://api.creem.io`。
+后续切生产时，保持 Walnut API 不变，只把 `PAYMENT_CREEM_SANDBOX=false` 并使用生产 API key/product map/webhook secret；`PAYMENT_CREEM_API_BASE_URL` 通常继续留空，由 adapter 选择 `https://api.creem.io`。`SERVER_ENV=prod` 会在启动时强校验这些配置，test key、`https://test-api.creem.io`、缺失 product map 或缺失 redirect allowlist 都会直接失败。
 
 ### 1. 确认 Creem adapter 已注册
 
@@ -741,6 +743,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 | Creem provider `error` | 缺少 product map、test/prod endpoint/key 混用、webhook secret 缺失 | `/admin/payment/providers` 的 `error` 字段；启动日志 | 修正 `PAYMENT_CREEM_*`，确保 sandbox 使用 `https://test-api.creem.io` 与 test key |
 | checkout 返回 `payment provider not found: creem` | Creem 当前不是 active provider | `/admin/payment/providers` | 先消除 `disabled/error` 状态，再重试 checkout |
 | checkout 返回 `checkout_provider_failed` | provider 请求失败或 SKU 未映射 | 服务日志；响应 body | 检查 product map、API base URL、网络、Creem credentials |
+| checkout 返回 `checkout_redirect_not_allowed` | success/cancel URL 不在生产 allowlist | `CHECKOUT_REDIRECT_ALLOWLIST`；响应 `reason=redirect_not_allowed` | 将 App/Web 回跳 origin 或 app scheme 加入 allowlist 后重试 |
 | checkout 返回 `checkout_blocked_by_payment_risk` | 存在 open high/critical `PaymentRiskFlag` | `/admin/payment-risk-flags?user_id=...&status=open` | 仅在人工审核后 resolve |
 | checkout 返回 `checkout_blocked_by_subscription_state` | `SoftwareSubscriptionProjector` 判断已有 active/cancel-at-period-end/lifetime access | response `reason`/`action`；signed snapshot license | 按 `already_lifetime`、`subscription_active`、`cancel_at_period_end` 展示保留权益、管理订阅或恢复月付 |
 | webhook 返回 bad request | 签名或 payload 无效 | `creem-signature`、raw payload、secret | 重算签名；核对 dashboard secret |
@@ -755,16 +758,18 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 
 真实海外 checkout 放量前必须确认：
 
-- [ ] `ADMIN_API_KEYS` 非空，且只分发给可信 ops surface。
+- [ ] `ADMIN_PRINCIPALS_JSON` 或 `ADMIN_API_KEYS` 非空；生产优先 scoped principals。
 - [ ] `PAYMENT_CREEM_API_KEY` 与 `PAYMENT_CREEM_WEBHOOK_SECRET` 存在 secret manager，不进入日志。
+- [ ] `PAYMENT_CREEM_SANDBOX=false`，且未使用 test key 或 `https://test-api.creem.io`。
 - [ ] `PAYMENT_CREEM_PRODUCT_MAP_JSON` 覆盖所有可见海外 SKU。
 - [ ] `FULFILLMENT_RULES_JSON` 已评审，或明确接受内置默认规则。
-- [ ] `CHECKOUT_RISK_POLICY_ENABLED=true`。
+- [ ] `CHECKOUT_RISK_POLICY_ENABLED=true`，且 `CHECKOUT_REDIRECT_ALLOWLIST` 覆盖 App/Web 回跳 origin 或 app scheme。
 - [ ] `ADJUSTMENT_REFUND_WINDOW_DAYS`、`ADJUSTMENT_*_ACTION` 和低使用阈值已按业务策略评审。
 - [ ] `RENEWAL_GRACE_PERIOD_DAYS` 与 `RENEWAL_EXPIRED_ACTION` 已按业务策略评审。
 - [ ] 公网 webhook endpoint 使用 TLS，并保持 raw request body 不被代理改写。
 - [ ] Creem dashboard webhook URL 指向 `/api/v1/webhooks/creem`。
 - [ ] 目标环境 happy path 与 dispute path 均通过。
+- [ ] `scripts/verify_production_config_contract.sh` 通过。
 - [ ] 部署 commit 通过 `go test ./...`。
 - [ ] 运营知道如何 list failed events、reprocess events、list risk flags、resolve risk flags。
 
@@ -773,6 +778,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 关闭 P0 runbook 前执行：
 
 ```bash
+scripts/verify_production_config_contract.sh
 go test ./...
 git diff --check
 rg -n "creem|Creem|PaymentRiskFlag|payment\\.disputed|checkout_blocked_by_payment_risk|PaymentRiskCheckoutPolicy" ../sagemate-core ../walnut-mobile --glob '!**/.git/**' --glob '!**/docs/**' || true

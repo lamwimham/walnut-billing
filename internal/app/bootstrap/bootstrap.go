@@ -51,6 +51,9 @@ func buildCheckoutPolicies(
 	policies := []service.CheckoutPolicy{
 		service.NewSoftwareAccessPlanCheckoutPolicyWithProjector(softwareSubscriptions),
 	}
+	if cfg != nil && cfg.Server.Env == config.ProductionEnv {
+		policies = append(policies, service.NewCheckoutRedirectPolicy(cfg.Checkout.RedirectAllowlist))
+	}
 	if cfg != nil && cfg.Checkout.RiskPolicyEnabled {
 		riskConfig := service.DefaultCheckoutRiskPolicyConfig()
 		riskConfig.BlockSeverities = cfg.Checkout.RiskBlockSeverities
@@ -114,7 +117,7 @@ func buildAccessLoginChallengeDelivery(cfg *config.Config) (service.AccessLoginC
 	}
 	switch delivery {
 	case "", "dev":
-		if env == "prod" {
+		if env == config.ProductionEnv {
 			return service.DisabledAccessLoginChallengeDelivery{Reason: "prod requires a configured email challenge delivery provider"}, nil
 		}
 		return service.DevAccessLoginChallengeDelivery{}, nil
@@ -178,11 +181,11 @@ func buildAccessSnapshotSigner(cfg *config.Config) (service.AccessSnapshotSigner
 		case "Ed25519", "EdDSA":
 			return service.NewEd25519AccessSnapshotSigner(cfg.Access.SnapshotPrivateKey, keyID)
 		case "", "HS256":
-			if cfg.Server.Env == "prod" {
+			if cfg.Server.Env == config.ProductionEnv {
 				return nil, service.ErrInvalidAccessSnapshot
 			}
 			secret := cfg.Access.SnapshotSecret
-			if strings.TrimSpace(secret) == "walnut-dev-access-snapshot-secret" && cfg.Server.Env == "prod" {
+			if strings.TrimSpace(secret) == "walnut-dev-access-snapshot-secret" && cfg.Server.Env == config.ProductionEnv {
 				return nil, service.ErrInvalidAccessSnapshot
 			}
 			return service.NewHMACAccessSnapshotSigner(secret, keyID)
@@ -417,7 +420,7 @@ func Build() (*Application, error) {
 	if mockCheckoutBaseURL == "" {
 		mockCheckoutBaseURL = "http://localhost:" + cfg.Server.Port
 	}
-	if cfg.Server.Env != "prod" {
+	if cfg.Server.Env != config.ProductionEnv {
 		registry.Register("mock", payment.NewCheckoutMockAdapterWithBaseURL(notifyURL+"/mock", mockCheckoutBaseURL), payment.ProviderStatus{
 			IsMock:    true,
 			NotifyURL: notifyURL + "/mock",

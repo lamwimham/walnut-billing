@@ -77,7 +77,7 @@ Current commercialization work focuses on overseas hosted checkout providers. Cr
 
 The commerce checkout facade is the provider-agnostic entry point for future SKU-based purchases. It creates a Walnut-owned order first, then asks the selected payment adapter for a checkout session. Provider-specific product IDs and checkout details stay inside `walnut-billing`.
 
-Checkout policies use a service-owned software subscription projection before any provider call. Rejections return stable machine-readable reasons: `already_lifetime`, `subscription_active`, `cancel_at_period_end`, or `payment_risk_hold`; clients should use these reasons to show keep-access/manage-subscription/resume/manual-review states instead of guessing from SKU or provider metadata.
+Checkout policies use service-owned strategies before any provider call. In production, `CheckoutRedirectPolicy` also validates success/cancel URLs against `CHECKOUT_REDIRECT_ALLOWLIST`. Rejections return stable machine-readable reasons: `already_lifetime`, `subscription_active`, `cancel_at_period_end`, `payment_risk_hold`, or `redirect_not_allowed`; clients should use these reasons to show keep-access/manage-subscription/resume/manual-review/error states instead of guessing from SKU or provider metadata.
 
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
@@ -199,10 +199,11 @@ Access session responses include a service-owned `device_capacity` projection wi
 - `scripts/verify_admin_order_contract.sh`: local contract for the WCP-4 admin order read model, route errors, scoped permission, and architecture boundaries.
 - `scripts/verify_admin_subscription_contract.sh`: local contract for the WCP-4 admin subscription read model, Walnut projection, privacy projection, scoped permission, and architecture boundaries.
 - `scripts/verify_admin_cloud_storage_contract.sh`: local contract for the WCP-4 admin cloud-storage read model, privacy projection, scoped permission, and architecture boundaries.
+- `scripts/verify_production_config_contract.sh`: local contract for WCP-6 production fail-fast config, checkout redirect allowlist, and architecture boundaries.
 
 ## Configuration
 
-All settings via environment variables (see `.env.example`):
+All settings via environment variables (see `.env.example`). `config.Load()` runs production fail-fast validation when `SERVER_ENV=prod`; missing admin auth, non-prod snapshot signer, Creem live config/product map, rate limit, DB DSN, or checkout redirect allowlist returns `ErrInvalidProductionConfig` before bootstrap wires providers.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -211,20 +212,21 @@ All settings via environment variables (see `.env.example`):
 | `DATABASE_DSN` | ./walnut_billing.db | SQLite database path |
 | `ADMIN_API_KEYS` | (empty) | Comma-separated full-access admin API keys; development shortcut that maps to `admin.*` |
 | `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.users.read","admin.orders.read","admin.subscriptions.read","admin.cloud_storage.read","admin.audit.read"]}]`; user access summary requires `admin.users.read`, admin order list requires `admin.orders.read`, subscription list requires `admin.subscriptions.read`, cloud metadata requires `admin.cloud_storage.read`, device revoke requires `admin.access_accounts.write` |
-| `RATELIMIT_ENABLED` | false | Enable IP rate limiting on auth endpoints |
+| `RATELIMIT_ENABLED` | false | Enable IP rate limiting on auth endpoints; required in prod |
 | `PAYMENT_WECHAT_*` | (empty) | Legacy WeChat Pay V3 credentials; not the current commercialization target |
 | `PAYMENT_ALIPAY_*` | (empty) | Legacy Alipay credentials; not the current commercialization target |
 | `PAYMENT_CREEM_API_KEY` | (empty) | Creem API key; server-side only |
 | `PAYMENT_CREEM_WEBHOOK_SECRET` | (empty) | Creem webhook HMAC secret |
-| `PAYMENT_CREEM_SANDBOX` | true | Use `https://test-api.creem.io` for checkout and subscription control unless explicitly false |
+| `PAYMENT_CREEM_SANDBOX` | true | Use `https://test-api.creem.io` for checkout and subscription control unless explicitly false; prod requires `false` and live key/product map |
 | `PAYMENT_CREEM_API_BASE_URL` | (empty) | Optional override for Creem API base URL; normally leave empty so sandbox/prod chooses the documented default |
 | `PAYMENT_CREEM_SUCCESS_URL` | (empty) | Default hosted checkout success URL; request value can override it |
 | `PAYMENT_CREEM_CANCEL_URL` | (empty) | Default hosted checkout cancel URL stored in Walnut metadata |
-| `PAYMENT_CREEM_PRODUCT_MAP_JSON` | (empty) | Walnut SKU to Creem product ID map, e.g. `{"pro_own_ai_monthly":"prod_4MS4IC77zjEobSHExt0gcr"}` |
+| `PAYMENT_CREEM_PRODUCT_MAP_JSON` | (empty) | Walnut SKU to Creem product ID map, e.g. `{"pro_own_ai_monthly":"prod_4MS4IC77zjEobSHExt0gcr"}`; prod must map `pro_own_ai_monthly` and `pro_own_ai_lifetime` |
 | `PAYMENT_MOCK_CHECKOUT_BASE_URL` | (empty) | Dev-only mock hosted checkout origin; empty means `http://localhost:${SERVER_PORT}` |
 | `FULFILLMENT_RULES_JSON` | (empty) | Optional JSON fulfillment rules; empty uses dev defaults |
 | `CHECKOUT_RISK_POLICY_ENABLED` | true | Enable pre-checkout risk policy based on Walnut `PaymentRiskFlag` |
 | `CHECKOUT_RISK_BLOCK_SEVERITIES` | critical,high | Comma-separated risk severities that require manual review before checkout |
+| `CHECKOUT_REDIRECT_ALLOWLIST` | (empty) | Comma-separated checkout redirect origins or app schemes; prod requires it and blocks unlisted success/cancel URLs before provider calls |
 | `ADJUSTMENT_REFUND_WINDOW_DAYS` | 7 | Refund auto-compensation window, counted from Walnut `Order.PaidAt` |
 | `ADJUSTMENT_REFUND_IN_WINDOW_ACTION` | auto_refund | Action for in-window refund events: `auto_refund`, `manual_review`, or `reject` |
 | `ADJUSTMENT_REFUND_OUT_OF_WINDOW_ACTION` | manual_review | Action for out-of-window refund events |
@@ -246,11 +248,11 @@ All settings via environment variables (see `.env.example`):
 | `ACCESS_LOGIN_CHALLENGE_MAX_CREATES_PER_EMAIL` | 5 | Max challenge creates per normalized email within the rate-limit window |
 | `ACCESS_LOGIN_CHALLENGE_MAX_CREATES_PER_IP` | 20 | Max challenge creates per hashed client IP within the rate-limit window |
 | `ACCESS_LOGIN_CHALLENGE_DELIVERY` | dev | `dev` returns `dev_token` outside prod; `email` is currently disabled until a provider adapter is configured |
-| `ACCESS_LOGIN_CHALLENGE_SECRET` | dev secret | HMAC secret for OTP hashing; change in non-dev environments |
+| `ACCESS_LOGIN_CHALLENGE_SECRET` | dev secret | HMAC secret for OTP hashing; prod must not use the dev secret |
 
 Bucket expiry is exposed through `POST /api/v1/admin/credits/buckets/expire` for operator or scheduled jobs.
 
-**Note**: If payment credentials are not configured, the service uses mock adapters (suitable for development).
+**Note**: If payment credentials are not configured, the service uses mock adapters in development. Production does not register the mock checkout provider and now fails fast unless Creem live credentials, webhook secret, product map, and redirect allowlist are configured.
 
 ## Prometheus Metrics
 

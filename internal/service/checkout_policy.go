@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 	"walnut-billing/internal/domain"
@@ -23,6 +24,7 @@ const (
 	CheckoutPolicyActionManage       = "manage_subscription"
 	CheckoutPolicyActionResume       = "resume_subscription"
 
+	CheckoutPolicyReasonRedirectNotAllowed                     = "redirect_not_allowed"
 	CheckoutPolicyReasonPaymentRiskHold                        = "payment_risk_hold"
 	CheckoutPolicyReasonAlreadyLifetime                        = "already_lifetime"
 	CheckoutPolicyReasonSubscriptionActive                     = "subscription_active"
@@ -188,6 +190,50 @@ func allowCheckoutDecision() CheckoutPolicyDecision {
 	return CheckoutPolicyDecision{Allowed: true, Action: CheckoutPolicyActionAllow}
 }
 
+// CheckoutRedirectPolicy is the strategy boundary for hosted-checkout redirect
+// URLs. Provider adapters receive only redirect URLs that match configured app
+// or web origins.
+type CheckoutRedirectPolicy struct {
+	allowed map[string]struct{}
+}
+
+func NewCheckoutRedirectPolicy(allowlist []string) *CheckoutRedirectPolicy {
+	allowed := make(map[string]struct{})
+	for _, rawURL := range allowlist {
+		if key := normalizeCheckoutRedirectKey(rawURL); key != "" {
+			allowed[key] = struct{}{}
+		}
+	}
+	return &CheckoutRedirectPolicy{allowed: allowed}
+}
+
+func (p *CheckoutRedirectPolicy) Evaluate(ctx context.Context, input CheckoutPolicyInput) (CheckoutPolicyDecision, error) {
+	if p == nil || len(p.allowed) == 0 {
+		return CheckoutPolicyDecision{}, ErrCheckoutPolicyUnavailable
+	}
+	for _, rawURL := range []string{input.Checkout.SuccessURL, input.Checkout.CancelURL} {
+		if !p.allowedRedirect(rawURL) {
+			return CheckoutPolicyDecision{
+				Allowed: false,
+				Reason:  CheckoutPolicyReasonRedirectNotAllowed,
+				Action:  CheckoutPolicyActionManualReview,
+				Message: "checkout redirect URL is not allowed",
+				Cause:   ErrInvalidCheckoutRequest,
+			}, nil
+		}
+	}
+	return allowCheckoutDecision(), nil
+}
+
+func (p *CheckoutRedirectPolicy) allowedRedirect(rawURL string) bool {
+	key := normalizeCheckoutRedirectKey(rawURL)
+	if key == "" {
+		return false
+	}
+	_, ok := p.allowed[key]
+	return ok
+}
+
 // SoftwareAccessPlanCheckoutPolicy keeps Walnut's mutually exclusive software
 // tiers server-authoritative. Clients may hide buttons, but billing still
 // rejects duplicate monthly checkout and repeat lifetime purchases.
@@ -266,4 +312,28 @@ func (p *SoftwareAccessPlanCheckoutPolicy) Evaluate(ctx context.Context, input C
 		}, nil
 	}
 	return allowCheckoutDecision(), nil
+}
+
+func normalizeCheckoutRedirectKey(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" {
+		return ""
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	host := strings.ToLower(parsed.Host)
+	switch scheme {
+	case "http", "https":
+		if host == "" {
+			return ""
+		}
+		return scheme + "://" + host
+	case "javascript", "data", "file", "about", "blob":
+		return ""
+	default:
+		return scheme + "://"
+	}
 }

@@ -60,7 +60,7 @@ Use one-off overrides only when needed, for example `SERVER_PORT=8083 scripts/ru
 
 ## 1B. Email Login / Recovery Challenge
 
-The deterministic profile uses `ACCESS_LOGIN_CHALLENGE_DELIVERY=dev`, so challenge creation returns a `dev_token`. This is only for local/test verification; production disables dev delivery until a real email provider adapter is configured.
+The deterministic profile uses `ACCESS_LOGIN_CHALLENGE_DELIVERY=dev`, so challenge creation returns a `dev_token`. This is only for local/test verification; production validation rejects dev delivery and the dev OTP secret until a real email provider adapter is configured.
 
 ```bash
 BASE_URL=http://127.0.0.1:8082
@@ -205,6 +205,7 @@ Creem test mode must stay isolated from production:
 - Test products are separate from production products. Map every checkout-visible Walnut SKU before enabling Creem (`pro_own_ai_monthly` and `pro_own_ai_lifetime` today).
 - Test webhooks must point to the test webhook URL in the Creem dashboard; production webhooks use a different endpoint/secret.
 - Subscription control uses the same documented paths in test and prod: `POST /v1/subscriptions/{id}/cancel` and `POST /v1/subscriptions/{id}/resume`; switching production is a config change from `PAYMENT_CREEM_SANDBOX=true` to `false` with production credentials.
+- When `SERVER_ENV=prod`, startup validates Creem live credentials, webhook secret, full product map, rate limit, admin auth, Ed25519 snapshot signer, and checkout redirect allowlist before registering providers.
 
 First run the local adapter/fixture contract; it does not call Creem:
 

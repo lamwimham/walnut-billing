@@ -644,9 +644,11 @@ WCP-4 进展（2026-06-19）：第四切片已完成。新增 `AdminSubscription
 
 目标：达到小规模付费上线的生产门槛。
 
+WCP-6 进展（2026-06-19）：第一切片已完成。新增 `internal/config.ValidateProduction` 作为启动前生产配置安全门，`config.Load()` 在 `SERVER_ENV=prod` 时聚合校验 admin auth、rate limit、DB DSN、Ed25519 snapshot signer、非 dev OTP secret/delivery、Creem live key/webhook/product map、prod base URL 和 checkout redirect allowlist；缺失任一项返回 `ErrInvalidProductionConfig`，避免 bootstrap 半注册 provider 或 mock checkout。Checkout redirect allowlist 以 service 策略 `CheckoutRedirectPolicy` 注入生产 checkout policy 链，未命中时返回稳定 `checkout_redirect_not_allowed`，provider adapter 仍只接收已验证的 success/cancel URL。新增 `scripts/verify_production_config_contract.sh` 固化 config/service/handler/architecture 合同。
+
 任务：
 
-- prod config validation：admin principals、snapshot signer、Creem key/webhook secret、DB DSN、rate limit、CORS/redirect allowlist。
+- prod config validation：admin principals、snapshot signer、Creem key/webhook secret、DB DSN、rate limit、CORS/redirect allowlist。（第一切片已完成：fail-fast + redirect allowlist；CORS/header hardening 后续切片继续）
 - 数据迁移策略：替代裸 `AutoMigrate` 的版本化 migration，保留 rollback/runbook。
 - backup/restore runbook：SQLite 初期备份，后续 Postgres migration path。
 - webhook retry / dead letter / admin reprocess runbook。

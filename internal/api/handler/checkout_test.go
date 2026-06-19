@@ -122,6 +122,19 @@ func TestCheckoutHandler_MapsServiceErrors(t *testing.T) {
 			want:     http.StatusConflict,
 			wantCode: "checkout_blocked_by_subscription_state",
 		},
+		{
+			name: "redirect blocked",
+			err: &service.CheckoutPolicyRejection{
+				Cause: service.ErrInvalidCheckoutRequest,
+				Decision: service.CheckoutPolicyDecision{
+					Reason:  service.CheckoutPolicyReasonRedirectNotAllowed,
+					Action:  service.CheckoutPolicyActionManualReview,
+					Message: "checkout redirect URL is not allowed",
+				},
+			},
+			want:     http.StatusBadRequest,
+			wantCode: "checkout_redirect_not_allowed",
+		},
 		{name: "policy unavailable", err: service.ErrCheckoutPolicyUnavailable, want: http.StatusServiceUnavailable, wantCode: "checkout_policy_unavailable"},
 		{name: "unknown", err: errors.New("unknown"), want: http.StatusBadRequest},
 	}
@@ -147,6 +160,10 @@ func TestCheckoutHandler_MapsServiceErrors(t *testing.T) {
 				if tc.wantCode == "checkout_blocked_by_subscription_state" &&
 					(response["reason"] != service.CheckoutPolicyReasonCancelAtPeriodEnd || response["action"] != service.CheckoutPolicyActionResume) {
 					t.Fatalf("expected subscription decision payload, got %#v", response)
+				}
+				if tc.wantCode == "checkout_redirect_not_allowed" &&
+					response["reason"] != service.CheckoutPolicyReasonRedirectNotAllowed {
+					t.Fatalf("expected redirect decision payload, got %#v", response)
 				}
 			}
 		})

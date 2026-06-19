@@ -302,6 +302,54 @@ func TestCheckoutService_AllowsCheckoutWhenCriticalRiskResolved(t *testing.T) {
 	}
 }
 
+func TestCheckoutRedirectPolicy_BlocksUnapprovedRedirectURLs(t *testing.T) {
+	policy := NewCheckoutRedirectPolicy([]string{"https://app.walnut.example", "https://billing.walnut.example"})
+	svc, orders, products, users, gateway := newCheckoutTestServiceWithPolicies(policy)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	products.products["credits_600"] = &domain.Product{Code: "credits_600", Name: "Credits 600", Price: 990, IsVisible: true}
+
+	_, err := svc.CreateCheckoutSession(context.Background(), CheckoutInput{
+		UserID:         "usr_1",
+		SKUCode:        "credits_600",
+		Provider:       "mock",
+		SuccessURL:     "https://evil.example/checkout/success",
+		CancelURL:      "https://app.walnut.example/checkout/cancel",
+		IdempotencyKey: "checkout:redirect-block",
+	})
+	if !errors.Is(err, ErrInvalidCheckoutRequest) {
+		t.Fatalf("expected invalid checkout request for disallowed redirect, got %v", err)
+	}
+	decision, ok := CheckoutPolicyDecisionFromError(err)
+	if !ok || decision.Reason != CheckoutPolicyReasonRedirectNotAllowed {
+		t.Fatalf("expected redirect policy decision, got %#v ok=%v", decision, ok)
+	}
+	if len(orders.orders) != 0 || len(gateway.requests) != 0 {
+		t.Fatalf("blocked checkout must not create order or provider session")
+	}
+}
+
+func TestCheckoutRedirectPolicy_AllowsConfiguredRedirectOrigins(t *testing.T) {
+	policy := NewCheckoutRedirectPolicy([]string{"https://app.walnut.example", "walnut://checkout/success"})
+	svc, _, products, users, gateway := newCheckoutTestServiceWithPolicies(policy)
+	users.users["usr_1"] = &domain.User{ID: "usr_1", Email: "writer@example.com", Status: domain.UserStatusActive}
+	products.products["credits_600"] = &domain.Product{Code: "credits_600", Name: "Credits 600", Price: 990, IsVisible: true}
+
+	_, err := svc.CreateCheckoutSession(context.Background(), CheckoutInput{
+		UserID:         "usr_1",
+		SKUCode:        "credits_600",
+		Provider:       "mock",
+		SuccessURL:     "walnut://checkout/success",
+		CancelURL:      "https://app.walnut.example/checkout/cancel",
+		IdempotencyKey: "checkout:redirect-allow",
+	})
+	if err != nil {
+		t.Fatalf("expected allowed redirect checkout, got %v", err)
+	}
+	if len(gateway.requests) != 1 {
+		t.Fatalf("expected provider call after redirect allow, got %d", len(gateway.requests))
+	}
+}
+
 func TestSoftwareAccessPlanCheckoutPolicy_BlocksDuplicateMonthlySubscription(t *testing.T) {
 	grants := newMockGrantRepo()
 	periodEnd := time.Now().UTC().AddDate(0, 1, 0)

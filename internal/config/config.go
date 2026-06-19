@@ -101,6 +101,7 @@ type FulfillmentConfig struct {
 type CheckoutConfig struct {
 	RiskPolicyEnabled   bool
 	RiskBlockSeverities []string
+	RedirectAllowlist   []string
 }
 
 type AdjustmentConfig struct {
@@ -195,6 +196,7 @@ func Load() (*Config, error) {
 	v.SetDefault("fulfillment.rules_json", "")
 	v.SetDefault("checkout.risk_policy_enabled", true)
 	v.SetDefault("checkout.risk_block_severities", []string{})
+	v.SetDefault("checkout.redirect_allowlist", []string{})
 	v.SetDefault("adjustment.refund_window_days", 7)
 	v.SetDefault("adjustment.refund_in_window_action", "auto_refund")
 	v.SetDefault("adjustment.refund_out_of_window_action", "manual_review")
@@ -248,6 +250,9 @@ func Load() (*Config, error) {
 	}
 	if val := os.Getenv("CHECKOUT_RISK_BLOCK_SEVERITIES"); val != "" {
 		cfg.Checkout.RiskBlockSeverities = splitCSV(val)
+	}
+	if val := os.Getenv("CHECKOUT_REDIRECT_ALLOWLIST"); val != "" {
+		cfg.Checkout.RedirectAllowlist = splitCSV(val)
 	}
 
 	// Boolean env var overrides (Viper can't parse bools from env reliably)
@@ -378,6 +383,11 @@ func Load() (*Config, error) {
 	}
 	if val := os.Getenv("PAYMENT_MOCK_CHECKOUT_BASE_URL"); val != "" {
 		cfg.Payment.MockCheckoutBaseURL = val
+	}
+
+	cfg.Server.Env = strings.ToLower(strings.TrimSpace(cfg.Server.Env))
+	if err := ValidateProduction(cfg); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
