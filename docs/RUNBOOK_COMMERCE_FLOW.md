@@ -83,6 +83,10 @@ CHECKOUT_RISK_POLICY_ENABLED=true
 CHECKOUT_RISK_BLOCK_SEVERITIES=critical,high
 # Only needed when SERVER_ENV=prod; dev can use walnut:// redirects freely.
 CHECKOUT_REDIRECT_ALLOWLIST=https://app.walnut.example,walnut://
+# Only needed when SERVER_ENV=prod; use exact HTTPS browser origins, no wildcard.
+HTTP_CORS_ALLOWED_ORIGINS=https://app.walnut.example,https://ops.walnut.example
+HTTP_SECURITY_HEADERS_ENABLED=true
+HTTP_SECURITY_HEADERS_HSTS_MAX_AGE_SECONDS=31536000
 ```
 
 Creem 测试流程追加配置：
@@ -339,7 +343,7 @@ Walnut 的 cancel-at-period-end 语义映射到 Creem cancel body：
 {"mode":"scheduled","onExecute":"cancel"}
 ```
 
-后续切生产时，保持 Walnut API 不变，只把 `PAYMENT_CREEM_SANDBOX=false` 并使用生产 API key/product map/webhook secret；`PAYMENT_CREEM_API_BASE_URL` 通常继续留空，由 adapter 选择 `https://api.creem.io`。`SERVER_ENV=prod` 会在启动时强校验这些配置，test key、`https://test-api.creem.io`、缺失 product map 或缺失 redirect allowlist 都会直接失败。
+后续切生产时，保持 Walnut API 不变，只把 `PAYMENT_CREEM_SANDBOX=false` 并使用生产 API key/product map/webhook secret；`PAYMENT_CREEM_API_BASE_URL` 通常继续留空，由 adapter 选择 `https://api.creem.io`。`SERVER_ENV=prod` 会在启动时强校验这些配置，test key、`https://test-api.creem.io`、缺失 product map、缺失 HTTPS CORS origins、安全响应头关闭或缺失 redirect allowlist 都会直接失败。
 
 ### 1. 确认 Creem adapter 已注册
 
@@ -741,6 +745,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 |---|---|---|---|
 | Creem provider `disabled` | 未配置 Creem，当前只跑 mock profile | `/admin/payment/providers` | 如需 Creem test mode，设置 test API key、webhook secret 和完整 product map |
 | Creem provider `error` | 缺少 product map、test/prod endpoint/key 混用、webhook secret 缺失 | `/admin/payment/providers` 的 `error` 字段；启动日志 | 修正 `PAYMENT_CREEM_*`，确保 sandbox 使用 `https://test-api.creem.io` 与 test key |
+| 浏览器请求被 CORS 拦截 | Origin 不在 `HTTP_CORS_ALLOWED_ORIGINS` 或生产配置使用了 wildcard/http origin | 浏览器 devtools、响应头、启动日志中的 `ErrInvalidProductionConfig` | 将 App/Admin Web 的精确 HTTPS origin 加入 allowlist；不要使用 `*` 或带 path/query 的 URL |
 | checkout 返回 `payment provider not found: creem` | Creem 当前不是 active provider | `/admin/payment/providers` | 先消除 `disabled/error` 状态，再重试 checkout |
 | checkout 返回 `checkout_provider_failed` | provider 请求失败或 SKU 未映射 | 服务日志；响应 body | 检查 product map、API base URL、网络、Creem credentials |
 | checkout 返回 `checkout_redirect_not_allowed` | success/cancel URL 不在生产 allowlist | `CHECKOUT_REDIRECT_ALLOWLIST`；响应 `reason=redirect_not_allowed` | 将 App/Web 回跳 origin 或 app scheme 加入 allowlist 后重试 |
@@ -764,6 +769,7 @@ curl -sS -X POST "$BASE_URL/api/v1/admin/payment-events/<payment_event_id>/repro
 - [ ] `PAYMENT_CREEM_PRODUCT_MAP_JSON` 覆盖所有可见海外 SKU。
 - [ ] `FULFILLMENT_RULES_JSON` 已评审，或明确接受内置默认规则。
 - [ ] `CHECKOUT_RISK_POLICY_ENABLED=true`，且 `CHECKOUT_REDIRECT_ALLOWLIST` 覆盖 App/Web 回跳 origin 或 app scheme。
+- [ ] `HTTP_CORS_ALLOWED_ORIGINS` 覆盖 App/Admin Web 精确 HTTPS origins，`HTTP_SECURITY_HEADERS_ENABLED=true`，HSTS 至少一年。
 - [ ] `ADJUSTMENT_REFUND_WINDOW_DAYS`、`ADJUSTMENT_*_ACTION` 和低使用阈值已按业务策略评审。
 - [ ] `RENEWAL_GRACE_PERIOD_DAYS` 与 `RENEWAL_EXPIRED_ACTION` 已按业务策略评审。
 - [ ] 公网 webhook endpoint 使用 TLS，并保持 raw request body 不被代理改写。

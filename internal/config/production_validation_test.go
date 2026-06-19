@@ -17,6 +17,9 @@ func TestProductionConfigValidationSkipsNonProduction(t *testing.T) {
 func TestProductionConfigValidationRejectsMissingCriticalSettings(t *testing.T) {
 	cfg := minimalValidProductionConfig()
 	cfg.Database.DSN = ":memory:"
+	cfg.HTTP.CORSAllowedOrigins = []string{"*", "http://walnut.example"}
+	cfg.HTTP.SecurityHeaders.Enabled = false
+	cfg.HTTP.SecurityHeaders.HSTSMaxAgeSeconds = 300
 	cfg.Admin = AdminConfig{}
 	cfg.RateLimit.Enabled = false
 	cfg.Checkout.RiskPolicyEnabled = false
@@ -41,6 +44,10 @@ func TestProductionConfigValidationRejectsMissingCriticalSettings(t *testing.T) 
 	}
 	for _, want := range []string{
 		"DATABASE_DSN must not use in-memory sqlite in prod",
+		"HTTP_CORS_ALLOWED_ORIGINS must not contain wildcard origins in prod",
+		"HTTP_CORS_ALLOWED_ORIGINS must contain https origins only in prod",
+		"HTTP_SECURITY_HEADERS_ENABLED must be true in prod",
+		"HTTP_SECURITY_HEADERS_HSTS_MAX_AGE_SECONDS must be >= 31536000 in prod",
 		"ADMIN_API_KEYS or ADMIN_PRINCIPALS_JSON is required in prod",
 		"RATELIMIT_ENABLED must be true in prod",
 		"CHECKOUT_RISK_POLICY_ENABLED must be true in prod",
@@ -110,7 +117,14 @@ func minimalValidProductionConfig() *Config {
 	return &Config{
 		Server:   ServerConfig{Env: "prod"},
 		Database: DatabaseConfig{Driver: "sqlite", DSN: "./data/walnut_billing.db"},
-		Admin:    AdminConfig{APIKeys: []string{"ops-key"}},
+		HTTP: HTTPConfig{
+			CORSAllowedOrigins: []string{"https://app.walnut.example", "https://ops.walnut.example"},
+			SecurityHeaders: HTTPSecurityHeadersConfig{
+				Enabled:           true,
+				HSTSMaxAgeSeconds: 31536000,
+			},
+		},
+		Admin: AdminConfig{APIKeys: []string{"ops-key"}},
 		RateLimit: RateLimitConfig{
 			Enabled:    true,
 			MaxTokens:  20,

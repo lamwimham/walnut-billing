@@ -15,6 +15,7 @@ import (
 type Config struct {
 	Server       ServerConfig
 	Database     DatabaseConfig
+	HTTP         HTTPConfig
 	Payment      PaymentConfig
 	Fulfillment  FulfillmentConfig
 	Checkout     CheckoutConfig
@@ -34,6 +35,16 @@ type ServerConfig struct {
 type DatabaseConfig struct {
 	Driver string
 	DSN    string
+}
+
+type HTTPConfig struct {
+	CORSAllowedOrigins []string
+	SecurityHeaders    HTTPSecurityHeadersConfig
+}
+
+type HTTPSecurityHeadersConfig struct {
+	Enabled           bool
+	HSTSMaxAgeSeconds int
 }
 
 type PaymentConfig struct {
@@ -170,6 +181,9 @@ func Load() (*Config, error) {
 	v.SetDefault("server.env", "dev")
 	v.SetDefault("database.driver", "sqlite")
 	v.SetDefault("database.dsn", "./walnut_billing.db")
+	v.SetDefault("http.cors_allowed_origins", []string{})
+	v.SetDefault("http.security_headers.enabled", true)
+	v.SetDefault("http.security_headers.hsts_max_age_seconds", 31536000)
 	v.SetDefault("admin.api_keys", []string{})
 	v.SetDefault("admin.principals", []AdminPrincipalConfig{})
 	v.SetDefault("ratelimit.enabled", false)
@@ -254,6 +268,9 @@ func Load() (*Config, error) {
 	if val := os.Getenv("CHECKOUT_REDIRECT_ALLOWLIST"); val != "" {
 		cfg.Checkout.RedirectAllowlist = splitCSV(val)
 	}
+	if val := os.Getenv("HTTP_CORS_ALLOWED_ORIGINS"); val != "" {
+		cfg.HTTP.CORSAllowedOrigins = splitCSV(val)
+	}
 
 	// Boolean env var overrides (Viper can't parse bools from env reliably)
 	if val := os.Getenv("RATELIMIT_ENABLED"); val == "true" {
@@ -265,6 +282,14 @@ func Load() (*Config, error) {
 		cfg.Checkout.RiskPolicyEnabled = true
 	} else if val == "false" {
 		cfg.Checkout.RiskPolicyEnabled = false
+	}
+	if val := os.Getenv("HTTP_SECURITY_HEADERS_ENABLED"); val == "true" {
+		cfg.HTTP.SecurityHeaders.Enabled = true
+	} else if val == "false" {
+		cfg.HTTP.SecurityHeaders.Enabled = false
+	}
+	if val := os.Getenv("HTTP_SECURITY_HEADERS_HSTS_MAX_AGE_SECONDS"); val != "" {
+		cfg.HTTP.SecurityHeaders.HSTSMaxAgeSeconds = parseIntEnv(val, cfg.HTTP.SecurityHeaders.HSTSMaxAgeSeconds)
 	}
 	if val := os.Getenv("ADJUSTMENT_LOW_USAGE_POLICY_ENABLED"); val == "true" {
 		cfg.Adjustment.LowUsagePolicyEnabled = true

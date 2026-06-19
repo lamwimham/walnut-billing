@@ -66,6 +66,13 @@ func buildRouter(deps routerDependencies) (*gin.Engine, error) {
 	r.Use(middleware.Recovery(deps.Logger))
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Logger(deps.Logger))
+	r.Use(middleware.SecurityHeaders(middleware.SecurityHeadersConfig{
+		Enabled:           cfg.HTTP.SecurityHeaders.Enabled,
+		HSTSMaxAgeSeconds: cfg.HTTP.SecurityHeaders.HSTSMaxAgeSeconds,
+	}))
+	if len(cfg.HTTP.CORSAllowedOrigins) > 0 {
+		r.Use(middleware.CORS(middleware.CORSConfig{AllowedOrigins: cfg.HTTP.CORSAllowedOrigins}))
+	}
 	r.Use(metrics.Middleware())
 	if cfg.Server.Env == config.ProductionEnv {
 		r.SetTrustedProxies(nil)

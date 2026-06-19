@@ -646,9 +646,11 @@ WCP-4 进展（2026-06-19）：第四切片已完成。新增 `AdminSubscription
 
 WCP-6 进展（2026-06-19）：第一切片已完成。新增 `internal/config.ValidateProduction` 作为启动前生产配置安全门，`config.Load()` 在 `SERVER_ENV=prod` 时聚合校验 admin auth、rate limit、DB DSN、Ed25519 snapshot signer、非 dev OTP secret/delivery、Creem live key/webhook/product map、prod base URL 和 checkout redirect allowlist；缺失任一项返回 `ErrInvalidProductionConfig`，避免 bootstrap 半注册 provider 或 mock checkout。Checkout redirect allowlist 以 service 策略 `CheckoutRedirectPolicy` 注入生产 checkout policy 链，未命中时返回稳定 `checkout_redirect_not_allowed`，provider adapter 仍只接收已验证的 success/cancel URL。新增 `scripts/verify_production_config_contract.sh` 固化 config/service/handler/architecture 合同。
 
+WCP-6 进展（2026-06-19）：第二切片已完成。新增 `internal/api/middleware` 层的 CORS 与 SecurityHeaders 基础设施中间件，由 `internal/config.HTTPConfig` 配置并在 `internal/app/bootstrap` 全局装配，避免 handler/service 关心浏览器边界。`SERVER_ENV=prod` 现在要求 `HTTP_CORS_ALLOWED_ORIGINS` 显式配置 HTTPS origin、禁止 wildcard/path/query，且要求安全响应头开启、HSTS 至少一年；启动前聚合校验失败仍统一返回 `ErrInvalidProductionConfig`。当前 CSP 为兼容内嵌 dashboard shell 暂保留 inline CSS/JS，后续可通过静态资源抽取或 hash-based CSP 收紧。
+
 任务：
 
-- prod config validation：admin principals、snapshot signer、Creem key/webhook secret、DB DSN、rate limit、CORS/redirect allowlist。（第一切片已完成：fail-fast + redirect allowlist；CORS/header hardening 后续切片继续）
+- prod config validation：admin principals、snapshot signer、Creem key/webhook secret、DB DSN、rate limit、CORS/redirect allowlist、安全响应头。（第二切片已完成：fail-fast、redirect allowlist、CORS/header hardening）
 - 数据迁移策略：替代裸 `AutoMigrate` 的版本化 migration，保留 rollback/runbook。
 - backup/restore runbook：SQLite 初期备份，后续 Postgres migration path。
 - webhook retry / dead letter / admin reprocess runbook。

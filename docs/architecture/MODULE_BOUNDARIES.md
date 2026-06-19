@@ -48,5 +48,6 @@ Architecture tests enforce the first hard rules:
 
 - New client APIs must be registered under the module that owns their state transition.
 - New provider-specific behavior belongs behind an adapter interface, not in handlers or access services.
+- HTTP browser-boundary policy (CORS, HSTS, CSP, frame/referrer/permissions headers) belongs in `internal/api/middleware` and `internal/config`, not in business handlers or services.
 - Provider IDs, product IDs, and payment statuses must not enter access snapshots or Walnut App feature gates.
 - Admin write actions must go through application services and audit the principal, target, reason, and outcome.

@@ -42,6 +42,7 @@ func ValidateProduction(cfg *Config) error {
 
 	var violations []string
 	violations = append(violations, validateProductionDatabase(cfg.Database)...)
+	violations = append(violations, validateProductionHTTP(cfg.HTTP)...)
 	violations = append(violations, validateProductionAdmin(cfg.Admin)...)
 	violations = append(violations, validateProductionRateLimit(cfg.RateLimit)...)
 	violations = append(violations, validateProductionCheckout(cfg.Checkout)...)
@@ -61,6 +62,23 @@ func validateProductionDatabase(cfg DatabaseConfig) []string {
 	}
 	if strings.TrimSpace(cfg.DSN) == ":memory:" {
 		violations = append(violations, "DATABASE_DSN must not use in-memory sqlite in prod")
+	}
+	return violations
+}
+
+func validateProductionHTTP(cfg HTTPConfig) []string {
+	var violations []string
+	if len(cfg.CORSAllowedOrigins) == 0 {
+		violations = append(violations, "HTTP_CORS_ALLOWED_ORIGINS is required in prod")
+	}
+	for _, origin := range cfg.CORSAllowedOrigins {
+		violations = append(violations, validateProductionCORSOrigin(origin)...)
+	}
+	if !cfg.SecurityHeaders.Enabled {
+		violations = append(violations, "HTTP_SECURITY_HEADERS_ENABLED must be true in prod")
+	}
+	if cfg.SecurityHeaders.HSTSMaxAgeSeconds < 31536000 {
+		violations = append(violations, "HTTP_SECURITY_HEADERS_HSTS_MAX_AGE_SECONDS must be >= 31536000 in prod")
 	}
 	return violations
 }
@@ -165,6 +183,21 @@ func validateProductionCreemEnvironment(cfg PaymentConfig) []string {
 		violations = append(violations, "PAYMENT_CREEM_API_KEY must not be a test key in prod")
 	}
 	return violations
+}
+
+func validateProductionCORSOrigin(origin string) []string {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return []string{"HTTP_CORS_ALLOWED_ORIGINS must not contain empty origins in prod"}
+	}
+	if origin == "*" {
+		return []string{"HTTP_CORS_ALLOWED_ORIGINS must not contain wildcard origins in prod"}
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return []string{"HTTP_CORS_ALLOWED_ORIGINS must contain https origins only in prod"}
+	}
+	return nil
 }
 
 func validateProductionCheckoutURL(fieldName string, rawURL string) []string {

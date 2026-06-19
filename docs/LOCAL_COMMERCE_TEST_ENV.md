@@ -205,7 +205,7 @@ Creem test mode must stay isolated from production:
 - Test products are separate from production products. Map every checkout-visible Walnut SKU before enabling Creem (`pro_own_ai_monthly` and `pro_own_ai_lifetime` today).
 - Test webhooks must point to the test webhook URL in the Creem dashboard; production webhooks use a different endpoint/secret.
 - Subscription control uses the same documented paths in test and prod: `POST /v1/subscriptions/{id}/cancel` and `POST /v1/subscriptions/{id}/resume`; switching production is a config change from `PAYMENT_CREEM_SANDBOX=true` to `false` with production credentials.
-- When `SERVER_ENV=prod`, startup validates Creem live credentials, webhook secret, full product map, rate limit, admin auth, Ed25519 snapshot signer, and checkout redirect allowlist before registering providers.
+- When `SERVER_ENV=prod`, startup validates Creem live credentials, webhook secret, full product map, rate limit, admin auth, Ed25519 snapshot signer, HTTPS CORS origins, security headers, and checkout redirect allowlist before registering providers.
 
 First run the local adapter/fixture contract; it does not call Creem:
 

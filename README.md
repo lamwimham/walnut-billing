@@ -19,7 +19,7 @@ walnut-billing/
 │   ├── service/                    # Business logic with UnitOfWork transactions
 │   └── api/
 │       ├── handler/                # HTTP handlers (separated by concern)
-│       └── middleware/             # Recovery, Logger, RateLimit, Auth, RequestID
+│       └── middleware/             # Recovery, Logger, RateLimit, Auth, RequestID, CORS/SecurityHeaders
 ├── .env.example                    # Configuration template
 ├── Dockerfile                      # Multi-stage production build
 └── docker-compose.yml              # Local/production deployment
@@ -199,17 +199,20 @@ Access session responses include a service-owned `device_capacity` projection wi
 - `scripts/verify_admin_order_contract.sh`: local contract for the WCP-4 admin order read model, route errors, scoped permission, and architecture boundaries.
 - `scripts/verify_admin_subscription_contract.sh`: local contract for the WCP-4 admin subscription read model, Walnut projection, privacy projection, scoped permission, and architecture boundaries.
 - `scripts/verify_admin_cloud_storage_contract.sh`: local contract for the WCP-4 admin cloud-storage read model, privacy projection, scoped permission, and architecture boundaries.
-- `scripts/verify_production_config_contract.sh`: local contract for WCP-6 production fail-fast config, checkout redirect allowlist, and architecture boundaries.
+- `scripts/verify_production_config_contract.sh`: local contract for WCP-6 production fail-fast config, checkout redirect allowlist, HTTP security middleware, and architecture boundaries.
 
 ## Configuration
 
-All settings via environment variables (see `.env.example`). `config.Load()` runs production fail-fast validation when `SERVER_ENV=prod`; missing admin auth, non-prod snapshot signer, Creem live config/product map, rate limit, DB DSN, or checkout redirect allowlist returns `ErrInvalidProductionConfig` before bootstrap wires providers.
+All settings via environment variables (see `.env.example`). `config.Load()` runs production fail-fast validation when `SERVER_ENV=prod`; missing admin auth, non-prod snapshot signer, Creem live config/product map, rate limit, DB DSN, explicit HTTPS CORS origins, enabled security headers, or checkout redirect allowlist returns `ErrInvalidProductionConfig` before bootstrap wires providers.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SERVER_PORT` | 8082 | HTTP listen port |
 | `SERVER_ENV` | dev | Environment (dev/prod) |
 | `DATABASE_DSN` | ./walnut_billing.db | SQLite database path |
+| `HTTP_CORS_ALLOWED_ORIGINS` | (empty) | Comma-separated exact browser origins allowed by global CORS; prod requires HTTPS origins only and rejects wildcard/path/query entries |
+| `HTTP_SECURITY_HEADERS_ENABLED` | true | Enable global hardening headers; prod requires it to remain true |
+| `HTTP_SECURITY_HEADERS_HSTS_MAX_AGE_SECONDS` | 31536000 | HSTS max age in seconds; prod requires at least one year |
 | `ADMIN_API_KEYS` | (empty) | Comma-separated full-access admin API keys; development shortcut that maps to `admin.*` |
 | `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.users.read","admin.orders.read","admin.subscriptions.read","admin.cloud_storage.read","admin.audit.read"]}]`; user access summary requires `admin.users.read`, admin order list requires `admin.orders.read`, subscription list requires `admin.subscriptions.read`, cloud metadata requires `admin.cloud_storage.read`, device revoke requires `admin.access_accounts.write` |
 | `RATELIMIT_ENABLED` | false | Enable IP rate limiting on auth endpoints; required in prod |
@@ -252,7 +255,9 @@ All settings via environment variables (see `.env.example`). `config.Load()` run
 
 Bucket expiry is exposed through `POST /api/v1/admin/credits/buckets/expire` for operator or scheduled jobs.
 
-**Note**: If payment credentials are not configured, the service uses mock adapters in development. Production does not register the mock checkout provider and now fails fast unless Creem live credentials, webhook secret, product map, and redirect allowlist are configured.
+**Note**: If payment credentials are not configured, the service uses mock adapters in development. Production does not register the mock checkout provider and now fails fast unless Creem live credentials, webhook secret, product map, HTTP browser-boundary config, and redirect allowlist are configured.
+
+HTTP security headers and CORS are infrastructure middleware configured through `internal/config`, not business handlers. The current CSP permits inline dashboard CSS/JS for the embedded admin shell; it can be tightened after that shell is extracted to static assets or hashed scripts.
 
 ## Prometheus Metrics
 
