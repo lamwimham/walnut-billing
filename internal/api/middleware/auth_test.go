@@ -88,6 +88,17 @@ func TestOrdersReadPermissionIsScopedSeparatelyFromPaymentEvents(t *testing.T) {
 	}
 }
 
+func TestCloudStorageReadPermissionIsScopedSeparatelyFromUsersAndOrders(t *testing.T) {
+	support := AdminPrincipal{Name: "support", Permissions: []string{PermissionUsersRead, PermissionOrdersRead}}
+	if PrincipalHasPermission(support, PermissionCloudStorageRead) {
+		t.Fatalf("user/order read permissions must not imply cloud storage read permission")
+	}
+	cloudOps := AdminPrincipal{Name: "cloud-ops", Permissions: []string{PermissionCloudStorageRead}}
+	if !PrincipalHasPermission(cloudOps, PermissionCloudStorageRead) {
+		t.Fatalf("expected cloud storage read permission to match itself")
+	}
+}
+
 func TestAPIKeyAuthPrincipalsRejectsMissingAndInvalidKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

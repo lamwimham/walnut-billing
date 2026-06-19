@@ -469,6 +469,7 @@ Admin 页面分区：
 | `GET` | `/api/v1/admin/payment-risk-flags` | 风险列表 |
 | `POST` | `/api/v1/admin/payment-risk-flags/:id/resolve` | 风险解除 |
 | `GET` | `/api/v1/admin/cloud-storage/usage` | 云存储总览 |
+| `GET` | `/api/v1/admin/users/:id/cloud-storage/projects` | 用户云项目 metadata，默认脱敏 |
 | `POST` | `/api/v1/admin/test/scenarios/reset` | dev/test-only，重置测试账号或场景 |
 
 ## 7. 分阶段实施计划
@@ -595,6 +596,8 @@ WCP-3 进展（2026-06-19）：第二切片已完成。支付层新增可选 `Su
 WCP-4 进展（2026-06-19）：第一切片已完成。新增 `AdminUserAccessSummaryService` 作为管理端只读 facade，依赖 `AdminUserAccessSummaryReadRepository`、`SoftwareSubscriptionProjector` 与 cloud quota policy，统一投影单个用户的 device capacity、trial、grants、subscription、recent orders、payment events、risk counters 与 cloud quota metadata。HTTP route `GET /api/v1/admin/users/:user_id/access` 由 `admin.users.read` 单独授权，handler 只做 transport mapping；support 账号可被授予 `admin.access_accounts.read` + `admin.users.read` 做脱敏排障，写操作仍需 ops/admin 权限。响应只返回 raw provider payload 的 `payload_hash` 和 provider-neutral 摘要，禁止泄露 raw email、raw device id、checkout URL、provider subscription id、provider event id 或 webhook raw payload。新增 `scripts/verify_admin_user_access_summary_contract.sh` 固化 read model、privacy projection、handler error code、权限边界和架构边界。
 
 WCP-4 进展（2026-06-19）：第二切片已完成。新增 `AdminOrderService` + `AdminOrderReadRepository`，提供 `GET /api/v1/admin/orders` 只读订单排障列表，由 `admin.orders.read` 单独授权。该 read model 只使用 Walnut-owned `out_trade_no`、`user_id`、`sku_code`、状态和金额等稳定字段，并聚合 payment-event count/latest `payload_hash`、fulfillment count/failure count、open risk count，帮助运营从订单视角定位“付款成功未解锁 / webhook 失败 / risk hold”。响应只暴露 provider presence flags（checkout session、provider customer、provider subscription metadata），不返回 checkout URL、provider customer id、provider subscription id、provider event id、idempotency key 或 raw webhook payload。新增 `scripts/verify_admin_order_contract.sh` 固化 read model、handler error code、权限边界和架构边界。
+
+WCP-4 进展（2026-06-19）：第三切片已完成。新增 `AdminCloudStorageService` + `AdminCloudStorageReadRepository`，提供 `GET /api/v1/admin/cloud-storage/usage` 和 `GET /api/v1/admin/users/:user_id/cloud-storage/projects`，由 `admin.cloud_storage.read` 单独授权。该 read model 是 cloud storage metadata 的管理端 facade：service 依赖 repository port、`CloudStorageQuotaPolicy` 与 `AdminPrivacyProjector`，handler 只做 HTTP query/param 映射；repository 聚合用户、cloud project、latest manifest、active object count/bytes，不依赖 object storage provider。响应只返回 masked user email、masked project name、quota/usage、project/status/object counters 与 manifest hash fingerprint，不返回 object key、upload/download URL、local path、provider object key、raw manifest hash、文件 bytes 或文件正文。新增 `scripts/verify_admin_cloud_storage_contract.sh` 固化 read model、privacy projection、handler error code、权限边界和架构边界。
 
 目标：让管理员可以在测试和生产中独立排查用户、授权、支付和风险问题。
 

@@ -114,6 +114,62 @@ type CloudObjectRepository interface {
 	SumActiveBytesByUser(ctx context.Context, userID string) (int64, error)
 }
 
+// AdminCloudStorageUsageQuery defines filters for cloud-storage operator usage.
+type AdminCloudStorageUsageQuery struct {
+	UserID string
+	Status string
+	Limit  int
+	Offset int
+}
+
+// AdminCloudStorageProjectQuery defines filters for a user's cloud projects.
+type AdminCloudStorageProjectQuery struct {
+	UserID string
+	Status string
+	Limit  int
+	Offset int
+}
+
+// AdminCloudStorageUsageReadModel is the repository-owned usage read model.
+type AdminCloudStorageUsageReadModel struct {
+	TotalUsers              int64
+	TotalUsedBytes          int64
+	TotalProjectCount       int64
+	TotalActiveProjectCount int64
+	Users                   []AdminCloudStorageUserRecord
+}
+
+// AdminCloudStorageUserRecord groups user-level cloud facts for admin usage.
+type AdminCloudStorageUserRecord struct {
+	User      domain.User
+	Grants    []domain.EntitlementGrant
+	Projects  []domain.CloudProject
+	UsedBytes int64
+}
+
+// AdminCloudStorageProjectReadModel is the repository-owned per-user project view.
+type AdminCloudStorageProjectReadModel struct {
+	User          domain.User
+	Grants        []domain.EntitlementGrant
+	UsedBytes     int64
+	TotalProjects int64
+	Projects      []AdminCloudStorageProjectRecord
+}
+
+// AdminCloudStorageProjectRecord combines project metadata with manifest/object stats.
+type AdminCloudStorageProjectRecord struct {
+	Project           domain.CloudProject
+	LastManifest      *domain.CloudManifest
+	ActiveObjectCount int
+	ActiveBytes       int64
+}
+
+// AdminCloudStorageReadRepository defines privacy-safe admin cloud read models.
+type AdminCloudStorageReadRepository interface {
+	ListUsage(ctx context.Context, query AdminCloudStorageUsageQuery) (*AdminCloudStorageUsageReadModel, error)
+	ListProjects(ctx context.Context, query AdminCloudStorageProjectQuery) (*AdminCloudStorageProjectReadModel, error)
+}
+
 // TransactionalRepositories returns new repository instances bound to a transaction.
 // All operations on these repos will be part of the same transaction.
 type TransactionalRepositories struct {

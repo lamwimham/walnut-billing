@@ -263,6 +263,7 @@ func Build() (*Application, error) {
 	accessAccountRepo := &gorm_repo.AccessAccountReadRepo{DB: db}
 	adminUserAccessSummaryRepo := &gorm_repo.AdminUserAccessSummaryReadRepo{DB: db}
 	adminOrderRepo := &gorm_repo.AdminOrderReadRepo{DB: db}
+	adminCloudStorageRepo := &gorm_repo.AdminCloudStorageReadRepo{DB: db}
 	creditAccountRepo := &gorm_repo.CreditAccountRepo{DB: db}
 	creditBucketRepo := &gorm_repo.CreditBucketRepo{DB: db}
 	creditReservationRepo := &gorm_repo.CreditReservationRepo{DB: db}
@@ -471,6 +472,11 @@ func Build() (*Application, error) {
 
 	paymentSvc := payment.NewPaymentService(orderRepo, licRepo, registry)
 	adminOrderSvc := service.NewAdminOrderService(adminOrderRepo)
+	adminCloudStorageSvc := service.NewAdminCloudStorageService(service.AdminCloudStorageDependencies{
+		ReadModel:   adminCloudStorageRepo,
+		QuotaPolicy: cloudQuotaPolicy,
+		Privacy:     service.NewAdminPrivacyProjector(),
+	})
 	commerceObserver := observability.NewCommerceObserver(l)
 	checkoutPolicies := buildCheckoutPolicies(cfg, paymentRiskFlagRepo, softwareSubscriptions)
 	var checkoutSvc service.CheckoutService = service.NewCheckoutServiceWithPolicies(orderRepo, productRepo, userRepo, paymentSvc, checkoutPolicies...)
@@ -552,6 +558,7 @@ func Build() (*Application, error) {
 		Credit:               handler.NewCreditHandler(creditSvc, auditSvc),
 		Checkout:             handler.NewCheckoutHandler(checkoutSvc),
 		AdminOrder:           handler.NewAdminOrderHandler(adminOrderSvc),
+		AdminCloudStorage:    handler.NewAdminCloudStorageHandler(adminCloudStorageSvc),
 		Subscription:         handler.NewSubscriptionHandler(subscriptionCancellationSvc),
 		PaymentEvent:         handler.NewPaymentEventHandler(paymentEventSvc),
 		MockCheckout:         handler.NewMockCheckoutHandler(paymentEventSvc),

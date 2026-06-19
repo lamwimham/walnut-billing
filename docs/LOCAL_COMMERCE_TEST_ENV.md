@@ -144,17 +144,25 @@ curl -sS -H 'Authorization: Bearer local-admin-key' \
 
 curl -sS -H 'Authorization: Bearer local-admin-key' \
   "http://127.0.0.1:8082/api/v1/admin/orders?user_id=$USER_ID&limit=10" | python3 -m json.tool
+
+curl -sS -H 'Authorization: Bearer local-admin-key' \
+  "http://127.0.0.1:8082/api/v1/admin/cloud-storage/usage?user_id=$USER_ID&limit=10" | python3 -m json.tool
+
+curl -sS -H 'Authorization: Bearer local-admin-key' \
+  "http://127.0.0.1:8082/api/v1/admin/users/$USER_ID/cloud-storage/projects?limit=10" | python3 -m json.tool
 ```
 
 `/api/v1/admin/users/:user_id/access` returns device capacity, current trial/grants, `SoftwareSubscriptionProjector` status, recent order summaries, payment-event `payload_hash` only, risk counters, and cloud quota metadata. It deliberately does not return raw email, raw device id, checkout URL, provider subscription id, provider event id, or webhook raw payload. Audit logs are also projected through a privacy boundary: historical raw-email actors are returned as masked email + stable fingerprint, and new access-registration audit entries use `user_id` as actor.
 
 `/api/v1/admin/orders` is the commerce-side companion read model. It can filter by `user_id`, `sku_code`, `status`, `provider`, `order_type`, or `out_trade_no`, and returns provider-neutral diagnostics: payment-event count/latest `payload_hash`, fulfillment count/failures, and open risk count. It only exposes boolean presence flags for checkout session, provider customer, and provider subscription metadata.
 
+`/api/v1/admin/cloud-storage/usage` and `/api/v1/admin/users/:user_id/cloud-storage/projects` are the cloud-side companion read models. They use the same quota policy as client cloud usage, project user emails through `AdminPrivacyProjector`, mask project names, and expose only metadata counts/bytes plus latest manifest fingerprints. They deliberately do not return object keys, upload/download URLs, local paths, provider details, raw manifest hashes, or file contents.
+
 For closer-to-production permission testing, replace the legacy full-access key with scoped principals:
 
 ```bash
 export ADMIN_API_KEYS=
-export ADMIN_PRINCIPALS_JSON='[{"name":"support","key":"support-key","permissions":["admin.dashboard.read","admin.access_accounts.read","admin.users.read","admin.orders.read","admin.audit.read"]},{"name":"ops","key":"ops-key","permissions":["admin.*"]}]'
+export ADMIN_PRINCIPALS_JSON='[{"name":"support","key":"support-key","permissions":["admin.dashboard.read","admin.access_accounts.read","admin.users.read","admin.orders.read","admin.cloud_storage.read","admin.audit.read"]},{"name":"ops","key":"ops-key","permissions":["admin.*"]}]'
 ```
 
 Use `support-key` to verify read-only views and `ops-key` to verify management actions such as grant creation, webhook reprocessing, and risk resolution.
@@ -179,6 +187,7 @@ After revoke, the same device cannot restore or refresh a signed access snapshot
 scripts/verify_access_device_lifecycle_contract.sh
 scripts/verify_admin_user_access_summary_contract.sh
 scripts/verify_admin_order_contract.sh
+scripts/verify_admin_cloud_storage_contract.sh
 ```
 
 ## 5. Creem Test Mode Profile

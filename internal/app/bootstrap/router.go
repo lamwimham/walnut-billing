@@ -29,6 +29,7 @@ type applicationHandlers struct {
 	Credit               *handler.CreditHandler
 	Checkout             *handler.CheckoutHandler
 	AdminOrder           *handler.AdminOrderHandler
+	AdminCloudStorage    *handler.AdminCloudStorageHandler
 	Subscription         *handler.SubscriptionHandler
 	PaymentEvent         *handler.PaymentEventHandler
 	MockCheckout         *handler.MockCheckoutHandler
@@ -144,10 +145,13 @@ func (m identityAccessModule) RegisterRoutes(routes moduleRoutes) {
 type cloudStorageModule struct{ handlers applicationHandlers }
 
 func (m cloudStorageModule) RegisterRoutes(routes moduleRoutes) {
-	h := m.handlers.CloudStorage
-	routes.Public.POST("/cloud-storage/sync-sessions", h.AuthorizeSync)
-	routes.Public.POST("/cloud-storage/manifests", h.CommitManifest)
-	routes.Public.GET("/users/:user_id/cloud-storage/usage", h.Usage)
+	h := m.handlers
+	routes.Public.POST("/cloud-storage/sync-sessions", h.CloudStorage.AuthorizeSync)
+	routes.Public.POST("/cloud-storage/manifests", h.CloudStorage.CommitManifest)
+	routes.Public.GET("/users/:user_id/cloud-storage/usage", h.CloudStorage.Usage)
+
+	routes.Admin.GET("/cloud-storage/usage", routes.RequireAdmin(middleware.PermissionCloudStorageRead), h.AdminCloudStorage.Usage)
+	routes.Admin.GET("/users/:user_id/cloud-storage/projects", routes.RequireAdmin(middleware.PermissionCloudStorageRead), h.AdminCloudStorage.ListUserProjects)
 }
 
 // commerceModule owns checkout, provider webhook inbox, fulfillment diagnostics, and payment risk routes.

@@ -174,6 +174,8 @@ Access session responses include a service-owned `device_capacity` projection wi
 | GET | `/api/v1/admin/grants?user_id=` | List entitlement grants |
 | POST | `/api/v1/admin/grants` | Manually grant an entitlement such as `editorial.studio` |
 | GET | `/api/v1/admin/orders?user_id=&sku_code=&status=&provider=&order_type=&out_trade_no=&limit=` | Privacy-safe commerce order list with payment-event, fulfillment, and risk diagnostics; no checkout URL or provider subscription/customer IDs |
+| GET | `/api/v1/admin/cloud-storage/usage?user_id=&status=&limit=` | Metadata-only cloud storage usage rollup with masked user identity, quota, project counts, and no object keys or file contents |
+| GET | `/api/v1/admin/users/:user_id/cloud-storage/projects?status=&limit=` | Metadata-only user cloud projects with masked project names, latest manifest fingerprint, and active object counts/bytes |
 | GET | `/api/v1/admin/fulfillments?out_trade_no=&user_id=&sku_code=&status=` | List commerce fulfillment executions |
 | GET | `/api/v1/admin/payment-risk-flags?user_id=&status=&severity=&provider=&out_trade_no=` | List payment-risk flags for manual review |
 | GET | `/api/v1/admin/payment-risk-flags/:id` | Inspect one payment-risk flag |
@@ -194,6 +196,7 @@ Access session responses include a service-owned `device_capacity` projection wi
 - `scripts/verify_subscription_control_contract.sh`: local contract for the provider subscription-control port, subscription service, handler errors, and architecture boundaries.
 - `scripts/verify_admin_user_access_summary_contract.sh`: local contract for the WCP-4 admin read model, privacy projection, route errors, scoped permission, and architecture boundaries.
 - `scripts/verify_admin_order_contract.sh`: local contract for the WCP-4 admin order read model, route errors, scoped permission, and architecture boundaries.
+- `scripts/verify_admin_cloud_storage_contract.sh`: local contract for the WCP-4 admin cloud-storage read model, privacy projection, scoped permission, and architecture boundaries.
 
 ## Configuration
 
@@ -205,7 +208,7 @@ All settings via environment variables (see `.env.example`):
 | `SERVER_ENV` | dev | Environment (dev/prod) |
 | `DATABASE_DSN` | ./walnut_billing.db | SQLite database path |
 | `ADMIN_API_KEYS` | (empty) | Comma-separated full-access admin API keys; development shortcut that maps to `admin.*` |
-| `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.users.read","admin.orders.read","admin.audit.read"]}]`; user access summary requires `admin.users.read`, admin order list requires `admin.orders.read`, device revoke requires `admin.access_accounts.write` |
+| `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.users.read","admin.orders.read","admin.cloud_storage.read","admin.audit.read"]}]`; user access summary requires `admin.users.read`, admin order list requires `admin.orders.read`, cloud metadata requires `admin.cloud_storage.read`, device revoke requires `admin.access_accounts.write` |
 | `RATELIMIT_ENABLED` | false | Enable IP rate limiting on auth endpoints |
 | `PAYMENT_WECHAT_*` | (empty) | Legacy WeChat Pay V3 credentials; not the current commercialization target |
 | `PAYMENT_ALIPAY_*` | (empty) | Legacy Alipay credentials; not the current commercialization target |

@@ -28,6 +28,7 @@ const (
 	PermissionAccessAccountsRead     = "admin.access_accounts.read"
 	PermissionAccessAccountsWrite    = "admin.access_accounts.write"
 	PermissionUsersRead              = "admin.users.read"
+	PermissionCloudStorageRead       = "admin.cloud_storage.read"
 	PermissionRegistrationsRead      = "admin.registrations.read"
 	PermissionRegistrationsWrite     = "admin.registrations.write"
 	PermissionEntitlementGrantsRead  = "admin.entitlement_grants.read"
