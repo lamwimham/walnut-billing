@@ -199,6 +199,7 @@ Cloud storage remains control-plane only. Billing authorizes upload sessions, re
 | GET | `/api/v1/admin/payment-risk-flags/:id` | Inspect one payment-risk flag |
 | POST | `/api/v1/admin/payment-risk-flags/:id/resolve` | Resolve a manual-review checkout hold after operator verification |
 | PUT | `/api/v1/admin/payment/creem` | Hot-reload Creem API key, webhook secret, URLs, and SKU→product mapping |
+| POST | `/api/v1/admin/test/scenarios/reset` | Dev/test-only scenario reset for deterministic accounts; requires `admin.test.write` and is blocked when `SERVER_ENV=prod` |
 
 ### Infrastructure
 
@@ -222,6 +223,7 @@ Cloud storage remains control-plane only. Billing authorizes upload sessions, re
 - `scripts/verify_admin_order_contract.sh`: local contract for the WCP-4 admin order read model, route errors, scoped permission, and architecture boundaries.
 - `scripts/verify_admin_subscription_contract.sh`: local contract for the WCP-4 admin subscription read model, Walnut projection, privacy projection, scoped permission, and architecture boundaries.
 - `scripts/verify_admin_cloud_storage_contract.sh`: local contract for the WCP-4 admin cloud-storage read model, privacy projection, scoped permission, and architecture boundaries.
+- `scripts/verify_admin_test_scenario_reset_contract.sh`: local contract for the WCP-4 dev/test scenario reset facade, non-prod policy, dedicated permission, audit redaction, and repository graph cleanup.
 - `scripts/verify_production_config_contract.sh`: local contract for WCP-6 production fail-fast config, checkout redirect allowlist, HTTP security middleware, and architecture boundaries.
 - `scripts/verify_database_migration_contract.sh`: local contract for WCP-6 database migration mode, version ledger, and production config guard.
 - `scripts/verify_sqlite_backup_contract.sh`: local contract for SQLite online backup, checksum, and disposable restore verification.
@@ -244,7 +246,7 @@ All settings via environment variables (see `.env.example`). `config.Load()` run
 | `HTTP_SECURITY_HEADERS_ENABLED` | true | Enable global hardening headers; prod requires it to remain true |
 | `HTTP_SECURITY_HEADERS_HSTS_MAX_AGE_SECONDS` | 31536000 | HSTS max age in seconds; prod requires at least one year |
 | `ADMIN_API_KEYS` | (empty) | Comma-separated full-access admin API keys; development shortcut that maps to `admin.*` |
-| `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.users.read","admin.orders.read","admin.subscriptions.read","admin.cloud_storage.read","admin.audit.read"]}]`; user access summary requires `admin.users.read`, admin order list requires `admin.orders.read`, subscription list requires `admin.subscriptions.read`, cloud metadata requires `admin.cloud_storage.read`, device revoke requires `admin.access_accounts.write` |
+| `ADMIN_PRINCIPALS_JSON` | (empty) | Permission-scoped admin keys, e.g. `[{"name":"support","key":"...","permissions":["admin.access_accounts.read","admin.users.read","admin.orders.read","admin.subscriptions.read","admin.cloud_storage.read","admin.audit.read"]}]`; user access summary requires `admin.users.read`, admin order list requires `admin.orders.read`, subscription list requires `admin.subscriptions.read`, cloud metadata requires `admin.cloud_storage.read`, device revoke requires `admin.access_accounts.write`, and dev/test scenario reset requires `admin.test.write` |
 | `RATELIMIT_ENABLED` | false | Enable IP rate limiting on auth endpoints; required in prod |
 | `PAYMENT_WECHAT_*` | (empty) | Legacy WeChat Pay V3 credentials; not the current commercialization target |
 | `PAYMENT_ALIPAY_*` | (empty) | Legacy Alipay credentials; not the current commercialization target |

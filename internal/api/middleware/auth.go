@@ -30,6 +30,7 @@ const (
 	PermissionAccessAccountsWrite    = "admin.access_accounts.write"
 	PermissionUsersRead              = "admin.users.read"
 	PermissionCloudStorageRead       = "admin.cloud_storage.read"
+	PermissionAdminTestWrite         = "admin.test.write"
 	PermissionRegistrationsRead      = "admin.registrations.read"
 	PermissionRegistrationsWrite     = "admin.registrations.write"
 	PermissionEntitlementGrantsRead  = "admin.entitlement_grants.read"
@@ -114,11 +115,11 @@ func RequirePermission(permission string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		principal, ok := GetAdminPrincipal(c)
 		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "admin authentication required"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "admin authentication required", "code": "admin_auth_required"})
 			return
 		}
 		if !PrincipalHasPermission(principal, permission) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin permission denied", "permission": permission})
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin permission denied", "code": "admin_permission_denied", "permission": permission})
 			return
 		}
 		c.Next()

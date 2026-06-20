@@ -58,6 +58,42 @@ This profile uses:
 
 Use one-off overrides only when needed, for example `SERVER_PORT=8083 scripts/run_deterministic_billing.sh`.
 
+### Scenario reset API
+
+When the server is already running and you only need to reset one deterministic
+account, use the dev/test-only admin facade instead of deleting the whole test
+home. The route requires an authenticated principal with `admin.test.write` and
+the service refuses to run when `SERVER_ENV=prod`.
+
+```bash
+BASE_URL=http://127.0.0.1:8082
+ADMIN_KEY=ops-key
+
+curl -sS -X POST "$BASE_URL/api/v1/admin/test/scenarios/reset" \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "scenario": "user_control_plane",
+    "email": "checkout-e2e+001@example.com",
+    "dry_run": true,
+    "reason": "preflight deterministic reset"
+  }' | jq .
+
+curl -sS -X POST "$BASE_URL/api/v1/admin/test/scenarios/reset" \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "scenario": "user_control_plane",
+    "email": "checkout-e2e+001@example.com",
+    "dry_run": false,
+    "reason": "reset deterministic checkout scenario"
+  }' | jq .
+```
+
+The response returns masked email metadata plus per-table affected counts. It
+does not return raw email, device id, provider subscription id, object key,
+checkout URL, raw webhook payload, or file content.
+
 ## 1B. Email Login / Recovery Challenge
 
 The deterministic profile uses `ACCESS_LOGIN_CHALLENGE_DELIVERY=dev`, so challenge creation returns a `dev_token`. This is only for local/test verification; production validation rejects dev delivery and the dev OTP secret until a real email provider adapter is configured.

@@ -31,6 +31,7 @@ type applicationHandlers struct {
 	AdminOrder           *handler.AdminOrderHandler
 	AdminSubscription    *handler.AdminSubscriptionHandler
 	AdminCloudStorage    *handler.AdminCloudStorageHandler
+	AdminTestScenario    *handler.AdminTestScenarioResetHandler
 	Subscription         *handler.SubscriptionHandler
 	PaymentEvent         *handler.PaymentEventHandler
 	MockCheckout         *handler.MockCheckoutHandler
@@ -223,6 +224,7 @@ type adminModule struct{ handlers applicationHandlers }
 
 func (m adminModule) RegisterRoutes(routes moduleRoutes) {
 	routes.Admin.GET("/audit", routes.RequireAdmin(middleware.PermissionAuditRead), m.handlers.Admin.GetAuditLogs)
+	routes.Admin.POST("/test/scenarios/reset", routes.RequireAdmin(middleware.PermissionAdminTestWrite), m.handlers.AdminTestScenario.Reset)
 }
 
 func registerInfrastructureRoutes(r *gin.Engine, routes moduleRoutes, h applicationHandlers, serverEnv string) {

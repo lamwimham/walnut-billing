@@ -28,7 +28,7 @@ cmd/server/main.go
 | `identity/access` | `identityAccessModule` | Email registration/restore, device-bound access snapshots, entitlement grants, credit ledger endpoints | payment provider details, checkout URLs, object storage implementation |
 | `commerce` | `commerceModule` | Checkout facade, provider webhook inbox, fulfillment diagnostics, subscription actions, payment-risk operations | Walnut App UI gates, cloud object bytes, direct snapshot cache writes |
 | `cloud_storage` | `cloudStorageModule` | Cloud quota checks, sync sessions, manifest/object metadata, restore metadata | payment providers, commerce checkout policy, object storage adapter implementation, file content parsing, object byte proxying |
-| `admin` | `adminModule` plus admin sections of other modules | RBAC-protected operator APIs, audit views, manual operations through services | direct DB writes that bypass service/audit boundaries |
+| `admin` | `adminModule` plus admin sections of other modules | RBAC-protected operator APIs, audit views, manual operations through services, dev/test scenario reset facade | direct DB writes that bypass service/audit boundaries |
 | `legacy_license` | `legacyLicenseModule` | Existing key/license/order compatibility APIs while commerce checkout becomes primary | new commercial feature gates |
 | `observability` | `internal/observability`, `internal/metrics`, `docs/RUNBOOK_MONITORING_ALERTS.md` | Service observation decorators, low-cardinality metrics, structured operational logs, alert runbooks | Business decisions, provider-specific policy branches, raw secrets/payload/object bytes in labels |
 | `infrastructure` | `registerInfrastructureRoutes` | Health, metrics, dashboard shell, dev mock checkout pages | business decisions |
@@ -64,3 +64,4 @@ Architecture tests enforce the first hard rules:
 - Cloud manifest commits must consume a `CloudSyncSession`; clients cannot write manifest metadata without a prior upload authorization.
 - Provider IDs, product IDs, and payment statuses must not enter access snapshots or Walnut App feature gates.
 - Admin write actions must go through application services and audit the principal, target, reason, and outcome.
+- Dev/test scenario reset must pass through `AdminTestScenarioResetService`, require `admin.test.write`, and remain blocked by service policy when `SERVER_ENV=prod`; handlers must never call GORM cleanup directly.

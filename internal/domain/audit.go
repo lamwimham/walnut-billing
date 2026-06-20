@@ -42,4 +42,5 @@ const (
 	AuditActionCreditRelease              = "credit.release"
 	AuditActionCreditExpire               = "credit.expire"
 	AuditActionPaymentRiskResolve         = "payment_risk.resolve"
+	AuditActionAdminTestScenarioReset     = "admin.test_scenario.reset"
 )

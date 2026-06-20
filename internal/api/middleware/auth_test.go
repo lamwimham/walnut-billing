@@ -121,6 +121,17 @@ func TestSubscriptionsReadPermissionIsScopedSeparatelyFromOrdersAndPaymentEvents
 	}
 }
 
+func TestAdminTestWritePermissionIsScopedSeparatelyFromAdminReads(t *testing.T) {
+	support := AdminPrincipal{Name: "support", Permissions: []string{PermissionUsersRead, PermissionOrdersRead, PermissionCloudStorageRead}}
+	if PrincipalHasPermission(support, PermissionAdminTestWrite) {
+		t.Fatalf("admin read permissions must not imply test scenario reset permission")
+	}
+	testOps := AdminPrincipal{Name: "test-ops", Permissions: []string{PermissionAdminTestWrite}}
+	if !PrincipalHasPermission(testOps, PermissionAdminTestWrite) {
+		t.Fatalf("expected admin test write permission to match itself")
+	}
+}
+
 func TestAPIKeyAuthPrincipalsRejectsMissingAndInvalidKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

@@ -214,6 +214,31 @@ type AdminCloudStorageReadRepository interface {
 	ListProjects(ctx context.Context, query AdminCloudStorageProjectQuery) (*AdminCloudStorageProjectReadModel, error)
 }
 
+// AdminTestScenarioResetQuery targets one non-production test scenario reset.
+// The repository accepts already-normalized selectors from the service layer.
+type AdminTestScenarioResetQuery struct {
+	Scenario string
+	UserID   string
+	Email    string
+	DryRun   bool
+}
+
+// AdminTestScenarioResetRecord reports the user facts matched by a reset and
+// per-table affected counts. Counts represent would-delete rows in dry-run mode.
+type AdminTestScenarioResetRecord struct {
+	Scenario       string
+	User           *domain.User
+	Email          string
+	AffectedCounts map[string]int64
+}
+
+// AdminTestScenarioResetRepository defines the dev/test-only reset boundary.
+// It exists behind a service policy so production code cannot call GORM
+// deletes directly from handlers or bootstrap.
+type AdminTestScenarioResetRepository interface {
+	ResetUserControlPlane(ctx context.Context, query AdminTestScenarioResetQuery) (*AdminTestScenarioResetRecord, error)
+}
+
 // TransactionalRepositories returns new repository instances bound to a transaction.
 // All operations on these repos will be part of the same transaction.
 type TransactionalRepositories struct {

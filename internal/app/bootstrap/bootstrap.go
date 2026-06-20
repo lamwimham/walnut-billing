@@ -287,6 +287,7 @@ func Build() (*Application, error) {
 	adminOrderRepo := &gorm_repo.AdminOrderReadRepo{DB: db}
 	adminSubscriptionRepo := &gorm_repo.AdminSubscriptionReadRepo{DB: db}
 	adminCloudStorageRepo := &gorm_repo.AdminCloudStorageReadRepo{DB: db}
+	adminTestScenarioResetRepo := &gorm_repo.AdminTestScenarioResetRepo{DB: db}
 	creditAccountRepo := &gorm_repo.CreditAccountRepo{DB: db}
 	creditBucketRepo := &gorm_repo.CreditBucketRepo{DB: db}
 	creditReservationRepo := &gorm_repo.CreditReservationRepo{DB: db}
@@ -510,6 +511,11 @@ func Build() (*Application, error) {
 		QuotaPolicy: cloudQuotaPolicy,
 		Privacy:     service.NewAdminPrivacyProjector(),
 	})
+	adminTestScenarioResetSvc := service.NewAdminTestScenarioResetService(
+		adminTestScenarioResetRepo,
+		service.ServerEnvAdminTestScenarioResetPolicy{Env: cfg.Server.Env},
+		service.NewAdminPrivacyProjector(),
+	)
 	commerceObserver := observability.NewCommerceObserver(l)
 	checkoutPolicies := buildCheckoutPolicies(cfg, paymentRiskFlagRepo, softwareSubscriptions)
 	var checkoutSvc service.CheckoutService = service.NewCheckoutServiceWithPolicies(orderRepo, productRepo, userRepo, paymentSvc, checkoutPolicies...)
@@ -594,6 +600,7 @@ func Build() (*Application, error) {
 		AdminOrder:           handler.NewAdminOrderHandler(adminOrderSvc),
 		AdminSubscription:    handler.NewAdminSubscriptionHandler(adminSubscriptionSvc),
 		AdminCloudStorage:    handler.NewAdminCloudStorageHandler(adminCloudStorageSvc),
+		AdminTestScenario:    handler.NewAdminTestScenarioResetHandler(adminTestScenarioResetSvc, auditSvc),
 		Subscription:         handler.NewSubscriptionHandler(subscriptionCancellationSvc),
 		PaymentEvent:         handler.NewPaymentEventHandler(paymentEventSvc),
 		MockCheckout:         handler.NewMockCheckoutHandler(paymentEventSvc),
